@@ -3,6 +3,7 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import {
+  type ChannelKey,
   formatChannelKey,
   generateChannelKey,
   parseChannelKey,
@@ -13,6 +14,7 @@ import {
   setChannelKey,
   subscribeToChannelKeys,
 } from "@/shared/api/channelKeyStore";
+import { announceChannelKey } from "@/shared/api/channelMembership";
 import { ChannelAdminList } from "@/features/channels/ui/ChannelAdminList";
 import { copyTextToClipboard } from "@/shared/lib/clipboard";
 import { cn } from "@/shared/lib/cn";
@@ -59,6 +61,7 @@ export function ChannelEncryptionSettings({
       return;
     }
     setChannelKey(channelId, parsed);
+    announceKey(channelId, parsed);
     setDraft("");
     setError(null);
     toast.success("Channel key saved. New messages here are encrypted.");
@@ -139,8 +142,10 @@ export function ChannelEncryptionSettings({
           data-testid={`${testIdPrefix}-encryption-generate`}
           disabled={disabled}
           onClick={() => {
-            setChannelKey(channelId, generateChannelKey());
-            toast.success("Channel key generated. Share it with the members.");
+            const generated = generateChannelKey();
+            setChannelKey(channelId, generated);
+            announceKey(channelId, generated);
+            toast.success("Channel key generated. Members will be sent it.");
           }}
           size="sm"
           type="button"
@@ -212,6 +217,26 @@ function KeyedState({
       </div>
     </div>
   );
+}
+
+/**
+ * Tell the channel's admin list which key epoch is now current.
+ *
+ * Fire-and-forget: the key is already saved locally and the channel already
+ * encrypts with it, so a paid write that has not landed must not make the
+ * button feel broken. A no-op for anyone who is not an admin of a validated
+ * list — including the common case of pasting a key someone shared out of
+ * band, where the announcement is not this client's to make.
+ */
+function announceKey(channelId: string, key: ChannelKey): void {
+  void announceChannelKey(channelId, key)
+    .then((publication) => publication?.published)
+    .catch((error) => {
+      console.warn(
+        `[channel-keys] could not announce ${channelId}'s key epoch`,
+        error,
+      );
+    });
 }
 
 /**

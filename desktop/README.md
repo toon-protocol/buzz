@@ -164,7 +164,7 @@ TOON, and a third transport inherits it without implementing anything.
 | `shared/api/channelAdminList.ts` | The signed admin list: build, parse, validate the chain |
 | `shared/api/channelAdminListStore.ts` | Admin lists this client has seen, and their resolved state |
 | `shared/api/channelKeyDelivery.ts` | NIP-59 gift wrap / unwrap of a channel key |
-| `shared/api/channelMembership.ts` | The write verbs: publish the admin list, hand out the key |
+| `shared/api/channelMembership.ts` | The write verbs: publish the admin list, announce the key epoch, hand out the key |
 | `shared/api/channelKeyInbox.ts` | Watches for wraps and unlocks channels |
 | `features/channels/ui/ChannelEncryptionSettings.tsx` | The admin list, and the manual paste-the-key field |
 
@@ -188,8 +188,8 @@ learns who was addressed) and is taken knowingly.
 
 #### Membership authority and key delivery
 
-Creating a **private** channel generates its key and publishes a signed,
-addressable admin list naming the creator as its first admin:
+Creating a **private** channel publishes a signed, addressable admin list
+naming the creator as its first admin:
 
 ```
 kind:39100   ["d", <channelId>]
@@ -205,6 +205,14 @@ Addressability alone proves nothing either (anyone can publish a 39100 with any
 `created_at` order and accepts a change only from a signer who was an admin in
 the state before it, rooted at a genesis event that names itself. The relay can
 drop or reorder events; the worst it can produce is a stale list.
+
+It does **not** mint a key. Encryption stays switched on by the presence of a
+key and nothing else — auto-keying every private channel would move that switch
+to the visibility flag, and because the Rust write path is still unsealed (see
+above) the channel would then hold a *mixture* of sealed and plaintext
+messages. Keying remains an act the user takes in channel settings; doing it
+republishes the admin list with the new `keyId` so members know which epoch is
+current.
 
 Adding a member gift-wraps the channel key to them (NIP-59: a `kind:1059` wrap
 around a `kind:13` seal around a `kind:44300` rumor). The recipient's client

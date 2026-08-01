@@ -228,14 +228,25 @@ export function useCreateChannelMutation() {
     mutationFn: async (input: CreateChannelInput) => {
       const created = await createChannel(input);
       // A private channel is born with a key and a signed admin list naming
-      // its creator (ADR 0001, buzz#16). Awaited rather than fired off: the
-      // member picker opens straight after this resolves, and an add-member
-      // that beats the admin list has no authority to gift-wrap under.
-      // A failure here must not lose the channel the relay already created.
-      // The channel exists, keyless and listless, and channel settings say so
-      // — the manual paste field is still the way its members get in.
+      // its creator (ADR 0001, buzz#16).
+      //
+      // The signing is awaited — the member picker opens straight after this
+      // resolves, and an add-member that beats the admin list has no authority
+      // to gift-wrap under. The *publish* is not: it is a paid write to a
+      // relay this dialog should not be held open behind, and nothing the
+      // creator's own client does next depends on it having landed.
+      //
+      // Neither failure may lose the channel the relay already created. It
+      // exists, keyless and listless, and channel settings say so — the manual
+      // paste field is still the way its members get in.
       try {
-        await provisionPrivateChannel(created);
+        const provisioned = await provisionPrivateChannel(created);
+        provisioned?.published.catch((error) => {
+          console.warn(
+            `[channel-keys] ${created.id}'s admin list did not reach the relay`,
+            error,
+          );
+        });
       } catch (error) {
         console.warn(
           `[channel-keys] ${created.id} created without an admin list`,
@@ -545,21 +556,27 @@ export function useAddChannelMembersMutation(channelId: string | null) {
       // Adding someone to an encrypted channel is handing them the key
       // (buzz#16) — membership IS key possession, so the roster row without
       // the key is a member who sees ciphertext. Only the pubkeys the relay
-      // actually accepted, and never at the cost of the add itself: the roster
-      // change succeeded, and a failed wrap is recoverable by re-adding.
-      try {
-        const outcome = await grantChannelKeyToMembers(
-          effectiveChannelId,
-          result.added,
-        );
-        for (const skip of outcome.skipped) {
+      // actually accepted.
+      //
+      // Not awaited: this is one paid write per recipient, and the roster
+      // change the user asked for has already succeeded. Holding the dialog
+      // open behind N network round trips would make adding five people feel
+      // like a failure, and a wrap that never lands is recoverable by
+      // re-adding or by the manual key field.
+      void grantChannelKeyToMembers(effectiveChannelId, result.added)
+        .then((outcome) => {
+          for (const skip of outcome.skipped) {
+            console.warn(
+              `[channel-keys] no key sent to ${skip.pubkey}: ${skip.reason}`,
+            );
+          }
+        })
+        .catch((error) => {
           console.warn(
-            `[channel-keys] no key sent to ${skip.pubkey}: ${skip.reason}`,
+            "[channel-keys] could not deliver the channel key",
+            error,
           );
-        }
-      } catch (error) {
-        console.warn("[channel-keys] could not deliver the channel key", error);
-      }
+        });
 
       return result;
     },

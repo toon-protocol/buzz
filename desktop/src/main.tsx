@@ -128,12 +128,14 @@ async function bootstrap() {
   // Also before render: an event that arrives before its key is loaded renders
   // as locked and never re-decrypts.
   await loadChannelKeysFromEnvironment();
-  // After the seed, so an operator-supplied key is not fought over by a wrap,
-  // and after the transport, so the wrap subscription reads the network this
-  // run writes to. Never throws — see `installChannelKeyInbox`.
-  await installChannelKeyInbox();
   await migrateLegacyCommunityStorageBeforeRender();
   renderApp();
+  // After render, and deliberately not awaited: the gift-wrap inbox opens relay
+  // subscriptions, and a relay that is slow or unreachable must delay a channel
+  // unlocking, not the window opening. Unlike the environment seed above, a key
+  // that arrives late is fine — `setChannelKey` notifies its listeners. Never
+  // throws; see `installChannelKeyInbox`.
+  void installChannelKeyInbox();
 }
 
 void bootstrap();

@@ -61,13 +61,24 @@ export type ChannelKeyInbox = {
   stop(): Promise<void>;
   /** Grants waiting on an admin list, keyed by channel. Test/diagnostic view. */
   heldChannelIds(): string[];
+  /** Resolves when every wrap delivered so far has been dealt with. */
+  settled(): Promise<void>;
 };
 
 export type ChannelKeyInboxOptions = {
   /** This client's pubkey — the `#p` the wraps are addressed to. */
   pubkey: string;
-  /** This client's secret key, for the two NIP-44 unwrap layers. */
-  secretKey: Uint8Array;
+  /**
+   * This client's secret key, for the two NIP-44 unwrap layers.
+   *
+   * A function, and called only when a wrap addressed to this client actually
+   * turns up — most sessions never receive one, and reading the key out of the
+   * keychain for a thing that may never happen is both a needless IPC round
+   * trip and a needless copy of the key in the renderer's heap. Resolved once
+   * and reused for the life of the inbox: the alternative is a keychain read
+   * per inbound wrap.
+   */
+  getSecretKey: () => Promise<Uint8Array>;
   subscribe?: InboxSubscribe;
   /** Told about every decision. Defaults to a console log. */
   onEvent?: (event: ChannelKeyInboxEvent) => void;
@@ -161,11 +172,27 @@ export async function startChannelKeyInbox(
   const held = new Map<string, ChannelKeyGrant>();
   /** Wrap ids already unwrapped — relays re-deliver, and unwrapping is ECDH. */
   const seenWraps = new Set<string>();
+  /** Resolved on the first wrap that reaches us, then reused. */
+  let secretKey: Promise<Uint8Array> | null = null;
+  /**
+   * Serialises wrap handling. Unwrapping became async the moment the key was
+   * fetched lazily, and two wraps for one channel resolving out of order would
+   * decide "held or applied" against a store snapshot that had already moved.
+   */
+  let queue: Promise<void> = Promise.resolve();
 
   const drainHeld = () => {
     for (const [channelId, grant] of [...held]) {
       if (applyGrant(grant, report)) held.delete(channelId);
     }
+  };
+
+  const handleWrap = async (event: RelayEvent) => {
+    secretKey ??= options.getSecretKey();
+    const grant = unwrapChannelKey(event, await secretKey);
+    // Not for us, or not a key grant. On an open relay that is most wraps.
+    if (!grant) return;
+    if (!applyGrant(grant, report)) held.set(grant.channelId, grant);
   };
 
   const unsubscribeStore = subscribeToChannelAdminLists(drainHeld);
@@ -182,17 +209,19 @@ export async function startChannelKeyInbox(
     (event) => {
       if (seenWraps.has(event.id)) return;
       seenWraps.add(event.id);
-
-      const grant = unwrapChannelKey(event, options.secretKey);
-      // Not for us, or not a key grant. On an open relay that is most wraps.
-      if (!grant) return;
-
-      if (!applyGrant(grant, report)) held.set(grant.channelId, grant);
+      queue = queue.then(() =>
+        handleWrap(event).catch((error) => {
+          // An unreadable keychain must not kill the subscription: the next
+          // wrap, or the next launch, may find it unlocked.
+          console.warn("[channel-keys] could not open a gift wrap", error);
+        }),
+      );
     },
   );
 
   // The admin-list backlog may have landed while wraps were still arriving.
   drainHeld();
+  await queue;
 
   return {
     async stop() {
@@ -202,6 +231,9 @@ export async function startChannelKeyInbox(
     },
     heldChannelIds() {
       return [...held.keys()];
+    },
+    settled() {
+      return queue;
     },
   };
 }

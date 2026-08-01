@@ -8,12 +8,8 @@ import {
   pinChannelCreator,
   recordChannelAdminListEvent,
 } from "@/shared/api/channelAdminListStore";
-import {
-  type ChannelKey,
-  channelKeyId,
-  generateChannelKey,
-} from "@/shared/api/channelEncryption";
-import { getChannelKey, setChannelKey } from "@/shared/api/channelKeyStore";
+import { type ChannelKey, channelKeyId } from "@/shared/api/channelEncryption";
+import { getChannelKey } from "@/shared/api/channelKeyStore";
 import { wrapChannelKey } from "@/shared/api/channelKeyDelivery";
 import {
   ensureTransportReady,
@@ -25,8 +21,8 @@ import { getIdentity } from "@/shared/api/tauriIdentity";
 import type { RelayEvent } from "@/shared/api/types";
 
 /**
- * The membership write verbs: publish who the admins are, and hand the key to
- * a new member.
+ * The membership write verbs: publish who the admins are, announce which key
+ * epoch is current, and hand that key to a new member.
  *
  * Both are ordinary writes and both go through the transport seam
  * (`publishEvent`), which on TOON means both are *paid* — an admin list costs
@@ -52,27 +48,30 @@ const KEY_GRANT_MESSAGES = {
 } as const;
 
 /**
- * Sign and publish a channel's admin list, and record it locally.
+ * Sign a channel's admin list and record it locally, without publishing.
  *
- * Recorded into the store from the publishing side too, rather than waiting
- * for the subscription to echo it back: the next thing a creator does is add a
- * member, and that path needs a resolved admin list to know it is allowed to.
+ * Recorded from the authoring side rather than waiting for the subscription to
+ * echo it back, because the next thing a creator does is add a member and that
+ * path needs a resolved admin list to know it is allowed to. Splitting the
+ * signature from the send is what lets the caller have that guarantee
+ * *immediately* while the network write is still in flight.
  */
-export async function publishChannelAdminList(input: {
+async function signChannelAdminList(input: {
   channelId: string;
   creator: string;
   admins?: readonly string[];
   keyId?: string | null;
   epoch?: number;
 }): Promise<RelayEvent> {
-  await ensureTransportReady();
-
-  const template = buildChannelAdminListEvent(input);
-  const event = await signRelayEvent(template);
-
+  const event = await signRelayEvent(buildChannelAdminListEvent(input));
   pinChannelCreator(input.channelId, input.creator);
   recordChannelAdminListEvent(event);
+  return event;
+}
 
+/** Put a signed admin list on the wire. */
+async function publishSignedAdminList(event: RelayEvent): Promise<RelayEvent> {
+  await ensureTransportReady();
   return publishEvent(
     event,
     ADMIN_LIST_MESSAGES.timeout,
@@ -80,41 +79,99 @@ export async function publishChannelAdminList(input: {
   );
 }
 
+/** A signed admin list, and the paid write carrying it to everyone else. */
+export type AdminListPublication = {
+  event: RelayEvent;
+  /** Resolves when the admin list reaches the network; rejects if it cannot. */
+  published: Promise<RelayEvent>;
+};
+
 /**
- * Bring a freshly created private channel under key management.
+ * Give a freshly created private channel its membership authority.
  *
- * Three things happen and they have to happen in this order: a key exists, it
- * is stored locally, and only then is an admin list published naming its
- * `keyId`. An admin list that advertises a key the creator has not saved would
- * point every member at bytes nobody holds.
+ * Publishes the admin list naming the creator as its first admin, and nothing
+ * else. In particular it does **not** mint a channel key, which is a
+ * deliberate line: #12 established that "encryption is switched on by the
+ * presence of a key and nothing else", and auto-keying every private channel
+ * would quietly move that switch to the visibility flag.
  *
- * A channel that already has a key keeps it — re-running this after a partial
- * failure republishes the list rather than rotating the channel out from under
- * anyone who already has the old key.
+ * That is not a stylistic preference. #12's own README records that the Rust
+ * write path — threaded replies, media, custom-emoji messages — never reaches
+ * the seam and so is not sealed. A channel keyed the moment it is created
+ * would therefore contain a *mixture* of sealed and unsealed messages, which
+ * is worse than either consistent choice and would be invisible to the user.
+ * Until that path is sealed too (buzz#33), keying stays an act the user takes
+ * knowingly, in channel settings — and `announceChannelKey` is what carries it
+ * into the admin list when they do.
+ *
+ * The publish is handed back rather than awaited. Everything the creator's own
+ * client needs — the pinned creator, a resolvable admin list — is true the
+ * moment this resolves; the send is what the *other* members need, and on TOON
+ * it is a paid write over a network that may be slow. Blocking the
+ * create-channel dialog on it buys nothing and loses the channel's first
+ * seconds.
  *
  * Only private channels. A public channel on TOON is public in the strongest
- * sense — the relay serves its plaintext to anyone — so giving it an admin
- * list and a key would claim a privacy it does not have.
+ * sense — the relay serves its plaintext to anyone — so an admin list would
+ * claim an authority over it that means nothing.
  */
 export async function provisionPrivateChannel(channel: {
   id: string;
   visibility: string;
-}): Promise<ChannelKey | null> {
+}): Promise<AdminListPublication | null> {
   if (channel.visibility !== "private") return null;
 
   const identity = await getIdentity();
-  const key = getChannelKey(channel.id) ?? generateChannelKey();
-  setChannelKey(channel.id, key);
+  const existingKey = getChannelKey(channel.id);
 
-  await publishChannelAdminList({
+  const event = await signChannelAdminList({
     channelId: channel.id,
     creator: identity.pubkey,
     admins: [identity.pubkey],
-    keyId: channelKeyId(key),
+    keyId: existingKey ? channelKeyId(existingKey) : null,
     epoch: 0,
   });
 
-  return key;
+  return { event, published: publishSignedAdminList(event) };
+}
+
+/**
+ * Record a channel's key in its admin list, so members can tell which epoch
+ * they should be holding.
+ *
+ * Called when an admin generates or pastes a key in channel settings — the
+ * moment a channel actually becomes encrypted. Without it the admin list would
+ * advertise no key while the channel had one, and an arriving member would
+ * have nothing to check a gift-wrapped grant's epoch against.
+ *
+ * Refuses when this client is not an admin of a validated list, including the
+ * case where there is no list at all. Publishing an admin list for someone
+ * else's channel would fork its chain and, on a client that has not yet seen
+ * the real one, pin the wrong creator — a self-inflicted denial of the very
+ * channel the user was trying to join.
+ */
+export async function announceChannelKey(
+  channelId: string,
+  key: ChannelKey,
+): Promise<AdminListPublication | null> {
+  const adminList = getChannelAdminList(channelId);
+  if (!adminList) return null;
+
+  const identity = await getIdentity();
+  if (!isChannelAdmin(adminList, identity.pubkey)) return null;
+
+  const keyId = channelKeyId(key);
+  if (adminList.keyId === keyId) return null;
+
+  const event = await signChannelAdminList({
+    channelId,
+    creator: adminList.creator,
+    admins: adminList.admins,
+    keyId,
+    epoch: adminList.epoch,
+  });
+
+  return { event, published: publishSignedAdminList(event) };
 }
 
 /** What happened when an admin tried to hand out the key. */
