@@ -81,6 +81,31 @@ pub struct PublishReceipt {
     pub channel_balance_after: Option<String>,
 }
 
+/// `POST /nip59-unwrap` request body — one kind:1059 gift wrap, verbatim as
+/// the relay served it.
+#[derive(Debug, Serialize)]
+struct Nip59UnwrapRequest<'a> {
+    wrap: &'a serde_json::Value,
+}
+
+/// `POST /nip59-unwrap` response — the opened NIP-59 layers.
+///
+/// The sidecar is the identity custodian: it holds the agent's nostr secret
+/// key, so it alone can run the two NIP-44 decryptions a gift wrap needs. It
+/// hands back the plaintext rumor and, crucially, the pubkey that signed the
+/// kind:13 seal — the *real* author. A rumor is unsigned by construction, so
+/// its own `pubkey` field is a claim; the seal's signature is the evidence,
+/// and everything downstream (the admin check in `channel_key_grant`) trusts
+/// [`Self::seal_pubkey`], never the rumor's claim.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Nip59Unwrapped {
+    /// The unsigned inner event (kind:44300 for a channel-key delivery).
+    pub rumor: serde_json::Value,
+    /// Hex pubkey that signed the kind:13 seal.
+    #[serde(rename = "sealPubkey")]
+    pub seal_pubkey: String,
+}
+
 /// Uniform error envelope the daemon returns with non-2xx responses.
 #[derive(Debug, Deserialize)]
 struct ErrorEnvelope {
@@ -129,6 +154,20 @@ impl SidecarClient {
             content,
             tags,
         };
+        let resp = self.send(self.http.post(&url).json(&body), &url).await?;
+        Self::parse_ok(resp).await
+    }
+
+    /// `POST /nip59-unwrap` — open one gift wrap addressed to the agent.
+    ///
+    /// Only the sidecar can do this: unwrapping needs the agent's secret key,
+    /// which this CLI never holds. A wrap this daemon cannot open is not an
+    /// error worth stopping an inbox sweep for (400 = malformed or addressed
+    /// to somebody else, 422 = the MAC failed), so callers get the sidecar's
+    /// status code through `CliError::Sidecar` and decide for themselves.
+    pub async fn nip59_unwrap(&self, wrap: &serde_json::Value) -> Result<Nip59Unwrapped, CliError> {
+        let url = format!("{}/nip59-unwrap", self.base_url);
+        let body = Nip59UnwrapRequest { wrap };
         let resp = self.send(self.http.post(&url).json(&body), &url).await?;
         Self::parse_ok(resp).await
     }

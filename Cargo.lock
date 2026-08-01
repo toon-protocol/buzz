@@ -893,11 +893,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "buzz-channel-crypto"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "hex",
+ "nostr",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "buzz-cli"
 version = "0.1.0"
 dependencies = [
  "axum",
  "base64",
+ "buzz-channel-crypto",
  "buzz-core",
  "buzz-persona",
  "buzz-sdk",
@@ -907,6 +918,7 @@ dependencies = [
  "clap",
  "diffy",
  "dirs",
+ "futures-util",
  "hex",
  "infer",
  "nostr",
@@ -919,6 +931,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-tungstenite 0.29.0",
  "url",
  "uuid",
 ]

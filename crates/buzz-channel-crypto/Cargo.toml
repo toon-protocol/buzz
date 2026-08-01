@@ -1,0 +1,22 @@
+[package]
+name = "buzz-channel-crypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Channel-key primitives shared by every Buzz process that seals or opens encrypted-channel content"
+
+[dependencies]
+# NIP-44 v2 sealing — no hand-rolled crypto. The channel key is handed in
+# directly as the conversation key, exactly as nostr-tools/nip44 does in TS.
+nostr = { workspace = true }
+
+# Key-id derivation (SHA-256 over a domain prefix + the key)
+sha2 = { workspace = true }
+
+# Hex parsing/printing for keys and key ids
+hex = { workspace = true }
+
+# NIP-44 payloads travel base64-encoded, matching the TS side
+base64 = { workspace = true }

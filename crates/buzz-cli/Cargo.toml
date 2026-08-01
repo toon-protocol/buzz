@@ -45,6 +45,17 @@ chrono = { workspace = true }
 buzz-sdk = { workspace = true }
 buzz-core = { workspace = true }
 
+# Channel-key primitives (key ids, NIP-44 seal/open) shared byte-for-byte with
+# the desktop app — an agent-member seals and opens the same wire format a
+# human client does.
+buzz-channel-crypto = { workspace = true }
+
+# Free NIP-01 reads from a TOON relay (`buzz toon inbox` / `read`). Not
+# buzz-ws-client: that one's frame parser is strict NIP-01, and the devnet
+# relay serves double-JSON-encoded EVENT payloads that a strict parser drops.
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+
 # Base64 encoding — NIP-98 event serialization for Authorization header
 base64 = "0.22"
 
@@ -89,5 +100,11 @@ rand = { workspace = true }
 [dev-dependencies]
 # Scratch files for channel-templates.json fixtures in tests
 tempfile = "3"
-# Minimal HTTP test server for retry/policy integration tests
+# Minimal HTTP test server for retry/policy integration tests, and the stub
+# relay (WebSocket) + stub sidecar the agent-membership e2e test drives
 axum = { workspace = true }
+# NIP-59 gift wrapping, test-only: the stub sidecar builds and opens real
+# wraps rather than canned JSON, so the e2e test exercises the wire format the
+# real toon-clientd endpoint will produce.
+nostr = { workspace = true, features = ["nip59"] }
+futures-util = { workspace = true }

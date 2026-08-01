@@ -1,8 +1,12 @@
+mod agent_keystore;
 pub mod agent_management;
+mod channel_admins;
+mod channel_key_grant;
 mod client;
 mod commands;
 mod error;
 mod sidecar;
+mod toon_relay;
 mod validate;
 
 use clap::{Parser, Subcommand};
@@ -72,6 +76,8 @@ Configuration (flags override env vars):
   BUZZ_PRIVATE_KEY   Nostr private key (hex or nsec)  [required]
   BUZZ_AUTH_TAG      NIP-OA auth tag JSON  [optional]
   TOON_DAEMON_URL    toon-clientd sidecar base URL  [default: http://127.0.0.1:8787]
+  BUZZ_TOON_RELAY_URL  TOON relay WebSocket URL for free reads
+  BUZZ_AGENT_KEYSTORE  Agent channel-key store path
 
 The 'pack' subcommand runs locally and does not require a relay connection.
 The 'toon' subcommand talks to a local toon-clientd sidecar instead of the
@@ -103,6 +109,29 @@ struct Cli {
         default_value = "http://127.0.0.1:8787"
     )]
     sidecar_url: String,
+
+    /// TOON relay WebSocket URL, read for free by `buzz toon inbox` / `read`.
+    /// Overrides BUZZ_TOON_RELAY_URL. Reads on TOON cost nothing and need no
+    /// identity, so this is a plain NIP-01 subscription — no sidecar involved.
+    #[arg(
+        long = "toon-relay",
+        env = "BUZZ_TOON_RELAY_URL",
+        default_value = toon_relay::DEFAULT_TOON_RELAY_URL
+    )]
+    toon_relay: String,
+
+    /// Path to this agent's channel keystore, used only by `buzz toon`.
+    /// Overrides BUZZ_AGENT_KEYSTORE; defaults to
+    /// <config-dir>/buzz/agent-channel-keys.json. One file belongs to one
+    /// sidecar identity — a second agent on the same host needs its own.
+    /// `hide_env_values` because the repo-wide guard in
+    /// `secret_env_args_hide_their_values_in_help` treats any KEY-bearing env
+    /// name as credential-shaped. This one holds a path, not a secret — but a
+    /// path to a file full of channel keys is not something to print in
+    /// `--help` either, and weakening the guard to make an exception would be
+    /// the worse trade.
+    #[arg(long = "keystore", env = "BUZZ_AGENT_KEYSTORE", hide_env_values = true)]
+    keystore: Option<String>,
 
     /// Output format: 'json' (default, full fields) or 'compact' (reduced fields).
     #[arg(long, value_enum, default_value = "json")]
@@ -265,13 +294,22 @@ identity it reports (nostrPubkey / evmAddress / solanaAddress) at \
 https://faucet.devnet.toonprotocol.dev, then run the sidecar's own \
 onboarding — this CLI never handles mnemonics or opens channels itself.")]
     Status,
-    /// Post a plaintext message to a public channel, paid from the sidecar's own channel
+    /// Post a message to a channel, paid from the sidecar's own channel
     #[command(
         after_help = "Publishes a kind:9 event tagged [\"h\", <channel>] — the same shape \
-desktop clients render for public-channel messages — via the sidecar's \
+desktop clients render for channel messages — via the sidecar's \
 POST /publish-unsigned. The sidecar signs with its own key and spends a \
 claim against its own payment channel: this is the agent's identity and \
 wallet, never a shared one.\n\n\
+If this agent holds a channel key (see 'buzz toon inbox'), the content is \
+NIP-44 sealed here first and the event carries an \
+[\"encrypted\", \"nip44-v2\", <keyId>] marker tag — the sidecar only ever sees \
+ciphertext. Public channels post in the clear exactly as before. If the \
+channel's admin list names a key and this agent holds none, the send is \
+REFUSED: plaintext never goes into a keyed channel. If the relay cannot be \
+read at all the send is refused too, since nothing is known about the \
+channel; set BUZZ_TOON_ASSUME_PUBLIC=1 to override that one case (it cannot \
+override a channel whose admin list names a key).\n\n\
 Examples:\n  \
 buzz toon send --channel <UUID> --content \"hello from the sidecar\"\n  \
 echo \"hello from stdin\" | buzz toon send --channel <UUID> --content -"
@@ -284,6 +322,51 @@ echo \"hello from stdin\" | buzz toon send --channel <UUID> --content -"
         #[arg(long)]
         content: String,
     },
+    /// Collect channel keys an admin gift-wrapped to this agent's identity
+    #[command(
+        after_help = "Free-reads the TOON relay for kind:1059 gift wraps p-tagged to the \
+sidecar's identity, has the sidecar open each one (POST /nip59-unwrap — only \
+it holds the key), and adopts the enclosed channel key ONLY IF the kind:13 \
+seal's signer is an admin on that channel's signature-verified kind:39100 \
+admin list and the key's epoch is not stale. This is the standard add-member \
+flow, unchanged: an agent is admitted exactly like a human.\n\n\
+Accepted keys land in the agent keystore (--keystore). A key becomes the \
+SENDING key only once the validated admin list names its key id.\n\n\
+Examples:\n  buzz toon inbox\n  buzz toon inbox --limit 50"
+    )]
+    Inbox {
+        /// Maximum gift wraps to fetch from the relay
+        #[arg(long, default_value = "200")]
+        limit: u32,
+    },
+    /// Read a channel's recent messages, opening what this agent has keys for
+    #[command(
+        after_help = "A free NIP-01 read — no payment, no auth. Messages sealed with \
+[\"encrypted\", \"nip44-v2\", <keyId>] are opened with the matching key from \
+this agent's ring; anything sealed under an epoch it does not hold comes back \
+with \"opened\": false, which is exactly what a rotation looks like from the \
+outside.\n\n\
+Examples:\n  buzz toon read --channel <UUID>\n  \
+buzz toon read --channel <UUID> --limit 20 --since 1700000000"
+    )]
+    Read {
+        /// Channel UUID
+        #[arg(long)]
+        channel: String,
+        /// Maximum messages to fetch
+        #[arg(long, default_value = "50")]
+        limit: u32,
+        /// Only messages at or after this unix timestamp
+        #[arg(long)]
+        since: Option<u64>,
+    },
+    /// List the channel keys this agent holds (key ids only, never key bytes)
+    #[command(
+        after_help = "Shows one entry per channel with a key ring: the sending key id \
+first, then the older epochs kept so history still opens. Key bytes are never \
+printed.\n\nExamples:\n  buzz toon keys"
+    )]
+    Keys,
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -1833,7 +1916,12 @@ async fn run(cli: Cli) -> Result<(), CliError> {
     // channel. Handled before the private-key check below for the same
     // reason Pack is: this path must work with zero relay configuration.
     if let Cmd::Toon(ref sub) = cli.command {
-        return commands::toon::dispatch(sub, &cli.sidecar_url).await;
+        let ctx = commands::toon::ToonContext {
+            sidecar_url: &cli.sidecar_url,
+            relay_url: &cli.toon_relay,
+            keystore_path: cli.keystore.as_deref(),
+        };
+        return commands::toon::dispatch(sub, &ctx).await;
     }
 
     // Auth: private key is required for all relay operations.
@@ -2117,7 +2205,10 @@ mod tests {
                 "untimeout"
             ]
         );
-        assert_eq!(names(&cmd, "toon"), vec!["send", "status"]);
+        assert_eq!(
+            names(&cmd, "toon"),
+            vec!["inbox", "keys", "read", "send", "status"]
+        );
     }
 
     #[test]
@@ -2138,7 +2229,7 @@ mod tests {
             ("reactions", 3),
             ("repos", 5),
             ("social", 7),
-            ("toon", 2),
+            ("toon", 5),
             ("upload", 1),
             ("users", 5),
             ("workflows", 8),

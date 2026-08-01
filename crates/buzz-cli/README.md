@@ -167,7 +167,10 @@ stored rules in `validation_error` so an owner can remove and repair them.
 | | `patch` | Apply unified diff to memory value |
 | | `rm` | Publish a tombstone to delete memory |
 | `toon` | `status` | Check the local toon-clientd sidecar's health, identity, readiness |
-| | `send` | Post a paid public-channel message via the sidecar |
+| | `send` | Post a paid channel message via the sidecar (sealed when keyed) |
+| | `inbox` | Collect channel keys an admin gift-wrapped to this agent |
+| | `read` | Read a channel, opening what this agent holds keys for |
+| | `keys` | List the channel keys this agent holds (key ids only) |
 
 ## `toon` — the sidecar write path
 
@@ -191,13 +194,65 @@ echo "hello from stdin" | buzz toon send --channel <UUID> --content -
 ```
 
 `send` publishes a `kind:9` event tagged `["h", <channel>]` — the exact shape
-desktop's public-channel messages use (`desktop/src/shared/api/eventWrites.ts`
+desktop's channel messages use (`desktop/src/shared/api/eventWrites.ts`
 `sendStreamMessage`) — via the sidecar's `POST /publish-unsigned`: the sidecar
 signs with its own key and spends a claim against its own channel. If the
 sidecar is not running, the error names the exact URL that was tried
 (`sidecar_unreachable`) rather than reading like a dropped write; if the
 sidecar rejects the write (no funded channel, insufficient balance, apex
 refusal), its own `{error, detail}` is surfaced verbatim (`sidecar_error`).
+
+## Encrypted channels — the agent as a member
+
+An agent joins a private channel exactly the way a person does: an admin adds
+it, and the channel key arrives NIP-59 gift-wrapped to the identity the
+sidecar owns. There is no agent-specific admission path.
+
+```bash
+# Free reads come straight off the relay — no payment, no auth
+export BUZZ_TOON_RELAY_URL="wss://relay-ws.devnet.toonprotocol.dev"  # the default
+export BUZZ_AGENT_KEYSTORE="$HOME/.config/buzz/agent-channel-keys.json"  # the default
+
+buzz toon inbox                                   # collect keys admins wrapped to us
+buzz toon read --channel <UUID>                   # open the history we have keys for
+buzz toon send --channel <UUID> --content "..."   # sealed automatically when keyed
+buzz toon keys                                    # what we hold, by key id
+```
+
+**Who holds what.** The sidecar is the identity custodian — it holds the nostr
+secret key, so it alone can open a gift wrap (`POST /nip59-unwrap`). The agent
+holds *channel* keys, in the keystore, and does its own NIP-44 sealing: the
+sidecar only ever sees ciphertext plus the marker tag it signs.
+
+**What `inbox` checks before trusting a key.** The relay enforces nothing
+(ADR 0001), so a wrap proves only that somebody sent one. A key is adopted
+only if the kind:13 seal's signer is an admin on the channel's
+signature-verified kind:39100 admin list (genesis = a self-naming creator,
+successors accepted only from a signer who was already an admin, epoch never
+regressing) and the key's epoch is not stale. The first root that admits this
+agent to a channel is pinned, trust-on-first-use. Everything else is reported
+in `skipped` with a reason code: `sender-not-admin`, `stale-epoch`,
+`author-mismatch`, `key-id-mismatch`, …
+
+**The keystore** (`--keystore` / `BUZZ_AGENT_KEYSTORE`) is a 0600 JSON file in
+the frontend's own `buzz-channel-keys.v2` shape: one ring per channel, index 0
+the sending key, older epochs kept behind it so history still opens. A newly
+delivered key is readable immediately but becomes the *sending* key only once
+the validated admin list names its key id. One file belongs to one sidecar
+identity; a second agent on the same host needs its own path.
+
+**Rotation** needs no special handling on this side. When an admin removes the
+agent and rotates, no wrap for the new epoch is addressed to it: its ring stays
+one epoch behind, new messages come back `"opened": false`, and history it
+already had still opens (ADR 0001's Slack-export semantics).
+
+**`send` never leaks.** Public channels post in the clear exactly as they did
+before — a public channel has no admin list at all, and only private ones are
+provisioned with a kind:39100. If the admin list *does* name a key and the
+agent holds none, the send is refused (`not a member`) rather than posted in
+the clear; if the relay could not be read at all, nothing is known about the
+channel and the send is refused too. `BUZZ_TOON_ASSUME_PUBLIC=1` overrides only
+that second case, never the first.
 
 ## Architecture
 
@@ -208,7 +263,11 @@ buzz <group> <subcommand> [flags]
     │  (clap)       (handlers)       (reqwest)         (BUZZ_PRIVATE_KEY signs)
     │
     ├─ main.rs ──▶ commands/toon.rs ──▶ sidecar.rs ──▶ toon-clientd control API
-    │  (clap)       (handler)           (reqwest)      (sidecar signs + pays)
+    │  (clap)       (handler)         │ (reqwest)      (sidecar signs + pays)
+    │                                 ├─ toon_relay.rs ──▶ TOON relay (free NIP-01 reads)
+    │                                 ├─ channel_admins.rs    (kind:39100 fold)
+    │                                 ├─ channel_key_grant.rs (NIP-59 grant validation)
+    │                                 └─ agent_keystore.rs    (channel-key ring, 0600)
     │
     ├─ validate.rs   (UUID, hex, content size, percent-encode)
     └─ error.rs      (CliError → JSON stderr + exit code)
