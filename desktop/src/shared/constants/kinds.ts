@@ -33,6 +33,22 @@ export const KIND_FORUM_COMMENT = 45003;
 export const KIND_APPROVAL_REQUEST = 46010;
 export const KIND_MEMBER_ADDED_NOTIFICATION = 44100;
 export const KIND_MEMBER_REMOVED_NOTIFICATION = 44101;
+// Membership authority for an encrypted channel: a MEMBER-signed, addressable
+// (d-tag = channel id) admin list. Deliberately NOT NIP-29's 39000/39001/39002
+// — those are relay-signed, and ADR 0001 says the relay is never trusted for
+// membership. 39100 sits just past NIP-29's relay-generated 39000–39009 block
+// so the numbering still reads as "channel state", while 39005/39006 above
+// establish that Buzz already extends this range. See `channelAdminList.ts`.
+export const KIND_CHANNEL_ADMIN_LIST = 39100;
+// NIP-59 gift wrap (1059) and seal (13). A channel key travels to a new member
+// inside one of these; the seal's signer is the real sender.
+export const KIND_SEAL = 13;
+export const KIND_GIFT_WRAP = 1059;
+// The rumor inside that gift wrap: one channel key, for one channel, for one
+// member. Never published in the clear — the kind exists so the recipient can
+// dispatch on it. Sits in Buzz's 44xxx membership-notification block next to
+// kind:44100 (member added), which is the event it is the private half of.
+export const KIND_CHANNEL_KEY_DELIVERY = 44300;
 export const KIND_TYPING_INDICATOR = 20002;
 export const KIND_HUDDLE_REACTION = 24810;
 export const KIND_HUDDLE_STARTED = 48100;

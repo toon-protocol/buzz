@@ -16,7 +16,10 @@ import { TooltipProvider } from "@/shared/ui/tooltip";
 import { recoverLocalStorageQuotaOnStartup } from "@/shared/lib/localStorageQuota";
 import { installSelectedTransport } from "@/shared/api/transportSelection";
 import { installRustWriteBridge } from "@/shared/api/rustWriteBridge";
-import { loadChannelKeysFromEnvironment } from "@/shared/api/channelKeyBootstrap";
+import {
+  installChannelKeyInbox,
+  loadChannelKeysFromEnvironment,
+} from "@/shared/api/channelKeyBootstrap";
 import { installChannelKeySync } from "@/shared/api/channelKeySync";
 
 type E2eWindow = Window & {
@@ -132,6 +135,12 @@ async function bootstrap() {
   installChannelKeySync();
   await migrateLegacyCommunityStorageBeforeRender();
   renderApp();
+  // After render, and deliberately not awaited: the gift-wrap inbox opens relay
+  // subscriptions, and a relay that is slow or unreachable must delay a channel
+  // unlocking, not the window opening. Unlike the environment seed above, a key
+  // that arrives late is fine — `setChannelKey` notifies its listeners. Never
+  // throws; see `installChannelKeyInbox`.
+  void installChannelKeyInbox();
 }
 
 void bootstrap();

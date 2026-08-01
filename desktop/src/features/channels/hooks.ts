@@ -31,6 +31,10 @@ import type {
   SetChannelTopicInput,
   UpdateChannelInput,
 } from "@/shared/api/types";
+import {
+  grantChannelKeyToMembers,
+  provisionPrivateChannel,
+} from "@/shared/api/channelMembership";
 import { useCommunities } from "@/features/communities/useCommunities";
 import {
   readChannelSnapshot,
@@ -221,7 +225,36 @@ export function useCreateChannelMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (input: CreateChannelInput) => createChannel(input),
+    mutationFn: async (input: CreateChannelInput) => {
+      const created = await createChannel(input);
+      // A private channel is born with a key and a signed admin list naming
+      // its creator (ADR 0001, buzz#16).
+      //
+      // The signing is awaited — the member picker opens straight after this
+      // resolves, and an add-member that beats the admin list has no authority
+      // to gift-wrap under. The *publish* is not: it is a paid write to a
+      // relay this dialog should not be held open behind, and nothing the
+      // creator's own client does next depends on it having landed.
+      //
+      // Neither failure may lose the channel the relay already created. It
+      // exists, keyless and listless, and channel settings say so — the manual
+      // paste field is still the way its members get in.
+      try {
+        const provisioned = await provisionPrivateChannel(created);
+        provisioned?.published.catch((error) => {
+          console.warn(
+            `[channel-keys] ${created.id}'s admin list did not reach the relay`,
+            error,
+          );
+        });
+      } catch (error) {
+        console.warn(
+          `[channel-keys] ${created.id} created without an admin list`,
+          error,
+        );
+      }
+      return created;
+    },
     onSuccess: (createdChannel) => {
       queryClient.setQueryData<Channel[]>(channelsQueryKey, (current) =>
         upsertCachedChannel(current, createdChannel),
@@ -504,7 +537,7 @@ export function useAddChannelMembersMutation(channelId: string | null) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (
+    mutationFn: async (
       input: Omit<AddChannelMembersInput, "channelId"> & {
         channelId?: string;
       },
@@ -515,7 +548,37 @@ export function useAddChannelMembersMutation(channelId: string | null) {
         throw new Error("No channel selected.");
       }
 
-      return addChannelMembers({ ...rest, channelId: effectiveChannelId });
+      const result = await addChannelMembers({
+        ...rest,
+        channelId: effectiveChannelId,
+      });
+
+      // Adding someone to an encrypted channel is handing them the key
+      // (buzz#16) — membership IS key possession, so the roster row without
+      // the key is a member who sees ciphertext. Only the pubkeys the relay
+      // actually accepted.
+      //
+      // Not awaited: this is one paid write per recipient, and the roster
+      // change the user asked for has already succeeded. Holding the dialog
+      // open behind N network round trips would make adding five people feel
+      // like a failure, and a wrap that never lands is recoverable by
+      // re-adding or by the manual key field.
+      void grantChannelKeyToMembers(effectiveChannelId, result.added)
+        .then((outcome) => {
+          for (const skip of outcome.skipped) {
+            console.warn(
+              `[channel-keys] no key sent to ${skip.pubkey}: ${skip.reason}`,
+            );
+          }
+        })
+        .catch((error) => {
+          console.warn(
+            "[channel-keys] could not deliver the channel key",
+            error,
+          );
+        });
+
+      return result;
     },
     onSettled: async (_data, _err, variables) => {
       // Invalidate the effective channel (the one actually mutated) not the

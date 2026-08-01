@@ -3,6 +3,7 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import {
+  type ChannelKey,
   formatChannelKey,
   generateChannelKey,
   parseChannelKey,
@@ -13,20 +14,28 @@ import {
   setChannelKey,
   subscribeToChannelKeys,
 } from "@/shared/api/channelKeyStore";
+import { announceChannelKey } from "@/shared/api/channelMembership";
+import { ChannelAdminList } from "@/features/channels/ui/ChannelAdminList";
 import { copyTextToClipboard } from "@/shared/lib/clipboard";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 
 /**
- * The out-of-band key handoff, as a form.
+ * A channel's key and the admins entitled to hand it out.
  *
- * This is deliberately the crudest possible key distribution: one member
- * generates a key here, reads the hex out, and every other member pastes it
- * into the same field. Gift-wrapped delivery and admin-triggered rotation
- * replace this; until they exist, a human is the transport, and pretending
- * otherwise in the UI would be dishonest about what the channel's privacy
- * currently rests on.
+ * The paste field is no longer the delivery mechanism — buzz#16 gift-wraps the
+ * key to each new member and the recipient's client unlocks the channel by
+ * itself. It stays as the manual override, because the automatic path has
+ * three ways to leave a member keyless that are none of their doing: a channel
+ * created before this feature has no admin list, an admin whose paid write
+ * failed sent nothing, and a client whose keyring was locked at launch never
+ * started its inbox. In all three the answer is a human reading hex to another
+ * human, and removing the field would remove the recovery path.
+ *
+ * The admin list above it is what makes the automatic path trustworthy, so it
+ * is shown here rather than buried: those are the identities that can silently
+ * add a reader to this channel.
  *
  * The key is shown in full rather than masked. It has to leave this screen by
  * hand for the feature to work at all, and a masked field the user must reveal
@@ -52,6 +61,7 @@ export function ChannelEncryptionSettings({
       return;
     }
     setChannelKey(channelId, parsed);
+    announceKey(channelId, parsed);
     setDraft("");
     setError(null);
     toast.success("Channel key saved. New messages here are encrypted.");
@@ -70,6 +80,8 @@ export function ChannelEncryptionSettings({
         )}
         <span className="text-sm font-medium text-foreground">Encryption</span>
       </div>
+
+      <ChannelAdminList channelId={channelId} testIdPrefix={testIdPrefix} />
 
       {storedKeyHex ? (
         <KeyedState
@@ -130,8 +142,10 @@ export function ChannelEncryptionSettings({
           data-testid={`${testIdPrefix}-encryption-generate`}
           disabled={disabled}
           onClick={() => {
-            setChannelKey(channelId, generateChannelKey());
-            toast.success("Channel key generated. Share it with the members.");
+            const generated = generateChannelKey();
+            setChannelKey(channelId, generated);
+            announceKey(channelId, generated);
+            toast.success("Channel key generated. Members will be sent it.");
           }}
           size="sm"
           type="button"
@@ -203,6 +217,26 @@ function KeyedState({
       </div>
     </div>
   );
+}
+
+/**
+ * Tell the channel's admin list which key epoch is now current.
+ *
+ * Fire-and-forget: the key is already saved locally and the channel already
+ * encrypts with it, so a paid write that has not landed must not make the
+ * button feel broken. A no-op for anyone who is not an admin of a validated
+ * list — including the common case of pasting a key someone shared out of
+ * band, where the announcement is not this client's to make.
+ */
+function announceKey(channelId: string, key: ChannelKey): void {
+  void announceChannelKey(channelId, key)
+    .then((publication) => publication?.published)
+    .catch((error) => {
+      console.warn(
+        `[channel-keys] could not announce ${channelId}'s key epoch`,
+        error,
+      );
+    });
 }
 
 /**
