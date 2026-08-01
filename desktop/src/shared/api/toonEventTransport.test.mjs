@@ -1,9 +1,22 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { beforeEach } from "node:test";
 
+import { setToonChannelStorage } from "./toonChannelResumeStore.ts";
 import { ToonEventTransport } from "./toonEventTransport.ts";
 import { ToonPaidWriter } from "./toonPaidWriter.ts";
 import { resolveToonTransportConfig } from "./toonTransportConfig.ts";
+
+// Each test's `scriptedClient()` starts a fresh in-memory channel map, so an
+// isolated disk keeps the resume-or-open decision (buzz#28) from depending on
+// what an earlier test in this file happened to persist.
+beforeEach(() => {
+  const values = new Map();
+  setToonChannelStorage({
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: (key) => values.delete(key),
+  });
+});
 
 const EVENT = {
   id: "a".repeat(64),
@@ -30,15 +43,49 @@ function writerOver(client) {
 }
 
 function scriptedClient(overrides = {}) {
+  // Real (in-memory) channel/nonce bookkeeping, matching `ToonClient` closely
+  // enough for `ToonPaidWriter`'s resume-or-open + claim-signing path
+  // (buzz#28) — the resume behavior itself is covered in
+  // `toonPaidWriter.test.mjs`; these fixtures just need it to work.
+  const channels = new Map();
+  let openCount = 0;
   return {
     started: 0,
     published: [],
+    channelManager: {
+      isTracking: (channelId) => channels.has(channelId),
+      trackChannel(channelId, _context, initialNonce = 0, initialAmount = 0n) {
+        channels.set(channelId, {
+          nonce: initialNonce,
+          cumulativeAmount: initialAmount,
+        });
+      },
+    },
     start() {
       this.started += 1;
       return Promise.resolve({});
     },
     stop: () => Promise.resolve(),
     getRoutePrice: () => Promise.resolve(1000n),
+    openChannel() {
+      openCount += 1;
+      const channelId = `channel-${openCount}`;
+      channels.set(channelId, { nonce: 0, cumulativeAmount: 0n });
+      return Promise.resolve(channelId);
+    },
+    signBalanceProof(channelId, amount) {
+      const tracking = channels.get(channelId);
+      if (!tracking) {
+        return Promise.reject(new Error(`channel "${channelId}" not tracked`));
+      }
+      tracking.nonce += 1;
+      tracking.cumulativeAmount += amount;
+      return Promise.resolve({
+        channelId,
+        nonce: tracking.nonce,
+        transferredAmount: tracking.cumulativeAmount,
+      });
+    },
     publishEvent(event, options) {
       this.published.push({ event, options });
       return Promise.resolve({ success: true, eventId: event.id });

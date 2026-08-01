@@ -8,6 +8,7 @@ import {
 } from "@/features/onboarding/toon/toonOnboardingIdentity";
 import {
   deriveToonOnboardingStatus,
+  isChannelStepConfirmed,
   type ToonOnboardingStatus,
 } from "@/features/onboarding/toon/toonOnboardingState";
 import {
@@ -28,6 +29,7 @@ import {
   getActiveToonTransport,
   getActiveTransportSelection,
 } from "@/shared/api/transportSelection";
+import { hasPersistedChannel } from "@/shared/api/toonChannelResumeStore";
 
 /**
  * Wires the pure step-derivation (`toonOnboardingState.ts`) and the stored
@@ -147,8 +149,17 @@ export function useToonOnboarding() {
     hasWallet: mnemonic !== null,
     usdcBaseUnits: balances.tokenBaseUnits,
     nativeBaseUnits: balances.nativeBaseUnits,
-    channelConfirmed:
-      channelConfirmed || (getActiveToonTransport()?.isWritable() ?? false),
+    channelConfirmed: isChannelStepConfirmed({
+      channelConfirmedFlag: channelConfirmed,
+      transportWritable: getActiveToonTransport()?.isWritable() ?? false,
+      // buzz#28: a channel persisted from an earlier launch is resumable with
+      // zero new spend, so it counts as "open" even before this session's
+      // writer has started (which only happens lazily, on the first quote or
+      // publish, or when this step's own button is pressed).
+      resumableChannelExists: config
+        ? hasPersistedChannel(config.destination, config.chain)
+        : false,
+    }),
     firstMessageSent,
   });
 
