@@ -231,8 +231,9 @@ export function useCreateChannelMutation() {
       // its creator (ADR 0001, buzz#16). Awaited rather than fired off: the
       // member picker opens straight after this resolves, and an add-member
       // that beats the admin list has no authority to gift-wrap under.
-      // A failure here must not lose the channel the relay already created —
-      // the user can republish from channel settings.
+      // A failure here must not lose the channel the relay already created.
+      // The channel exists, keyless and listless, and channel settings say so
+      // — the manual paste field is still the way its members get in.
       try {
         await provisionPrivateChannel(created);
       } catch (error) {
