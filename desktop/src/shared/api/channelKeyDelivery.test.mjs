@@ -37,7 +37,7 @@ const member = identity();
 const outsider = identity();
 
 /** The admin list a real client would have validated before judging a grant. */
-function adminListFor(admins) {
+function adminListFor(admins, epoch = 0) {
   const event = finalizeEvent(
     {
       ...buildChannelAdminListEvent({
@@ -45,6 +45,7 @@ function adminListFor(admins) {
         creator: admin.pubkey,
         admins,
         keyId: "0123456789abcdef",
+        epoch,
       }),
       created_at: 1_700_000_000,
     },
@@ -214,6 +215,30 @@ test("a grant with no admin list to check against is held, not refused", () => {
     accepted: false,
     reason: "no-admin-list",
   });
+});
+
+test("a key from before the channel's current epoch is refused (buzz#18)", () => {
+  const wrap = fromWire(
+    wrapChannelKey({
+      channelId: CHANNEL,
+      key: generateChannelKey(),
+      epoch: 0,
+      recipient: member.pubkey,
+      senderSecretKey: admin.secretKey,
+    }),
+  );
+  const grant = unwrapChannelKey(wrap, member.secretKey);
+
+  // Same admin, valid signature — but the channel has rotated past this key.
+  assert.deepEqual(
+    acceptChannelKeyGrant(grant, adminListFor([admin.pubkey], 1)),
+    { accepted: false, reason: "stale-epoch" },
+  );
+  // At the epoch it was minted for, the same grant is fine.
+  assert.deepEqual(
+    acceptChannelKeyGrant(grant, adminListFor([admin.pubkey], 0)),
+    { accepted: true },
+  );
 });
 
 test("the wrap filter asks only for wraps addressed to this client", () => {

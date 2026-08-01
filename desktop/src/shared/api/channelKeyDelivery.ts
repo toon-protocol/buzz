@@ -83,12 +83,15 @@ export type ChannelKeyGrant = {
 /**
  * Why a grant was refused. Surfaced so a refusal is never silent.
  *
- * Only two, because the malformed and not-for-us cases never get this far:
+ * Only these, because the malformed and not-for-us cases never get this far:
  * {@link unwrapChannelKey} returns null for them, which on an open relay is
- * the overwhelmingly common outcome and not worth reporting. These two are the
+ * the overwhelmingly common outcome and not worth reporting. These are the
  * cases where a real key for a real channel is being turned away.
  */
-export type ChannelKeyRejection = "sender-not-admin" | "no-admin-list";
+export type ChannelKeyRejection =
+  | "sender-not-admin"
+  | "no-admin-list"
+  | "stale-epoch";
 
 /**
  * The rumor an admin seals: one key, one channel, one recipient.
@@ -274,6 +277,13 @@ export function unwrapChannelKey(
  * matched against the validated admin list, and a grant that arrives before
  * that list does is held, not accepted (`no-admin-list`).
  *
+ * The epoch check is buzz#18's half of this, present early because it costs
+ * one comparison and is unpleasant to retrofit: a grant older than the epoch
+ * the admin list advertises is a superseded key, and replaying one after a
+ * rotation is precisely how a removed member would try to keep reading. It
+ * cannot fire today — every grant is minted at the list's current epoch — and
+ * it is tested so that stays true once rotation exists.
+ *
  * Note what is deliberately not checked: whether the recipient is on a member
  * list. There is no member list. Possession of the key IS membership (ADR
  * 0001) — an admin handing over the key is the act of adding someone.
@@ -285,6 +295,9 @@ export function acceptChannelKeyGrant(
   if (adminList === null) return { accepted: false, reason: "no-admin-list" };
   if (!isChannelAdmin(adminList, grant.sender)) {
     return { accepted: false, reason: "sender-not-admin" };
+  }
+  if (grant.epoch < adminList.epoch) {
+    return { accepted: false, reason: "stale-epoch" };
   }
   return { accepted: true };
 }
