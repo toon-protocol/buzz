@@ -148,6 +148,24 @@ test("fetchEvents collects until EOSE and then closes", async () => {
   reader.close();
 });
 
+test("fetchEvents tolerates a double-encoded EVENT frame, same as a live subscription", async () => {
+  const { reader, current, nextSent } = openReader();
+  const pending = reader.fetchEvents({ kinds: [9], limit: 1 });
+
+  const subId = (await nextSent())[1];
+  // The devnet relay sometimes double-encodes an EVENT payload: the event
+  // arrives as a JSON string containing the event JSON, rather than inline.
+  // A history REQ (this method) is exactly how `getChannelWindowPage` pages
+  // TOON history, so it needs the same tolerance `subscribeLive` already has.
+  current().emit("message", {
+    data: JSON.stringify(["EVENT", subId, JSON.stringify(EVENT)]),
+  });
+  current().emit("message", { data: JSON.stringify(["EOSE", subId]) });
+
+  assert.deepEqual(await pending, [EVENT]);
+  reader.close();
+});
+
 test("a CLOSED subscription is dropped, not replayed", async () => {
   const { reader, current } = openReader();
 

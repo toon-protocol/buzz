@@ -23,9 +23,12 @@ import type { RelayEvent } from "@/shared/api/types";
  * transport, it is a dead letter box: on TOON the paid write lands on a
  * different relay than `relayClient` is attached to, so a message the user
  * just sent would never come back. Live subscriptions therefore move with the
- * write. History paging does NOT yet — `channelWindow.ts` still asks
- * buzz-relay's REST window, which server-assembles thread summaries and aux
- * overlays that a plain NIP-01 REQ cannot reproduce.
+ * write, and so does history paging (buzz#29): `channelWindow.getChannelWindowPage`
+ * asks buzz-relay's REST window on the relay transport, which server-assembles
+ * thread summaries and window bounds a plain NIP-01 REQ cannot reproduce, and
+ * walks the active `ToonEventTransport`'s relay backwards with `until`/`limit`
+ * on TOON, reassembling the page client-side
+ * (`toonChannelWindowResponse.ts`) since there is no server there to do it.
  *
  * Writes that are deliberately NOT on this seam:
  * - `ReadOnlyRelayClient` (`readOnlyRelayClient.ts`) publishes read-state to an
@@ -146,7 +149,9 @@ export function publishEphemeralEvent(event: RelayEvent): Promise<void> {
  * without implementing anything — and cannot accidentally ship a build where
  * privacy depends on `BUZZ_TRANSPORT`. Events that are not encrypted pass
  * through by reference. History takes the same treatment where it enters, in
- * `channelWindow.getChannelWindowEvents`.
+ * `channelWindow.getChannelWindowPage` — per-event, exactly as here, so a
+ * channel's key ring (rotation epochs included) opens a paged-in message the
+ * same way it opens a live one regardless of which transport fetched it.
  */
 export function subscribeLiveEvents(
   filter: RelaySubscriptionFilter,

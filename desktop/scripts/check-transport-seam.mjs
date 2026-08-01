@@ -18,9 +18,12 @@ import { fileURLToPath } from "node:url";
  * different relay than the relay session is attached to, so a call site that
  * subscribes through `relayClient` would silently never see its own message.
  * The narrower relay-shaped read verbs (`fetchChannelHistory`,
- * `subscribeToChannel`, the aux backfills) are NOT guarded yet — history
- * paging still goes to buzz-relay's server-assembled window, which a plain
- * NIP-01 REQ cannot reproduce.
+ * `subscribeToChannel`, the aux backfills) are NOT guarded yet. History
+ * paging (`channelWindow.getChannelWindowPage`) does branch on transport —
+ * buzz-relay's server-assembled window on the relay transport, a
+ * client-reassembled NIP-01 REQ on TOON (buzz#29) — but it does so behind its
+ * own facade rather than a `relayClient` call this script's regex would
+ * catch, so there is nothing here yet for those verbs to guard against.
  */
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
