@@ -1,12 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { createAuthEvent, getRelayWsUrl } from "@/shared/api/tauri";
+import type { RelayEvent } from "@/shared/api/types";
 import {
-  createAuthEvent,
-  getRelayWsUrl,
-  signRelayEvent,
-} from "@/shared/api/tauri";
-import type { PresenceStatus, RelayEvent } from "@/shared/api/types";
-import {
-  KIND_STREAM_MESSAGE,
   KIND_TYPING_INDICATOR,
   KIND_USER_STATUS,
   CHANNEL_EVENT_KINDS,
@@ -54,7 +49,6 @@ import {
 import { RelayReconnectWaiters } from "@/shared/api/relayReconnectWaiters";
 import { RelayStallWatchdog } from "@/shared/api/relayStallWatchdog";
 import { closeWebSocket } from "@/shared/api/relayWebSocketClose";
-import { buildThreadReferenceTags } from "@/features/messages/lib/threading";
 const RECONNECT_BASE_DELAY_MS = 1_000,
   RECONNECT_MAX_DELAY_MS = 30_000,
   EVENT_BATCH_MS = 16;
@@ -68,6 +62,12 @@ export const BACKOFF_RESET_STABLE_MS = 60_000;
 const STALL_CHECK_INTERVAL_MS = 10_000;
 const STALL_IDLE_TIMEOUT_MS = 60_000;
 
+/**
+ * The NIP-42 relay session: subscriptions, history, and the wire half of
+ * writes. App code must not publish through it directly — writes go through
+ * the transport seam (`eventTransport.ts`), whose only implementation
+ * (`relayEventTransport.ts`) delegates the write verbs back to this class.
+ */
 export class RelayClient {
   private wsId: number | null = null;
   private relayUrl: string | null = null;
@@ -246,74 +246,6 @@ export class RelayClient {
     );
   }
 
-  async sendMessage(
-    channelId: string,
-    content: string,
-    mentionPubkeys: string[] = [],
-    extraTags: string[][] = [],
-  ) {
-    await this.ensureConnected();
-
-    const tags: string[][] = [["h", channelId]];
-    for (const pubkey of mentionPubkeys) {
-      tags.push(["p", pubkey]);
-    }
-    for (const tag of extraTags) {
-      tags.push(tag);
-    }
-
-    const event = await signRelayEvent({
-      kind: KIND_STREAM_MESSAGE,
-      content: content.trim(),
-      tags,
-    });
-
-    return this.publishEvent(
-      event,
-      "Timed out while sending the message.",
-      "Failed to send the message.",
-    );
-  }
-
-  async sendPresence(status: PresenceStatus) {
-    await this.ensureConnected();
-
-    const event = await signRelayEvent({
-      kind: 20001,
-      content: status,
-      tags: [],
-    });
-
-    return this.publishEvent(
-      event,
-      "Timed out while updating presence.",
-      "Failed to update presence.",
-    );
-  }
-
-  async sendTypingIndicator(
-    channelId: string,
-    parentEventId?: string | null,
-    rootEventId?: string | null,
-  ) {
-    // Bail when disconnected — not worth triggering a reconnect for ephemeral typing events.
-    if (this.wsId === null) {
-      return;
-    }
-    const event = await signRelayEvent({
-      kind: KIND_TYPING_INDICATOR,
-      content: "",
-      tags: buildThreadReferenceTags(
-        channelId,
-        parentEventId ?? null,
-        rootEventId ?? null,
-      ),
-    });
-
-    // Fire-and-forget: no need to wait for relay acknowledgement.
-    void this.sendRaw(["EVENT", event]).catch(() => {});
-  }
-
   async subscribeToChannel(
     channelId: string,
     onEvent: (event: RelayEvent) => void,
@@ -377,22 +309,6 @@ export class RelayClient {
 
   async subscribeToPresenceUpdates(onEvent: (event: RelayEvent) => void) {
     return this.subscribe({ kinds: [20001], limit: 0 }, onEvent);
-  }
-
-  async publishUserStatus(text: string, emoji: string): Promise<void> {
-    await this.ensureConnected();
-    const tags: string[][] = [["d", "general"]];
-    if (emoji) tags.push(["emoji", emoji]);
-    const event = await signRelayEvent({
-      kind: KIND_USER_STATUS,
-      content: text,
-      tags,
-    });
-    await this.publishEvent(
-      event,
-      "Timed out publishing user status",
-      "Failed to publish user status",
-    );
   }
 
   /** Subscribe to kind:30315 user status events (live only, no backfill). */
@@ -469,7 +385,13 @@ export class RelayClient {
     return this.connectionStateEmitter.subscribe(listener);
   }
 
-  private async ensureConnected() {
+  /**
+   * Connect if we are not connected already. Public because
+   * `RelayEventTransport` exposes it as the seam's `ready()`: callers that
+   * sign before publishing get the connection up first so signing does not sit
+   * inside the publish timeout.
+   */
+  async ensureConnected() {
     if (shouldRefuseConnect({ terminal: this.terminal })) {
       // Session is terminal (e.g. relay rejected auth). Refuse to connect
       // until an explicit re-engagement (disconnect()/preconnect()) clears
@@ -690,6 +612,24 @@ export class RelayClient {
     }
 
     await this.sendRaw(["CLOSE", subId]);
+  }
+
+  /** Whether the socket is up, so a write can go out without connecting first. */
+  isWritable(): boolean {
+    return this.wsId !== null;
+  }
+
+  /**
+   * Send an event without waiting for the relay's OK, dropping it when the
+   * socket is down — reconnecting is not worth it for droppable events.
+   */
+  async publishEphemeralEvent(event: RelayEvent): Promise<void> {
+    if (this.wsId === null) {
+      return;
+    }
+
+    // Fire-and-forget: no need to wait for relay acknowledgement.
+    void this.sendRaw(["EVENT", event]).catch(() => {});
   }
 
   async publishEvent(

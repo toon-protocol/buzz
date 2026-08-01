@@ -1,3 +1,4 @@
+import { publishEvent } from "@/shared/api/eventTransport";
 import { relayClient } from "@/shared/api/relayClient";
 import { invokeTauri, signRelayEvent } from "@/shared/api/tauri";
 import { getIdentity } from "@/shared/api/tauriIdentity";
@@ -159,7 +160,7 @@ async function publishRelayAdminEvent(
     tags,
   });
 
-  await relayClient.publishEvent(
+  await publishEvent(
     event,
     "Timed out while updating relay access.",
     "Failed to update relay access.",

@@ -1,6 +1,6 @@
 import { useCallback, useRef } from "react";
 
-import { relayClient } from "@/shared/api/relayClient";
+import { sendTypingIndicator } from "@/shared/api/eventWrites";
 
 const TYPING_SEND_INTERVAL_MS = 3_000;
 
@@ -39,13 +39,11 @@ export function useTypingBroadcast(
     }
 
     lastSentRef.current = now;
-    relayClient
-      .sendTypingIndicator(
-        id,
-        parentEventIdRef.current ?? null,
-        rootEventIdRef.current ?? null,
-      )
-      .catch(() => {});
+    sendTypingIndicator(
+      id,
+      parentEventIdRef.current ?? null,
+      rootEventIdRef.current ?? null,
+    ).catch(() => {});
   }, []);
 
   return notifyTyping;

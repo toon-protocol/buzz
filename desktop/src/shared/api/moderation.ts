@@ -1,4 +1,4 @@
-import { relayClient } from "@/shared/api/relayClient";
+import { publishEvent } from "@/shared/api/eventTransport";
 import { getRelayHttpUrl, signRelayEvent } from "@/shared/api/tauri";
 import {
   KIND_MODERATION_BAN,
@@ -96,7 +96,7 @@ async function publishModerationEvent(
   errorMessage: string,
 ): Promise<void> {
   const event = await signRelayEvent({ kind, content: "", tags });
-  await relayClient.publishEvent(event, timeoutMessage, errorMessage);
+  await publishEvent(event, timeoutMessage, errorMessage);
 }
 
 /**
@@ -119,7 +119,7 @@ export async function submitReport(input: {
     content: input.note?.trim() ? input.note.trim() : "",
     tags,
   });
-  await relayClient.publishEvent(
+  await publishEvent(
     event,
     "Timed out while submitting the report.",
     "Failed to submit the report.",

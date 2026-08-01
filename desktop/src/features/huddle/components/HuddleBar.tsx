@@ -14,6 +14,7 @@ import { EmojiPicker } from "@/features/custom-emoji/ui/EmojiPicker";
 import { useProfileQuery } from "@/features/profile/hooks";
 import { reactionEmojiUrl } from "@/shared/api/customEmoji";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { publishEvent } from "@/shared/api/eventTransport";
 import { relayClient } from "@/shared/api/relayClient";
 import { signRelayEvent } from "@/shared/api/tauri";
 import type { RelayEvent } from "@/shared/api/types";
@@ -463,7 +464,7 @@ export function HuddleBar({
             emojiUrl,
           ),
         });
-        await relayClient.publishEvent(
+        await publishEvent(
           event,
           "Timed out while sending huddle reaction.",
           "Failed to send huddle reaction.",

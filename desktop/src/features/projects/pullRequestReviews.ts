@@ -5,7 +5,7 @@ import {
   signProjectPullRequestReviewRequest,
   signProjectPullRequestStatus,
 } from "@/shared/api/projectGit";
-import { relayClient } from "@/shared/api/relayClient";
+import { publishEvent } from "@/shared/api/eventTransport";
 import { signRelayEvent } from "@/shared/api/tauri";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
@@ -82,7 +82,7 @@ async function updateProjectPullRequestStatus({
     ],
   });
 
-  await relayClient.publishEvent(
+  await publishEvent(
     event,
     "Timed out updating pull request status.",
     "Failed to update pull request status.",
@@ -134,7 +134,7 @@ async function requestProjectPullRequestReview({
     ],
   });
 
-  await relayClient.publishEvent(
+  await publishEvent(
     event,
     "Timed out requesting review.",
     "Failed to request review.",
@@ -223,11 +223,7 @@ async function submitProjectPullRequestReview({
     ],
   });
 
-  await relayClient.publishEvent(
-    event,
-    details.timeoutMessage,
-    details.errorMessage,
-  );
+  await publishEvent(event, details.timeoutMessage, details.errorMessage);
 }
 
 export function useProjectPullRequestWriteInvalidation(

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { sendPresence } from "@/shared/api/eventWrites";
 import { relayClient } from "@/shared/api/relayClient";
 import { isRateLimited } from "@/shared/api/relayRateLimitGate";
 import { useRelayConnection } from "@/shared/api/useRelayConnection";
@@ -168,7 +169,7 @@ export function useSetPresenceMutation(pubkey?: string) {
 
   return useMutation({
     mutationFn: async (status: PresenceStatus) => {
-      await relayClient.sendPresence(status);
+      await sendPresence(status);
       return {
         status,
         ttlSeconds: status === "offline" ? 0 : PRESENCE_TTL_SECONDS,

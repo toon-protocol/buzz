@@ -16,6 +16,7 @@
  * Replaces the earlier relay-owned single-set + kind:9037 command model.
  */
 
+import { publishEvent } from "@/shared/api/eventTransport";
 import { relayClient } from "@/shared/api/relayClient";
 import { signRelayEvent } from "@/shared/api/tauri";
 import { getIdentity } from "@/shared/api/tauriIdentity";
@@ -179,7 +180,7 @@ async function publishOwnSet(
     content: "",
     tags,
   });
-  await relayClient.publishEvent(event, timeoutMessage, errorMessage);
+  await publishEvent(event, timeoutMessage, errorMessage);
 }
 
 /**
