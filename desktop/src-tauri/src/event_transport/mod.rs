@@ -193,4 +193,93 @@ mod tests {
         assert_eq!(parse_transport_mode(Some("relay")), TransportMode::Relay);
         assert_eq!(parse_transport_mode(Some("")), TransportMode::Relay);
     }
+
+    // ── Channel-key sealing reaches this boundary already done (buzz#33) ──
+    //
+    // `dispatch` never inspects `submission.body` beyond the egress guard —
+    // by the time any caller reaches it, the seam's module doc already
+    // states the contract: "already-signed, already-serialized event bytes
+    // (`event.as_json()`)". For a channel-scoped event this crate builds
+    // (`events::build_message` and friends), that string is exactly what
+    // `send_channel_message`/`submit_event`/`relay::submit.rs` hand to
+    // `dispatch` as `SignedEventSubmission::body`. This test does not spin up
+    // a transport (the pure-function-tests constraint above still applies:
+    // no env mutation, no network): it proves the sealing seam lives fully
+    // upstream of the boundary by inspecting that exact byte string for a
+    // keyed channel, the same substitution `send_channel_message` performs
+    // before it ever calls `submit_event`.
+    #[test]
+    fn a_keyed_channel_message_never_reaches_the_dispatch_boundary_as_plaintext() {
+        use crate::channel_keys::{self, channel_keys_test_lock, ChannelKey, CHANNEL_KEY_BYTES};
+        use nostr::JsonUtil;
+        use std::collections::HashMap;
+
+        let _guard = channel_keys_test_lock();
+        let channel = uuid::Uuid::new_v4();
+        let key: ChannelKey = [0x7a; CHANNEL_KEY_BYTES];
+        let mut entries = HashMap::new();
+        entries.insert(channel.to_string(), hex::encode(key));
+        channel_keys::sync_keys(entries);
+
+        let builder = crate::events::build_message(
+            channel,
+            "the deploy password is hunter2",
+            None,
+            &[],
+            &[],
+            &[],
+            &[],
+        )
+        .expect("build keyed channel message");
+        let event = builder
+            .sign_with_keys(&nostr::Keys::generate())
+            .expect("sign keyed channel message");
+
+        // Exactly `SignedEventSubmission::body` for this event, on either
+        // transport.
+        let body = event.as_json().into_bytes();
+        let body_text = String::from_utf8(body).expect("event JSON is UTF-8");
+
+        assert!(
+            !body_text.contains("hunter2"),
+            "plaintext reached the dispatch boundary: {body_text}"
+        );
+        assert!(body_text.contains("\"encrypted\""));
+        assert!(body_text.contains("nip44-v2"));
+
+        channel_keys::sync_keys(HashMap::new());
+    }
+
+    /// Companion to the above: an unkeyed channel's message is untouched —
+    /// buzz#33 must not seal traffic that was never meant to be private.
+    #[test]
+    fn an_unkeyed_channel_message_reaches_the_dispatch_boundary_as_plaintext() {
+        use crate::channel_keys::{self, channel_keys_test_lock};
+        use nostr::JsonUtil;
+        use std::collections::HashMap;
+
+        let _guard = channel_keys_test_lock();
+        channel_keys::sync_keys(HashMap::new());
+
+        let channel = uuid::Uuid::new_v4();
+        let builder = crate::events::build_message(
+            channel,
+            "public roadmap update",
+            None,
+            &[],
+            &[],
+            &[],
+            &[],
+        )
+        .expect("build unkeyed channel message");
+        let event = builder
+            .sign_with_keys(&nostr::Keys::generate())
+            .expect("sign unkeyed channel message");
+
+        let body = event.as_json().into_bytes();
+        let body_text = String::from_utf8(body).expect("event JSON is UTF-8");
+
+        assert!(body_text.contains("public roadmap update"));
+        assert!(!body_text.contains("\"encrypted\""));
+    }
 }
