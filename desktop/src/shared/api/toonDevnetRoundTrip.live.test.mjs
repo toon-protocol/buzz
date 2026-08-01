@@ -3,6 +3,16 @@ import test from "node:test";
 
 import { finalizeEvent, generateSecretKey } from "nostr-tools/pure";
 
+import {
+  decryptChannelContent,
+  generateChannelKey,
+} from "./channelEncryption.ts";
+import { setChannelKey, setChannelKeyStorage } from "./channelKeyStore.ts";
+import {
+  LOCKED_MESSAGE_PLACEHOLDER,
+  openChannelEvent,
+  sealChannelContent,
+} from "./channelMessageCrypto.ts";
 import { ToonEventTransport } from "./toonEventTransport.ts";
 import { ToonRelayReader } from "./toonRelayReader.ts";
 import { resolveToonTransportConfig } from "./toonTransportConfig.ts";
@@ -129,6 +139,93 @@ test("a paid write round-trips to two free subscribers", {
   } finally {
     await disposeA();
     await disposeB();
+    observer.close();
+    await transport.close();
+  }
+});
+
+test("an encrypted channel message reaches the relay as ciphertext", {
+  skip: enabled ? false : "set BUZZ_TOON_LIVE=1 and BUZZ_TOON_MNEMONIC",
+  timeout: ROUND_TRIP_TIMEOUT_MS + 60_000,
+}, async () => {
+  // buzz#12's acceptance criteria against a real relay: a member opens the
+  // message, a non-member — and anyone reading the relay directly — gets
+  // ciphertext. Same paid write, same kind, same `h` tag as the plaintext
+  // round-trip above; only `content` and one marker tag differ.
+  const config = {
+    ...resolveToonTransportConfig(process.env),
+    mode: "toon",
+  };
+
+  const channelId = `${CHANNEL_ID}-encrypted`;
+  const channelKey = generateChannelKey();
+
+  // This process stands in for the member's client, so give it the key.
+  setChannelKeyStorage(null);
+  setChannelKey(channelId, channelKey);
+
+  const transport = new ToonEventTransport(config);
+  const observer = new ToonRelayReader(config.relayUrl);
+
+  const authorKey = generateSecretKey();
+  const marker = `buzz#12 live encrypted ${new Date().toISOString()}`;
+  const sealed = sealChannelContent(channelId, marker);
+  assert.ok(!sealed.content.includes("buzz#12"), "content must leave sealed");
+
+  const event = finalizeEvent(
+    {
+      kind: KIND_STREAM_MESSAGE,
+      content: sealed.content,
+      tags: [["h", channelId], ...sealed.tags],
+      created_at: Math.floor(Date.now() / 1000),
+    },
+    authorKey,
+  );
+
+  const filter = {
+    kinds: [KIND_STREAM_MESSAGE],
+    "#h": [channelId],
+    limit: 20,
+    since: Math.floor(Date.now() / 1000) - 60,
+  };
+  const seenByObserver = [];
+  const dispose = await observer.subscribeLive(filter, (e) =>
+    seenByObserver.push(e),
+  );
+
+  try {
+    await transport.publish(event, {
+      timeoutMessage: "Timed out while sending the message.",
+      sendErrorMessage: "Failed to send the message.",
+    });
+
+    await waitFor(
+      () => seenByObserver.some((e) => e.id === event.id),
+      ROUND_TRIP_TIMEOUT_MS,
+      "the relay to serve the encrypted write",
+    );
+
+    // What a raw relay read returns: the ciphertext, unmodified.
+    const raw = seenByObserver.find((e) => e.id === event.id);
+    assert.notEqual(raw.content, marker);
+    assert.ok(!raw.content.includes("buzz#12"));
+    assert.equal(raw.content, sealed.content);
+    // Routing metadata is still readable — that is the deal in ADR 0001.
+    assert.equal(raw.tags.find((tag) => tag[0] === "h")[1], channelId);
+
+    // A member opens it.
+    assert.equal(openChannelEvent(raw).content, marker);
+    // A non-member does not, whatever key they try.
+    assert.equal(
+      decryptChannelContent(raw.content, generateChannelKey()),
+      null,
+    );
+    assert.equal(
+      openChannelEvent(raw, generateChannelKey()).content,
+      LOCKED_MESSAGE_PLACEHOLDER,
+    );
+  } finally {
+    await dispose();
     observer.close();
     await transport.close();
   }

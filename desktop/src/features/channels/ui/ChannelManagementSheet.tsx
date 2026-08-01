@@ -70,6 +70,7 @@ import {
 } from "./channelFormStyles";
 import { ChannelTypeSettings } from "./ChannelTypeSettings";
 import { ChannelPermissionsSettings } from "./ChannelPermissionsSettings";
+import { ChannelEncryptionSettings } from "./ChannelEncryptionSettings";
 import {
   ChannelHero,
   ChannelQuickAction,
@@ -531,6 +532,16 @@ export function ChannelManagementSheet({
                       }
                       testIdPrefix="channel-management"
                       visibility={isPrivateDraft ? "private" : "open"}
+                    />
+                    {/*
+                      Not saved with the rest of the form: the channel key is
+                      local to this client and never published, so it has no
+                      part in the channel-details mutation the Save button
+                      drives. Its own buttons commit it immediately.
+                    */}
+                    <ChannelEncryptionSettings
+                      channelId={resolvedChannel.id}
+                      testIdPrefix="channel-management"
                     />
                   </div>
                 ) : null}

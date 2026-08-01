@@ -1,5 +1,9 @@
 import { buildThreadReferenceTags } from "@/features/messages/lib/threading";
 import {
+  openChannelEvent,
+  sealChannelContent,
+} from "@/shared/api/channelMessageCrypto";
+import {
   ensureTransportReady,
   isTransportWritable,
   publishEphemeralEvent,
@@ -21,12 +25,20 @@ import {
  */
 
 /**
- * Post a plain kind:11 message to a channel.
+ * Post a plain kind:9 message to a channel, sealed with the channel key when
+ * this client holds one.
+ *
+ * The sealing happens here rather than in a transport because encryption is a
+ * property of the channel, not of the wire — and because content sealed after
+ * `signRelayEvent` would not be content the signature covers. See
+ * `channelMessageCrypto.ts` for the wire layout and the placement argument.
  *
  * Not the only way a message reaches the relay: messages that carry threading,
  * media, or emoji tags go through the Tauri `send_channel_message` command
  * instead, which builds, signs, and POSTs the event from Rust over NIP-98
- * HTTP. That surface is not on this seam — see `eventTransport.ts`.
+ * HTTP. That surface is not on this seam — see `eventTransport.ts` — and so is
+ * NOT encrypted; an encrypted channel's replies and attachments still go out
+ * in the clear until the Rust write path grows a seam of its own.
  */
 export async function sendStreamMessage(
   channelId: string,
@@ -36,7 +48,9 @@ export async function sendStreamMessage(
 ): Promise<RelayEvent> {
   await ensureTransportReady();
 
-  const tags: string[][] = [["h", channelId]];
+  const sealed = sealChannelContent(channelId, content.trim());
+
+  const tags: string[][] = [["h", channelId], ...sealed.tags];
   for (const pubkey of mentionPubkeys) {
     tags.push(["p", pubkey]);
   }
@@ -46,15 +60,19 @@ export async function sendStreamMessage(
 
   const event = await signRelayEvent({
     kind: KIND_STREAM_MESSAGE,
-    content: content.trim(),
+    content: sealed.content,
     tags,
   });
 
-  return publishEvent(
+  const published = await publishEvent(
     event,
     "Timed out while sending the message.",
     "Failed to send the message.",
   );
+
+  // Back through the same door inbound events come in by, so the sender's own
+  // echo is the plaintext everyone else will see rather than its own ciphertext.
+  return openChannelEvent(published);
 }
 
 /** Broadcast the signed-in user's presence. */

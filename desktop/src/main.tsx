@@ -15,6 +15,7 @@ import { Toaster } from "@/shared/ui/sonner";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 import { recoverLocalStorageQuotaOnStartup } from "@/shared/lib/localStorageQuota";
 import { installSelectedTransport } from "@/shared/api/transportSelection";
+import { loadChannelKeysFromEnvironment } from "@/shared/api/channelKeyBootstrap";
 
 type E2eWindow = Window & {
   __BUZZ_E2E__?: unknown;
@@ -117,6 +118,9 @@ async function bootstrap() {
   // Before render, so no write or subscription can be issued against a
   // transport that is about to be replaced.
   await installSelectedTransport();
+  // Also before render: an event that arrives before its key is loaded renders
+  // as locked and never re-decrypts.
+  await loadChannelKeysFromEnvironment();
   await migrateLegacyCommunityStorageBeforeRender();
   renderApp();
 }
