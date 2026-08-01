@@ -1,3 +1,4 @@
+import { publishEvent } from "@/shared/api/eventTransport";
 import { relayClient } from "@/shared/api/relayClient";
 import {
   nip44DecryptFromSelf,
@@ -154,7 +155,7 @@ export class ChannelStarSyncManager {
           ["t", D_TAG], // relay discoverability; not used in our filters
         ],
       });
-      await relayClient.publishEvent(
+      await publishEvent(
         event,
         "Timed out publishing channel stars.",
         "Failed to publish channel stars.",

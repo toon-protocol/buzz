@@ -5,7 +5,7 @@ import * as React from "react";
 import type { ImetaMedia } from "@/features/messages/lib/imetaMediaMarkdown";
 import { buildOutgoingMessage } from "@/features/messages/lib/imetaMediaMarkdown";
 import type { SendFeedbackInput } from "@/features/settings/ui/SendFeedbackDialog";
-import { relayClient } from "@/shared/api/relayClient";
+import { publishEvent } from "@/shared/api/eventTransport";
 import { signRelayEvent, uploadMediaBytes } from "@/shared/api/tauri";
 import { pickAndUploadImage } from "@/shared/api/tauriMedia";
 import { KIND_PRODUCT_FEEDBACK } from "@/shared/constants/kinds";
@@ -120,7 +120,7 @@ export function useSendFeedback() {
         content: payload.content,
         tags: payload.tags,
       });
-      await relayClient.publishEvent(
+      await publishEvent(
         event,
         "Timed out while sending feedback.",
         "Failed to send feedback.",

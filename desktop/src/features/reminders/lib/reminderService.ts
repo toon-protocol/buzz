@@ -1,3 +1,4 @@
+import { publishEvent } from "@/shared/api/eventTransport";
 import { relayClient } from "@/shared/api/relayClient";
 import {
   nip44DecryptFromSelf,
@@ -176,7 +177,7 @@ export async function createReminder(
     tags,
   });
 
-  return relayClient.publishEvent(
+  return publishEvent(
     event,
     "Timed out creating reminder.",
     "Failed to create reminder.",
@@ -206,7 +207,7 @@ export async function completeReminder(
     tags,
   });
 
-  return relayClient.publishEvent(
+  return publishEvent(
     event,
     "Timed out completing reminder.",
     "Failed to complete reminder.",
@@ -236,7 +237,7 @@ export async function snoozeReminder(
     tags,
   });
 
-  return relayClient.publishEvent(
+  return publishEvent(
     event,
     "Timed out snoozing reminder.",
     "Failed to snooze reminder.",
@@ -266,7 +267,7 @@ export async function cancelReminder(
     tags,
   });
 
-  return relayClient.publishEvent(
+  return publishEvent(
     event,
     "Timed out cancelling reminder.",
     "Failed to cancel reminder.",

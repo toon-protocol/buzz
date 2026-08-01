@@ -12,7 +12,7 @@
  * document — no cross-relay media fetch behind another relay's auth wall.
  */
 
-import { relayClient } from "@/shared/api/relayClient";
+import { publishEvent } from "@/shared/api/eventTransport";
 import { invokeTauri, signRelayEvent } from "@/shared/api/tauri";
 
 /** Buzz: admin command to set the community profile (icon). */
@@ -43,7 +43,7 @@ export async function setCommunityIcon(icon: string): Promise<void> {
     content: "",
     tags: [["icon", icon]],
   });
-  await relayClient.publishEvent(
+  await publishEvent(
     event,
     "Timed out while updating the community icon.",
     "Failed to update the community icon.",

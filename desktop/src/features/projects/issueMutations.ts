@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { relayClient } from "@/shared/api/relayClient";
+import { publishEvent } from "@/shared/api/eventTransport";
 import { signRelayEvent } from "@/shared/api/tauri";
 import { KIND_GIT_ISSUE } from "@/shared/constants/kinds";
 import type { Project } from "./hooks";
@@ -24,7 +24,7 @@ export async function publishProjectIssue(
       title: input.title,
     }),
   });
-  await relayClient.publishEvent(
+  await publishEvent(
     event,
     "Timed out creating issue.",
     "Failed to create issue.",

@@ -1,3 +1,4 @@
+import { publishEvent } from "@/shared/api/eventTransport";
 import { relayClient } from "@/shared/api/relayClient";
 import {
   nip44DecryptFromSelf,
@@ -169,7 +170,7 @@ export class ChannelSortSyncManager {
       // synchronous-ish but cheap; the relay socket may have moved to a
       // different community by the time we reach this point.
       if (this.destroyed) return;
-      await relayClient.publishEvent(
+      await publishEvent(
         event,
         "Timed out publishing channel sort preferences.",
         "Failed to publish channel sort preferences.",

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 
+import { publishEvent } from "@/shared/api/eventTransport";
 import { relayClient } from "@/shared/api/relayClient";
 import { getRelaySelf } from "@/features/moderation/lib/relaySelf";
 import { getCachedRelayOrigin } from "@/shared/lib/mediaUrl";
@@ -513,7 +514,7 @@ async function createProjectPullRequestComment({
     tags,
   });
 
-  await relayClient.publishEvent(
+  await publishEvent(
     event,
     "Timed out posting pull request comment.",
     "Failed to post pull request comment.",
@@ -557,7 +558,7 @@ async function createProjectIssueComment({
     tags,
   });
 
-  await relayClient.publishEvent(
+  await publishEvent(
     event,
     "Timed out posting issue comment.",
     "Failed to post issue comment.",
@@ -676,7 +677,7 @@ async function deleteProject(project: Project): Promise<void> {
     tags: [["a", project.repoAddress]],
   });
 
-  await relayClient.publishEvent(
+  await publishEvent(
     event,
     "Timed out deleting project.",
     "Failed to delete project.",

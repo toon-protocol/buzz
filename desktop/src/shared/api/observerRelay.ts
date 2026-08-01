@@ -1,6 +1,7 @@
 import { buildObserverControlEvent } from "@/shared/api/tauriObserver";
 import type { RelayEvent } from "@/shared/api/types";
 import { KIND_AGENT_OBSERVER_FRAME } from "@/shared/constants/kinds";
+import { publishEvent } from "@/shared/api/eventTransport";
 import { relayClient } from "./relayClient";
 
 // How far back (in seconds) the live subscription looks on connect/reconnect.
@@ -38,7 +39,7 @@ export async function sendAgentObserverControl(
 ) {
   await relayClient.preconnect();
   const event = await buildObserverControlEvent({ agentPubkey, payload });
-  await relayClient.publishEvent(
+  await publishEvent(
     event,
     "Timed out while sending the agent control command.",
     "Failed to send the agent control command.",

@@ -1,3 +1,4 @@
+import { publishEvent } from "@/shared/api/eventTransport";
 import { nip44EncryptToSelf, signRelayEvent } from "@/shared/api/tauri";
 import type { RelayClient } from "@/shared/api/relayClientSession";
 import type { RelayEvent } from "@/shared/api/types";
@@ -696,7 +697,7 @@ export class ReadStateManager {
         tags,
       });
 
-      await this.relayClient.publishEvent(
+      await publishEvent(
         event,
         "Timed out publishing read state.",
         "Failed to publish read state.",
@@ -769,7 +770,7 @@ export class ReadStateManager {
           content: "",
           tags: [["a", aTagValue]],
         });
-        await this.relayClient.publishEvent(
+        await publishEvent(
           event,
           "Timed out deleting extra read-state slot.",
           "Failed to delete extra read-state slot.",

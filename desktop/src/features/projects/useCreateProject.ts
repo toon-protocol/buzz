@@ -6,7 +6,7 @@ import {
   type Project,
   projectsQueryKey,
 } from "@/features/projects/hooks";
-import { relayClient } from "@/shared/api/relayClient";
+import { publishEvent } from "@/shared/api/eventTransport";
 import { getCachedRelayOrigin } from "@/shared/lib/mediaUrl";
 import { signRelayEvent } from "@/shared/api/tauri";
 import { getIdentity } from "@/shared/api/tauriIdentity";
@@ -72,7 +72,7 @@ async function createProject(input: CreateProjectInput): Promise<Project> {
     tags,
   });
 
-  await relayClient.publishEvent(
+  await publishEvent(
     event,
     "Timed out creating project.",
     "Failed to create project.",

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { publishUserStatus } from "@/shared/api/eventWrites";
 import { relayClient } from "@/shared/api/relayClient";
 import type {
   RelayEvent,
@@ -155,7 +156,7 @@ export function useSetUserStatusMutation(pubkey?: string) {
 
   return useMutation({
     mutationFn: async ({ text, emoji }: { text: string; emoji: string }) => {
-      await relayClient.publishUserStatus(text, emoji);
+      await publishUserStatus(text, emoji);
       return { text, emoji };
     },
     onSuccess: ({ text, emoji }) => {

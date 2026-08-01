@@ -31,6 +31,7 @@ import {
   clearTimeoutState,
   recordTimeoutFromRejection,
 } from "@/features/moderation/lib/timeoutStore";
+import { sendStreamMessage } from "@/shared/api/eventWrites";
 import { relayClient, setVisibleChannel } from "@/shared/api/relayClient";
 import { customEmojiQueryKey } from "@/features/custom-emoji/hooks";
 import { channelsQueryKey } from "@/features/channels/hooks";
@@ -525,7 +526,7 @@ export function useSendMessageMutation(
         };
       }
 
-      return relayClient.sendMessage(
+      return sendStreamMessage(
         effectiveChannel.id,
         content,
         recipientPubkeys,

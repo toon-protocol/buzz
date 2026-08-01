@@ -4,7 +4,7 @@ import {
   mergeProjectPullRequest,
   publishProjectPullRequestMergedStatus,
 } from "@/shared/api/projectGit";
-import { relayClient } from "@/shared/api/relayClient";
+import { publishEvent } from "@/shared/api/eventTransport";
 import { signRelayEvent } from "@/shared/api/tauri";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import {
@@ -127,7 +127,7 @@ async function publishProjectPullRequest(
     content: input.body.trim(),
     tags: projectPullRequestTags(project, { ...input, title }),
   });
-  await relayClient.publishEvent(
+  await publishEvent(
     event,
     "Timed out creating pull request.",
     "Failed to create pull request.",
@@ -164,7 +164,7 @@ export async function publishProjectPullRequestUpdate({
     ),
     tags: projectPullRequestUpdateTags(project, pullRequest, commit, mergeBase),
   });
-  await relayClient.publishEvent(
+  await publishEvent(
     event,
     "Timed out updating pull request.",
     "The branch was pushed, but the pull request update could not be published.",
