@@ -11,8 +11,7 @@ use crate::relay::{
 };
 
 use super::media_transcode::{
-    has_heic_extension, is_heic_file, is_video_file, transcode_and_extract_poster,
-    transcode_heic_path_to_jpeg_bytes,
+    is_heic_file, is_video_file, transcode_and_extract_poster, transcode_heic_path_to_jpeg_bytes,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
