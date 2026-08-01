@@ -4,20 +4,28 @@
 //! transmitted to a relay. This module enforces that contract at runtime,
 //! fail-closed, at every relay-bound egress boundary:
 //!
-//! | # | Boundary | Site |
-//! |---|----------|------|
-//! | 1 | `submit_signed_event_at_with_keys` (funnel for `submit_event*`) | `relay/submit.rs` |
-//! | 2 | `sync_managed_agent_profile` | `relay.rs` |
-//! | 3 | pre-signed path into the boundary-1 funnel | `relay/submit.rs` |
-//! | 4 | `submit_signed_event_with_keys` | `relay.rs` |
-//! | 5 | huddle STT publisher | `huddle/pipeline.rs` |
-//! | 6 | `submit_engram_event` (team snapshot) | `commands/team_snapshot.rs` |
-//! | 7 | `submit_engram_event` (persona import) | `commands/personas/snapshot/import.rs` |
-//! | 8 | native websocket send loop (all webview relay WS) | `native_websocket.rs` |
+//! | # | Boundary | Site | Guard call site |
+//! |---|----------|------|------------------|
+//! | 1 | `submit_signed_event_at_with_keys` (funnel for `submit_event*`) | `relay/submit.rs` | `event_transport::dispatch` |
+//! | 2 | `sync_managed_agent_profile` | `relay.rs` | `event_transport::dispatch` |
+//! | 3 | pre-signed path into the boundary-1 funnel | `relay/submit.rs` | `event_transport::dispatch` |
+//! | 4 | `submit_signed_event_with_keys` | `relay.rs` | `event_transport::dispatch` |
+//! | 5 | huddle STT publisher | `huddle/pipeline.rs` | locally (`sign_and_guard_stt_body`), then again in `event_transport::dispatch` |
+//! | 6 | `submit_engram_event` (team snapshot) | `commands/team_snapshot.rs` (re-exported from `event_transport`) | `event_transport::dispatch` |
+//! | 7 | `submit_engram_event` (persona import) | `commands/personas/snapshot/import.rs` (re-exported from `event_transport`) | `event_transport::dispatch` |
+//! | 8 | native websocket send loop (all webview relay WS) | `native_websocket.rs` | locally |
+//!
+//! buzz#27 consolidated boundaries 1-4, 6, and 7's actual submission behind
+//! `event_transport::dispatch` — the Rust-side write seam that also picks
+//! between the relay and TOON-bridge transports — so their guard call now
+//! lives in one place rather than one copy per site. Each boundary's own
+//! function is still the thing under test below: the guard fires exactly
+//! the same way whether it runs locally or inside `dispatch`.
 //!
 //! The inventory-completeness test in `egress_guard_tests.rs` asserts that
-//! every `/events` URL-construction site in the tree calls this guard, so a
-//! new submission path fails the build until it is wired.
+//! every `/events` URL-construction site in the tree calls this guard
+//! (directly or via `event_transport::dispatch`), so a new submission path
+//! fails the build until it is wired.
 //!
 //! Scope: `ncryptsec1` only. The raw `nsec` intentionally transits the
 //! NIP-44-encrypted pairing session (NIP-AB payload_type "nsec"); guarding it

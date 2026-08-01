@@ -15,6 +15,7 @@ import { Toaster } from "@/shared/ui/sonner";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 import { recoverLocalStorageQuotaOnStartup } from "@/shared/lib/localStorageQuota";
 import { installSelectedTransport } from "@/shared/api/transportSelection";
+import { installRustWriteBridge } from "@/shared/api/rustWriteBridge";
 
 type E2eWindow = Window & {
   __BUZZ_E2E__?: unknown;
@@ -117,6 +118,9 @@ async function bootstrap() {
   // Before render, so no write or subscription can be issued against a
   // transport that is about to be replaced.
   await installSelectedTransport();
+  // After the transport is chosen, so a Rust-side write bridged over
+  // (buzz#27) publishes through whichever one this run selected.
+  await installRustWriteBridge();
   await migrateLegacyCommunityStorageBeforeRender();
   renderApp();
 }

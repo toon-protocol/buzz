@@ -1027,6 +1027,7 @@ version = "0.5.2"
 dependencies = [
  "anyhow",
  "arboard",
+ "async-trait",
  "atomic-write-file",
  "audioadapter-buffers",
  "axum",

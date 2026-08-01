@@ -74,8 +74,18 @@ fn error_names_the_boundary_context() {
 // (no listener exists at the target address; a distinctive guard error — not
 // a connection error — proves the abort happened first).
 //
-// Boundaries 6 and 7 (`submit_engram_event` twins) are module-private inside
-// `commands`; their injection tests live next to them:
+// Boundaries 1-4, 6, and 7 no longer call the guard directly: they build a
+// `SignedEventSubmission` and hand it to `event_transport::dispatch`, which
+// guards its input once as every caller's single, universal check (buzz#27).
+// The boundary tests below still drive each PUBLIC function by name — the
+// guard error surfaces identically whether it fires locally or inside
+// `dispatch` — so they keep proving each call site cannot leak key-backup
+// material, without caring where the guard call physically lives.
+//
+// Boundaries 6 and 7 (`submit_engram_event`) are one shared implementation in
+// `event_transport`, re-exported under that name from both
+// `commands::team_snapshot` and `commands::personas::snapshot::import`; their
+// injection tests still live next to each re-export:
 //   - commands/team_snapshot/tests.rs::egress_guard_boundary
 //   - commands/personas/snapshot/import.rs::egress_guard_tests
 
@@ -238,14 +248,27 @@ fn src_rust_files() -> Vec<std::path::PathBuf> {
 ///
 /// Updating a row here is the deliberate act that must accompany wiring the
 /// guard + adding an injection test for the new site.
+///
+/// buzz#27 moved the actual guard CALL for boundaries 1-4, 6, and 7 into
+/// `event_transport::dispatch` — one call site, used by every one of them —
+/// so those files keep their URL-construction site (unchanged: each still
+/// resolves its own target relay before handing the submission to the seam)
+/// but drop to zero local guard calls. Boundary 5 (huddle STT) is the
+/// exception: it keeps guarding locally in `sign_and_guard_stt_body` in
+/// addition to `dispatch`'s own guard, so its row is unchanged.
 const EVENTS_INVENTORY: &[(&str, usize, usize)] = &[
     // Production egress boundaries (see egress_guard.rs table):
-    ("src/relay.rs", 2, 2),                             // boundaries 2, 4
-    ("src/relay/submit.rs", 1, 1),                      // boundaries 1 + 3 (shared funnel)
-    ("src/huddle/pipeline.rs", 1, 1),                   // boundary 5
-    ("src/commands/team_snapshot.rs", 1, 1),            // boundary 6
-    ("src/commands/personas/snapshot/import.rs", 2, 1), // boundary 7 + its in-file injection-test fixture URL
+    ("src/relay.rs", 2, 0),        // boundaries 2, 4 (guard moved to the seam)
+    ("src/relay/submit.rs", 1, 0), // boundaries 1 + 3 (guard moved to the seam)
+    ("src/huddle/pipeline.rs", 1, 1), // boundary 5 (still guards locally too)
+    ("src/commands/team_snapshot.rs", 1, 0), // boundary 6 (guard moved to the seam)
+    ("src/commands/personas/snapshot/import.rs", 2, 0), // boundary 7 (guard moved to the seam) + its in-file injection-test fixture URL
     ("src/native_websocket.rs", 0, 2),                  // boundary 8 (WS frames; no events URL)
+    // The seam itself: `event_transport::dispatch` is the one guard call
+    // shared by boundaries 1-4, 6, and 7. No `/events` literal here — the
+    // full submission URL is always built by the caller before it reaches
+    // this module.
+    ("src/event_transport/mod.rs", 0, 1),
     // Test-only fixtures — no production egress, no guard:
     ("src/relay_admission.rs", 1, 0),
     ("src/archive/mod_tests.rs", 1, 0),
@@ -365,18 +388,26 @@ fn inventory_scan_catches_new_site_in_allowlisted_file() {
 
 /// The pairing also fires in reverse: a guard call deleted while its egress
 /// site remains is caught.
+///
+/// Targets `huddle/pipeline.rs` rather than `relay.rs`: since buzz#27,
+/// `relay.rs`'s two `/events` sites no longer carry a local guard call to
+/// remove (it moved to `event_transport::dispatch`), but `sign_and_guard_stt_body`
+/// still guards locally, so it is the file that keeps this mutation
+/// meaningful.
 #[test]
 fn inventory_scan_catches_removed_guard_call() {
     let mut files = read_src_files();
-    let relay = files
+    let target = files
         .iter_mut()
-        .find(|(rel, _)| rel.ends_with("src/relay.rs"))
-        .expect("relay.rs must be in the scan set");
-    relay.1 = relay.1.replacen(&guard_needle(), "removed_guard", 1);
+        .find(|(rel, _)| rel.ends_with("src/huddle/pipeline.rs"))
+        .expect("huddle/pipeline.rs must be in the scan set");
+    target.1 = target.1.replacen(&guard_needle(), "removed_guard", 1);
     let violations = events_inventory_violations(&files);
     assert!(
-        violations.iter().any(|v| v.contains("src/relay.rs")),
-        "a removed guard call in relay.rs must trip the scan: {violations:?}"
+        violations
+            .iter()
+            .any(|v| v.contains("src/huddle/pipeline.rs")),
+        "a removed guard call in huddle/pipeline.rs must trip the scan: {violations:?}"
     );
 }
 
