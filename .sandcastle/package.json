@@ -1,0 +1,4 @@
+{
+  "type": "module",
+  "//": "Scopes ESM semantics to the .sandcastle runner scripts only. The buzz root package.json has no `type` field, so without this tsx transpiles .sandcastle/*.ts to CJS — which breaks on top-level `await` and then on `require()`-ing the ESM-only @ai-hero/sandcastle engine (same root cause as toon-protocol/connector#392/#393)."
+}

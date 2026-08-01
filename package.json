@@ -3,10 +3,17 @@
   "private": true,
   "packageManager": "pnpm@11.4.0",
   "scripts": {
-    "check": "pnpm -r check"
+    "check": "pnpm -r check",
+    "sandcastle": "npx tsx .sandcastle/main.ts",
+    "sandcastle:plan": "npx tsx .sandcastle/plan-dry-run.ts",
+    "sandcastle:implement": "npx tsx .sandcastle/agent-implement-issue.ts",
+    "sandcastle:review": "npx tsx .sandcastle/agent-review-pr.ts"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.6"
+    "@ai-hero/sandcastle": "0.12.0",
+    "@biomejs/biome": "^2.4.6",
+    "tsx": "^4.19.2",
+    "zod": "^3.25.0"
   },
   "dependencies": {
     "@tailwindcss/typography": "^0.5.19"
