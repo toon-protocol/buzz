@@ -16,9 +16,14 @@ use crate::relay::configured_env_var;
 /// Environment keys the frontend may read.
 ///
 /// A closed list, not a view of the process environment: `BUZZ_TOON_MNEMONIC`
-/// is a spending key, so what crosses into JS stays a deliberate edit here.
+/// is a spending key and `BUZZ_CHANNEL_KEYS` carries channel keys, so what
+/// crosses into JS stays a deliberate edit here.
 const TRANSPORT_ENV_KEYS: &[&str] = &[
     "BUZZ_TRANSPORT",
+    // Not TOON-specific: channel-key encryption sits above the transport seam
+    // and applies on the relay transport too. It rides this bridge because
+    // this is the only path the renderer has to the process environment.
+    "BUZZ_CHANNEL_KEYS",
     "BUZZ_TOON_PROXY_URL",
     "BUZZ_TOON_RELAY_URL",
     "BUZZ_TOON_DESTINATION",

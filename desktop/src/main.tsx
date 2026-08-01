@@ -16,6 +16,7 @@ import { TooltipProvider } from "@/shared/ui/tooltip";
 import { recoverLocalStorageQuotaOnStartup } from "@/shared/lib/localStorageQuota";
 import { installSelectedTransport } from "@/shared/api/transportSelection";
 import { installRustWriteBridge } from "@/shared/api/rustWriteBridge";
+import { loadChannelKeysFromEnvironment } from "@/shared/api/channelKeyBootstrap";
 
 type E2eWindow = Window & {
   __BUZZ_E2E__?: unknown;
@@ -121,6 +122,9 @@ async function bootstrap() {
   // After the transport is chosen, so a Rust-side write bridged over
   // (buzz#27) publishes through whichever one this run selected.
   await installRustWriteBridge();
+  // Also before render: an event that arrives before its key is loaded renders
+  // as locked and never re-decrypts.
+  await loadChannelKeysFromEnvironment();
   await migrateLegacyCommunityStorageBeforeRender();
   renderApp();
 }

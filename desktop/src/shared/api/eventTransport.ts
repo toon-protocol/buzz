@@ -1,3 +1,4 @@
+import { openChannelEvent } from "@/shared/api/channelMessageCrypto";
 import type { RelaySubscriptionFilter } from "@/shared/api/relayClientShared";
 import { relayEventTransport } from "@/shared/api/relayEventTransport";
 import type { RelayEvent } from "@/shared/api/types";
@@ -136,10 +137,22 @@ export function publishEphemeralEvent(event: RelayEvent): Promise<void> {
   return activeTransport.publishEphemeral(event);
 }
 
-/** See {@link EventTransport.subscribeLive}. */
+/**
+ * See {@link EventTransport.subscribeLive}.
+ *
+ * Channel-key decryption happens here, not in a transport. Every transport
+ * delivers the same sealed bytes and the key is a property of the channel, so
+ * opening once at the facade means a new transport inherits encrypted channels
+ * without implementing anything — and cannot accidentally ship a build where
+ * privacy depends on `BUZZ_TRANSPORT`. Events that are not encrypted pass
+ * through by reference. History takes the same treatment where it enters, in
+ * `channelWindow.getChannelWindowEvents`.
+ */
 export function subscribeLiveEvents(
   filter: RelaySubscriptionFilter,
   onEvent: (event: RelayEvent) => void,
 ): Promise<() => Promise<void>> {
-  return activeTransport.subscribeLive(filter, onEvent);
+  return activeTransport.subscribeLive(filter, (event) =>
+    onEvent(openChannelEvent(event)),
+  );
 }
