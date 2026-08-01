@@ -21,7 +21,7 @@ import type { RelayEvent } from "@/shared/api/types";
  * event, and content sealed after signing is content the signature no longer
  * covers — so sealing has to happen before `signRelayEvent`, in the write verb
  * (`eventWrites.sendStreamMessage`). Opening is placed to match: the seam's
- * `subscribeLiveEvents` for the tail and `channelWindow.getChannelWindowEvents`
+ * `subscribeLiveEvents` for the tail and `channelWindow.getChannelWindowPage`
  * for history, both of which are the transport-agnostic facade rather than any
  * one transport.
  *

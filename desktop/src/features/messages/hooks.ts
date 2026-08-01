@@ -44,7 +44,7 @@ import {
   removeReaction,
   sendChannelMessage,
 } from "@/shared/api/tauri";
-import { getChannelWindowEvents } from "@/shared/api/channelWindow";
+import { getChannelWindowPage } from "@/shared/api/channelWindow";
 import type { Channel, Identity, RelayEvent } from "@/shared/api/types";
 // Same .mjs the renderer uses, so the cache-update projection can't drift
 // from the on-render overlay.
@@ -57,10 +57,7 @@ import {
   replaceNewestChannelWindow,
   type ChannelWindowStore,
 } from "@/features/messages/lib/channelWindowStore";
-import {
-  parseChannelWindowResponse,
-  parseLiveThreadSummary,
-} from "@/features/messages/lib/channelWindowResponse";
+import { parseLiveThreadSummary } from "@/features/messages/lib/channelWindowResponse";
 import {
   CHANNEL_AUX_EVENT_KINDS,
   CHANNEL_TIMELINE_CONTENT_KINDS,
@@ -239,8 +236,7 @@ export function useChannelMessagesQuery(channel: Channel | null) {
       if (!channel) throw new Error("No channel selected.");
       const previousMessages =
         queryClient.getQueryData<RelayEvent[]>(queryKey) ?? [];
-      const events = await getChannelWindowEvents(channel.id);
-      const page = parseChannelWindowResponse(events, channel.id, null);
+      const page = await getChannelWindowPage(channel.id, null);
       const current =
         queryClient.getQueryData<ChannelWindowStore>(windowKey) ??
         emptyChannelWindowStore();

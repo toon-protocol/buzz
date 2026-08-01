@@ -5,15 +5,21 @@ import {
   type ChannelWindowStore,
 } from "@/features/messages/lib/channelWindowStore";
 import { projectChannelWindowMessages } from "@/features/messages/lib/projectChannelWindow";
-import { parseChannelWindowResponse } from "@/features/messages/lib/channelWindowResponse";
 import { channelWindowKey } from "@/features/messages/lib/messageQueryKeys";
-import { getChannelWindowEvents } from "@/shared/api/channelWindow";
+import { getChannelWindowPage } from "@/shared/api/channelWindow";
 
 const CHANNEL_WINDOW_PAGE_SIZE = 50;
 export type PageOlderResult = { hasOlderMessages: boolean };
 const inFlightPasses = new Map<string, Promise<PageOlderResult>>();
 
-/** Fetch exactly one server-defined older window and append it atomically. */
+/**
+ * Fetch exactly one older window and append it atomically.
+ *
+ * "One window" is defined by whichever transport is active —
+ * `getChannelWindowPage` hides that behind a single `ChannelWindowPage`
+ * either way, so this function does not know or care whether the page came
+ * from buzz-relay's server-assembled bounds or a client-reassembled TOON REQ.
+ */
 export function pageOlderMessagesUntilRowFloor(
   queryClient: QueryClient,
   channelId: string,
@@ -42,13 +48,12 @@ async function runPage(
   }
 
   const requestCursor = tail.nextCursor;
-  const events = await getChannelWindowEvents(
+  const page = await getChannelWindowPage(
     channelId,
     requestCursor,
     CHANNEL_WINDOW_PAGE_SIZE,
   );
   if (!shouldContinue()) return { hasOlderMessages: true };
-  const page = parseChannelWindowResponse(events, channelId, requestCursor);
   const retained = queryClient.getQueryData<ChannelWindowStore>(
     channelWindowKey(channelId),
   );
