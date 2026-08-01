@@ -2,6 +2,7 @@
 mod app_state;
 mod archive;
 mod builderlab;
+mod channel_keys;
 mod commands;
 mod deep_link;
 mod egress_guard;
@@ -377,6 +378,18 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             tray_menu::init(&app_handle)?;
 
+            // Fallback layer for Rust-built channel messages (buzz#33): the
+            // frontend's `sync_channel_keys` push (`channelKeySync.ts`) is the
+            // primary source and arrives once the webview boots, but a Rust
+            // write attempted before that — or a context with no frontend at
+            // all — still needs something to seal against. Never overwrites a
+            // key the frontend already synced (`channel_keys::seed_from_env`
+            // only fills gaps), so this is purely a "have something before
+            // render" bridge, not a competing source of truth.
+            for warning in channel_keys::seed_from_env() {
+                eprintln!("buzz-desktop: channel-keys: {warning}");
+            }
+
             // ── Phase 2: boot-time sentinel wipe ──────────────────────────────
             // Must run before migrations and identity resolution so the wipe
             // completes atomically on crash recovery.
@@ -714,6 +727,7 @@ pub fn run() {
             get_relay_http_url,
             get_transport_env,
             report_bridged_write_result,
+            sync_channel_keys,
             get_media_proxy_port,
             fetch_link_preview_title,
             discover_acp_auth_methods,

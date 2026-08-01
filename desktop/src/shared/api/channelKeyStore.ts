@@ -186,6 +186,24 @@ export function encryptedChannelIds(): string[] {
   return [...ensureCache().keys()];
 }
 
+/**
+ * The full key map as hex: `{ channelId: hexKey }`.
+ *
+ * What `channelKeySync.ts` pushes to Rust's `sync_channel_keys` command so
+ * Rust-built events (threaded replies, media messages, custom emoji, the
+ * huddle STT pipeline — buzz#33) can seal against the same keys this store
+ * holds. Same shape `persist` writes to `localStorage`, produced fresh from
+ * the cache rather than reread from disk so it reflects whatever the caller
+ * just changed.
+ */
+export function channelKeyRecord(): Record<string, string> {
+  const record: Record<string, string> = {};
+  for (const [channelId, key] of ensureCache()) {
+    record[channelId] = formatChannelKey(key);
+  }
+  return record;
+}
+
 /** Observe key changes — the settings UI re-renders from this. */
 export function subscribeToChannelKeys(listener: () => void): () => void {
   listeners.add(listener);
