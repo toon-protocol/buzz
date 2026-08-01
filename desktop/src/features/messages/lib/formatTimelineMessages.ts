@@ -1,3 +1,5 @@
+import { survivingMediaEnvelopes } from "@/features/messages/lib/sealedMessageMedia";
+import { extractMediaEnvelopes } from "@/shared/api/mediaEnvelopeContent";
 import type {
   Channel,
   ChannelMember,
@@ -450,11 +452,22 @@ export function formatTimelineMessages(
     const authorProfile = profiles?.[authorPubkey.toLowerCase()];
     const isAgent = role === "bot" || authorProfile?.isAgent === true;
     const ownerPubkey = isAgent ? (authorProfile?.ownerPubkey ?? null) : null;
+    // Sealed attachments carry their envelope in the (already-decrypted)
+    // content rather than in a tag, so lift it out first — before tombstoning,
+    // so a withdrawn attachment's envelope goes with it and nothing is left
+    // that says what the hidden blob was (buzz#17).
+    const sealedMedia = extractMediaEnvelopes(
+      edit ? edit.content : event.content,
+    );
     const withdrawn = hideTombstonedMedia({
-      content: edit ? edit.content : event.content,
+      content: sealedMedia.body,
       tags: applyEditTagOverlay(event.tags, edit?.tags),
       hiddenHashes: hiddenMediaByEventId.get(event.id.toLowerCase()),
     });
+    const mediaEnvelopes = survivingMediaEnvelopes(
+      sealedMedia.envelopes,
+      withdrawn.tags,
+    );
     const body =
       withdrawn.hiddenCount > 0
         ? [withdrawn.content, hiddenMediaNotice(withdrawn.hiddenCount)]
@@ -490,6 +503,7 @@ export function formatTimelineMessages(
           : undefined,
       time: formatTime(event.created_at),
       body,
+      ...(mediaEnvelopes.size > 0 ? { mediaEnvelopes } : {}),
       parentId: thread.parentId,
       rootId: thread.rootId,
       depth: getDepth(event),

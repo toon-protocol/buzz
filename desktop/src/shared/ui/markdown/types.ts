@@ -15,7 +15,8 @@ export type ImetaEntry = {
   x?: string;
 };
 
-export type ImetaLookup = Map<string, ImetaEntry>;
+/** Read-only: the renderer looks attachments up, it never adds to the map. */
+export type ImetaLookup = ReadonlyMap<string, ImetaEntry>;
 
 export type MessageLinkPillProps = {
   channels: Channel[];

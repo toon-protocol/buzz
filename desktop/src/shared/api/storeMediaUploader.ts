@@ -1,12 +1,18 @@
 import { arweaveMediaUrls } from "@/shared/lib/arweaveMedia";
 import {
+  encryptChannelMedia,
+  mediaSha256,
+} from "@/shared/api/channelMediaCrypto";
+import { getChannelKey } from "@/shared/api/channelKeyStore";
+import {
+  type MediaPickOptions,
   MediaUploadUnavailable,
   type MediaUploader,
   type MediaUploadQuote,
   type MediaUploadRequest,
+  type UploadedMedia,
 } from "@/shared/api/mediaUpload";
 import { pickMediaBytes } from "@/shared/api/tauriMedia";
-import type { BlobDescriptor } from "@/shared/api/tauri";
 import type { ToonPaidWriter } from "@/shared/api/toonPaidWriter";
 
 /**
@@ -75,15 +81,14 @@ export function detectContentType(
   return (extension && EXTENSION_MIME[extension]) ?? "application/octet-stream";
 }
 
-/** Lowercase hex SHA-256 of `data`, the identity Nostr `imeta` records as `x`. */
-async function sha256Hex(data: Uint8Array): Promise<string> {
-  // Copy into a fresh buffer rather than slicing `data.buffer`: the source may
-  // be a view onto a SharedArrayBuffer, which WebCrypto does not accept.
-  const digest = await crypto.subtle.digest("SHA-256", Uint8Array.from(data));
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
+/**
+ * Content type declared for a sealed blob.
+ *
+ * Opaque on purpose: the whole point of encrypting is that the store node, the
+ * gateway, and every reader of the `imeta` tag learn nothing about the file.
+ * The real type is in the envelope, inside the sealed message content.
+ */
+const SEALED_CONTENT_TYPE = "application/octet-stream";
 
 /**
  * Pixel dimensions as the `WIDTHxHEIGHT` string `imeta dim` wants, or
@@ -150,10 +155,37 @@ export class StoreMediaUploader implements MediaUploader {
     };
   }
 
+  /**
+   * Pay for one blob and describe where it landed.
+   *
+   * ## The invariant
+   *
+   * When `channelId` names a channel this client holds a key for, the bytes
+   * handed to `uploadBlob` are ciphertext. Not "usually", not "if the caller
+   * remembered": this method is the only route from composer bytes to a paid
+   * store write, and the branch is here rather than at a call site, so there is
+   * no arrangement of the UI that puts a private channel's plaintext on the
+   * permaweb. Arweave has no delete (ADR 0002) — a leak here is not a bug that
+   * can be fixed afterwards, so it has to be one that cannot be written.
+   *
+   * ## What the descriptor then describes
+   *
+   * The ciphertext, in every field: `sha256` over the sealed bytes, `size` of
+   * the sealed bytes, `type` opaque. Those are the values that reach the public
+   * `imeta` tag, and they are the ones a `["x", …]` tombstone has to name for
+   * the hide path to keep working unchanged. The plaintext's mime, size,
+   * dimensions and filename go into `encryption`, which the send path folds
+   * into the *sealed* message content.
+   *
+   * Dimensions are measured before sealing, from the real image, because after
+   * sealing there is no image to measure — and a reader who cannot decrypt has
+   * no business knowing them anyway.
+   */
   async upload({
     data,
     filename,
-  }: MediaUploadRequest): Promise<BlobDescriptor> {
+    channelId,
+  }: MediaUploadRequest): Promise<UploadedMedia> {
     if (data.length === 0) throw new Error("empty upload");
 
     // Quote before hashing, not just before paying: an unpriced route must
@@ -161,14 +193,37 @@ export class StoreMediaUploader implements MediaUploader {
     // bytes that are not going anywhere.
     await this.quote();
 
-    const bytes = Uint8Array.from(data);
+    const plaintext = Uint8Array.from(data);
     const contentType = detectContentType(data, filename);
-    const [sha256, dim] = await Promise.all([
-      sha256Hex(bytes),
-      measureImage(bytes, contentType),
-    ]);
+    const dim = await measureImage(plaintext, contentType);
+    const channelKey = channelId ? getChannelKey(channelId) : null;
+    const uploaded = Math.floor(Date.now() / 1000);
 
-    const { txId } = await this.writer.uploadBlob(bytes, contentType);
+    if (channelKey !== null) {
+      const { ciphertext, envelope } = await encryptChannelMedia(
+        plaintext,
+        channelKey,
+        {
+          mime: contentType,
+          ...(dim ? { dim } : {}),
+          ...(filename ? { filename } : {}),
+        },
+      );
+      const { txId } = await this.writer.uploadBlob(
+        ciphertext,
+        SEALED_CONTENT_TYPE,
+      );
+      return {
+        url: arweaveMediaUrls(txId).url,
+        sha256: envelope.sha256,
+        size: ciphertext.byteLength,
+        type: SEALED_CONTENT_TYPE,
+        uploaded,
+        encryption: envelope,
+      };
+    }
+
+    const { txId } = await this.writer.uploadBlob(plaintext, contentType);
     // Every gateway serves the same bytes, so the descriptor carries the
     // locally-preferred one. Readers re-derive the rest from the tx id in the
     // URL (`arweaveMediaCandidates`), which is why no `fallback` list has to
@@ -177,10 +232,10 @@ export class StoreMediaUploader implements MediaUploader {
 
     return {
       url,
-      sha256,
-      size: bytes.byteLength,
+      sha256: mediaSha256(plaintext),
+      size: plaintext.byteLength,
       type: contentType,
-      uploaded: Math.floor(Date.now() / 1000),
+      uploaded,
       ...(dim ? { dim } : {}),
       ...(filename ? { filename } : {}),
     };
@@ -199,12 +254,16 @@ export class StoreMediaUploader implements MediaUploader {
    * serialising them keeps the nonce sequence and the user's mental model of
    * "N uploads, N fees" in step.
    */
-  async pickAndUpload(): Promise<BlobDescriptor[]> {
+  async pickAndUpload(options?: MediaPickOptions): Promise<UploadedMedia[]> {
     const picked = await pickMediaBytes();
-    const descriptors: BlobDescriptor[] = [];
+    const descriptors: UploadedMedia[] = [];
     for (const file of picked) {
       descriptors.push(
-        await this.upload({ data: file.data, filename: file.filename }),
+        await this.upload({
+          data: file.data,
+          filename: file.filename,
+          ...(options?.channelId ? { channelId: options.channelId } : {}),
+        }),
       );
     }
     return descriptors;

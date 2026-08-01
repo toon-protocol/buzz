@@ -128,6 +128,13 @@ export type PermanenceDisclosureCopy = {
  * Kept as data rather than JSX so the wording is unit-testable — specifically
  * so a test can assert that nothing here promises a deletion the store node
  * cannot perform.
+ *
+ * One disclosure for public and encrypted channels alike (buzz#17). The gate is
+ * a property of the *backend* — the store node has no delete either way — and a
+ * private-channel upload commits the user to exactly as much permanence as a
+ * public one: the ciphertext is on the permaweb forever, and anyone who ever
+ * obtains the channel key can read it retroactively. Softening the wording for
+ * an encrypted channel would be describing a takedown that does not exist.
  */
 export function permanenceDisclosureCopy(
   quote: MediaUploadQuote,
@@ -135,8 +142,9 @@ export function permanenceDisclosureCopy(
   return {
     title: "Attachments here are public and permanent",
     body: [
-      "Files you attach in a public channel are written to Arweave through the TOON store node. Anyone who has the link can read them.",
+      "Files you attach are written to Arweave through the TOON store node. Anyone who has the link can read them.",
       "They cannot be removed — not by you, not by this community's operator, not by anyone. There is no takedown.",
+      "In an encrypted channel the file is encrypted with the channel key before it is uploaded, so only members can read it. The encrypted file is still public and still permanent, and anyone who ever obtains the channel key can read it — including files you posted long before.",
       "Hiding an attachment later removes it from view in Buzz for everyone reading through this app. The file itself stays on the permaweb and stays reachable to anyone who kept the link.",
     ],
     feeLine:

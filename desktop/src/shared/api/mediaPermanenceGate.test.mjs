@@ -202,3 +202,13 @@ test("unavailability is not mistaken for a decline", () => {
     false,
   );
 });
+
+test("the disclosure tells an encrypted channel the ciphertext is still forever", () => {
+  // buzz#17: encryption changes who can read the file, not whether it can ever
+  // be withdrawn. One disclosure, and it must not imply otherwise.
+  const copy = permanenceDisclosureCopy(STORE_QUOTE);
+  const encryptedLine = copy.body.find((line) => /encrypted/i.test(line));
+  assert.notEqual(encryptedLine, undefined);
+  assert.match(encryptedLine, /still public and still permanent/i);
+  assert.match(encryptedLine, /channel key/i);
+});

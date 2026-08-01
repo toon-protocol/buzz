@@ -867,6 +867,7 @@ export function ChannelScreen({
                           id: editTargetMessage.id,
                           imetaMedia: imetaMediaFromTags(
                             editTargetMessage.tags,
+                            editTargetMessage.mediaEnvelopes,
                           ),
                         }
                       : null

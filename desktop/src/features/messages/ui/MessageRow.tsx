@@ -33,7 +33,7 @@ import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
 import { useChannelNavigation } from "@/shared/context/ChannelNavigationContext";
-import { parseImetaTags } from "@/shared/ui/markdown/parseImeta";
+import { useSealedMessageMedia } from "@/features/messages/lib/useSealedMessageMedia";
 import { useMessageEmoji } from "@/features/messages/lib/useMessageEmoji";
 import { parseWaveMessageContent } from "@/features/messages/lib/waveMessage";
 import { resolveSnapshotSharedBy } from "@/features/messages/lib/snapshotSharedBy";
@@ -222,10 +222,9 @@ export const MessageRow = React.memo(
       return Object.keys(values).length > 0 ? values : undefined;
     }, [isKnownAgentPubkey, mentionPubkeysByName]);
 
-    const imetaByUrl = React.useMemo(
-      () => (message.tags ? parseImetaTags(message.tags) : undefined),
-      [message.tags],
-    );
+    // Sealed attachments are opened here, before anything renders: the
+    // markdown tree only ever sees a URL it can actually load (buzz#17).
+    const { body: renderedBody, imetaByUrl } = useSealedMessageMedia(message);
     const snapshotSharedBy = React.useMemo(
       () =>
         resolveSnapshotSharedBy(
@@ -369,7 +368,7 @@ export const MessageRow = React.memo(
                 message,
                 isKnownAgentPubkey,
               )}
-              content={message.body}
+              content={renderedBody}
               customEmoji={customEmoji}
               imetaByUrl={imetaByUrl}
               agentMentionPubkeysByName={agentMentionPubkeysByName}

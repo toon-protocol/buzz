@@ -144,7 +144,7 @@ function MessageComposerImpl({
 
   // We pass a custom setter that both updates React state AND inserts
   // markdown into the Tiptap editor when media upload completes.
-  const internalMedia = useMediaUpload();
+  const internalMedia = useMediaUpload(channelId ?? undefined);
   const media = mediaController ?? internalMedia;
   const ownsDropZone = mediaController === undefined;
 

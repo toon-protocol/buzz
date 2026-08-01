@@ -71,7 +71,7 @@ export function ForumComposer({
 
   const mentions = useMentions(channelId, members, profiles);
   const channelLinks = useChannelLinks();
-  const media = useMediaUpload();
+  const media = useMediaUpload(channelId ?? undefined);
   const { handlePaperclipClick, handleToolbarMouseDown, shouldIgnoreBlur } =
     useCompactComposerInteractions({
       compact,
