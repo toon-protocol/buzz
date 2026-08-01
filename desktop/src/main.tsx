@@ -20,6 +20,7 @@ import {
   installChannelKeyInbox,
   loadChannelKeysFromEnvironment,
 } from "@/shared/api/channelKeyBootstrap";
+import { installChannelKeySync } from "@/shared/api/channelKeySync";
 
 type E2eWindow = Window & {
   __BUZZ_E2E__?: unknown;
@@ -128,6 +129,10 @@ async function bootstrap() {
   // Also before render: an event that arrives before its key is loaded renders
   // as locked and never re-decrypts.
   await loadChannelKeysFromEnvironment();
+  // After the store is seeded, so the first sync already carries any
+  // BUZZ_CHANNEL_KEYS-provided keys and Rust-built writes can seal from the
+  // very first message (buzz#33).
+  installChannelKeySync();
   await migrateLegacyCommunityStorageBeforeRender();
   renderApp();
   // After render, and deliberately not awaited: the gift-wrap inbox opens relay

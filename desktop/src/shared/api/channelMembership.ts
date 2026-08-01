@@ -95,14 +95,15 @@ export type AdminListPublication = {
  * presence of a key and nothing else", and auto-keying every private channel
  * would quietly move that switch to the visibility flag.
  *
- * That is not a stylistic preference. #12's own README records that the Rust
- * write path — threaded replies, media, custom-emoji messages — never reaches
- * the seam and so is not sealed. A channel keyed the moment it is created
- * would therefore contain a *mixture* of sealed and unsealed messages, which
- * is worse than either consistent choice and would be invisible to the user.
- * Until that path is sealed too (buzz#33), keying stays an act the user takes
- * knowingly, in channel settings — and `announceChannelKey` is what carries it
- * into the admin list when they do.
+ * That is not a stylistic preference. Keying a channel is the act that makes
+ * its whole history unreadable to anyone who does not hold the bytes — every
+ * member whose wrap has not landed, every reader on a client that predates
+ * this feature. Deciding that on the user's behalf, silently, from a checkbox
+ * they ticked to mean "not listed publicly", is a bigger claim than buzz#16
+ * asks for: the issue asks for the admin list at creation, and says nothing
+ * about minting a key. So keying stays an act the user takes knowingly, in
+ * channel settings — and `announceChannelKey` is what carries it into the
+ * admin list when they do.
  *
  * The publish is handed back rather than awaited. Everything the creator's own
  * client needs — the pinned creator, a resolvable admin list — is true the

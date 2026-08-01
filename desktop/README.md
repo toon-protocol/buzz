@@ -207,10 +207,10 @@ the state before it, rooted at a genesis event that names itself. The relay can
 drop or reorder events; the worst it can produce is a stale list.
 
 It does **not** mint a key. Encryption stays switched on by the presence of a
-key and nothing else — auto-keying every private channel would move that switch
-to the visibility flag, and because the Rust write path is still unsealed (see
-above) the channel would then hold a *mixture* of sealed and plaintext
-messages. Keying remains an act the user takes in channel settings; doing it
+key and nothing else; auto-keying every private channel would move that switch
+onto the visibility flag and decide, from a checkbox meaning "not listed
+publicly", that the channel's whole history is unreadable to anyone without the
+bytes. Keying remains an act the user takes in channel settings; doing it
 republishes the admin list with the new `keyId` so members know which epoch is
 current.
 
@@ -240,9 +240,6 @@ and from non-members, not from someone with the user's disk.
 
 What is not encrypted yet:
 
-- **The Rust write path.** Threaded replies, media, and custom-emoji messages
-  are built and POSTed from `src-tauri`, never reach the seam, and therefore go
-  out in the clear even in a keyed channel.
 - **Media.** ADR 0002 puts private-channel blobs under the same channel key
   before upload; the upload path is not on this yet.
 - **Search and the local archive**, which index whatever content reaches them —
