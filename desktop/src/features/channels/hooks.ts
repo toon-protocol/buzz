@@ -31,6 +31,10 @@ import type {
   SetChannelTopicInput,
   UpdateChannelInput,
 } from "@/shared/api/types";
+import {
+  grantChannelKeyToMembers,
+  provisionPrivateChannel,
+} from "@/shared/api/channelMembership";
 import { useCommunities } from "@/features/communities/useCommunities";
 import {
   readChannelSnapshot,
@@ -221,7 +225,24 @@ export function useCreateChannelMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (input: CreateChannelInput) => createChannel(input),
+    mutationFn: async (input: CreateChannelInput) => {
+      const created = await createChannel(input);
+      // A private channel is born with a key and a signed admin list naming
+      // its creator (ADR 0001, buzz#16). Awaited rather than fired off: the
+      // member picker opens straight after this resolves, and an add-member
+      // that beats the admin list has no authority to gift-wrap under.
+      // A failure here must not lose the channel the relay already created —
+      // the user can republish from channel settings.
+      try {
+        await provisionPrivateChannel(created);
+      } catch (error) {
+        console.warn(
+          `[channel-keys] ${created.id} created without an admin list`,
+          error,
+        );
+      }
+      return created;
+    },
     onSuccess: (createdChannel) => {
       queryClient.setQueryData<Channel[]>(channelsQueryKey, (current) =>
         upsertCachedChannel(current, createdChannel),
@@ -504,7 +525,7 @@ export function useAddChannelMembersMutation(channelId: string | null) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (
+    mutationFn: async (
       input: Omit<AddChannelMembersInput, "channelId"> & {
         channelId?: string;
       },
@@ -515,7 +536,31 @@ export function useAddChannelMembersMutation(channelId: string | null) {
         throw new Error("No channel selected.");
       }
 
-      return addChannelMembers({ ...rest, channelId: effectiveChannelId });
+      const result = await addChannelMembers({
+        ...rest,
+        channelId: effectiveChannelId,
+      });
+
+      // Adding someone to an encrypted channel is handing them the key
+      // (buzz#16) — membership IS key possession, so the roster row without
+      // the key is a member who sees ciphertext. Only the pubkeys the relay
+      // actually accepted, and never at the cost of the add itself: the roster
+      // change succeeded, and a failed wrap is recoverable by re-adding.
+      try {
+        const outcome = await grantChannelKeyToMembers(
+          effectiveChannelId,
+          result.added,
+        );
+        for (const skip of outcome.skipped) {
+          console.warn(
+            `[channel-keys] no key sent to ${skip.pubkey}: ${skip.reason}`,
+          );
+        }
+      } catch (error) {
+        console.warn("[channel-keys] could not deliver the channel key", error);
+      }
+
+      return result;
     },
     onSettled: async (_data, _err, variables) => {
       // Invalidate the effective channel (the one actually mutated) not the

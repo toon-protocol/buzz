@@ -126,7 +126,12 @@ TOON, and a third transport inherits it without implementing anything.
 | `shared/api/channelEncryption.ts` | NIP-44 v2 primitives, key parsing/format, key ids |
 | `shared/api/channelKeyStore.ts` | Which keys this client holds, across restarts |
 | `shared/api/channelMessageCrypto.ts` | Event-level seal/open and the wire layout |
-| `features/channels/ui/ChannelEncryptionSettings.tsx` | The paste-the-key field |
+| `shared/api/channelAdminList.ts` | The signed admin list: build, parse, validate the chain |
+| `shared/api/channelAdminListStore.ts` | Admin lists this client has seen, and their resolved state |
+| `shared/api/channelKeyDelivery.ts` | NIP-59 gift wrap / unwrap of a channel key |
+| `shared/api/channelMembership.ts` | The write verbs: publish the admin list, hand out the key |
+| `shared/api/channelKeyInbox.ts` | Watches for wraps and unlocks channels |
+| `features/channels/ui/ChannelEncryptionSettings.tsx` | The admin list, and the manual paste-the-key field |
 
 On the wire an encrypted message is an ordinary `kind:9` with its
 `["h", <channelId>]` tag — nothing about routing, reading, or paying grows a
@@ -146,10 +151,41 @@ at all, and `p` mention tags so a mentioned member is notified without every
 client decrypting every message. That last one is a real leak (an observer
 learns who was addressed) and is taken knowingly.
 
-**Getting the key to the other client is manual, on purpose.** Open channel
-settings, generate a key, and paste the same hex into every member's client;
-gift-wrapped delivery and admin-triggered rotation are separate work. For
-scripted or two-box setups there is an environment variable:
+#### Membership authority and key delivery
+
+Creating a **private** channel generates its key and publishes a signed,
+addressable admin list naming the creator as its first admin:
+
+```
+kind:39100   ["d", <channelId>]
+             ["creator", <creatorPubkey>]
+             ["p", <pubkey>, "admin"]   (one per admin, creator first)
+             ["key", <keyId>, <epoch>]
+```
+
+Deliberately **not** NIP-29's `kind:39001`, which carries the same shape but is
+*relay*-signed — ADR 0001 says the relay is never the membership authority.
+Addressability alone proves nothing either (anyone can publish a 39100 with any
+`d` tag), so `channelAdminList.resolveChannelAdminList` folds every candidate in
+`created_at` order and accepts a change only from a signer who was an admin in
+the state before it, rooted at a genesis event that names itself. The relay can
+drop or reorder events; the worst it can produce is a stale list.
+
+Adding a member gift-wraps the channel key to them (NIP-59: a `kind:1059` wrap
+around a `kind:13` seal around a `kind:44300` rumor). The recipient's client
+subscribes to wraps tagged with its own pubkey, unwraps, checks the **seal's**
+signer against the validated admin list, and calls `setChannelKey` — the
+channel unlocks and its history decrypts with no further action. A wrap from a
+non-admin is refused; a wrap that arrives before the channel's admin list is
+held until it does.
+
+Both are ordinary writes through the transport seam, so on TOON both are paid:
+one claim for the admin list, one per recipient for the wraps.
+
+**The manual paste field stays** as the recovery path — channels created before
+this feature have no admin list, a failed paid write sends nothing, and a
+client whose keyring was locked at launch never started its inbox. For scripted
+or two-box setups there is an environment variable:
 
 | Variable | Meaning |
 | --- | --- |
@@ -168,3 +204,14 @@ What is not encrypted yet:
   before upload; the upload path is not on this yet.
 - **Search and the local archive**, which index whatever content reaches them —
   plaintext for members, placeholders for everyone else.
+
+What key management does not do yet:
+
+- **Rotation on removal** (buzz#18). Removing a member takes their roster row
+  away and leaves them holding a working key. The admin list already carries
+  the `keyId` and `epoch` a rotation would bump, and the chain refuses an epoch
+  that moves backwards, so the wire format is ready and the act is not.
+- **Unwrapping in Rust.** The renderer reads the user's secret key over
+  `get_nsec` to do the two NIP-44 layers (`shared/api/identitySecretKey.ts` —
+  the single exception to "the key stays in Rust"). A `sign_event`-style
+  seal/unseal command pair would close it.
