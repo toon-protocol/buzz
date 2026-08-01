@@ -70,6 +70,7 @@ relay.
 | `BUZZ_TOON_CHAIN_RPC_URL` | Base Sepolia public RPC | RPC for that chain — **required**, the client opens no channel without it |
 | `BUZZ_TOON_TOKEN_NETWORK` | devnet TokenNetwork | Payment-channel contract |
 | `BUZZ_TOON_PREFERRED_TOKEN` | devnet USDC | Settlement token |
+| `BUZZ_TOON_FAUCET_URL` | `https://faucet.devnet.toonprotocol.dev` | Devnet faucet the onboarding wizard's fund step posts to |
 
 The values are read at runtime through the `get_transport_env` Tauri command
 (`src-tauri/src/transport.rs`), not from `import.meta.env`, so a shipped build
@@ -104,6 +105,40 @@ Two write surfaces are deliberately off the seam and documented in
 explicitly passed *other* community's relay) and the Rust half of the app,
 where Tauri commands build, sign, and POST their own events over NIP-98 HTTP.
 The Rust surface has no single chokepoint yet and needs its own seam.
+
+### Onboarding wizard
+
+On `BUZZ_TRANSPORT=toon` with no `BUZZ_TOON_MNEMONIC` set, a fresh install has
+no payment identity — reads work, writes cannot. `ToonOnboardingGate`
+overlays the app until the self-serve path completes: generate (or import) a
+payment identity → fund it from the devnet faucet → open a payment channel,
+collateral shown before consent → send a first paid message in a public
+channel, its fee shown before send.
+
+The wizard is off entirely on the relay transport (there is nothing to pay
+for) and re-entrant: quitting and relaunching mid-flow resumes at whichever
+step reality says is next, rather than replaying a step counter. Identity and
+funding are read straight from the wallet (a stored mnemonic, an on-chain
+balance); channel-open and first-message are recorded as flags once their own
+consented action succeeds, since checking either without one would mean
+performing the very action the flag exists to gate. See
+`toonOnboardingState.ts` for the derivation and why.
+
+| File | Role |
+| --- | --- |
+| `features/onboarding/toon/toonOnboardingState.ts` | Pure step derivation from a reality snapshot |
+| `features/onboarding/toon/toonOnboardingStore.ts` | The stored mnemonic + channel/first-message flags, across restarts |
+| `features/onboarding/toon/toonOnboardingIdentity.ts` | Mnemonic generation/validation, address derivation |
+| `features/onboarding/toon/toonOnboardingBalances.ts` | Free wallet-balance reads for the fund step |
+| `features/onboarding/toon/toonFaucetClient.ts` | The faucet POST, with 429-cooldown and timeout handling |
+| `features/onboarding/toon/toonOnboardingFormat.ts` | USDC amount formatting + the default channel-open collateral estimate |
+| `features/onboarding/toon/useToonOnboarding.ts` | The hook wiring the above to the gate UI |
+| `features/onboarding/ui/ToonOnboardingGate.tsx` | The wizard screen |
+
+A generated identity is stored the same way a pasted channel key is
+(`localStorage`, see Encrypted channels below) — env still wins so a scripted
+or two-box setup can override it, but a human with nothing but the app now
+gets one without ever touching an environment variable.
 
 ### Encrypted channels
 
