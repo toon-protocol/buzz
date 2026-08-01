@@ -1,3 +1,4 @@
+import type { RelaySubscriptionFilter } from "@/shared/api/relayClientShared";
 import { relayEventTransport } from "@/shared/api/relayEventTransport";
 import type { RelayEvent } from "@/shared/api/types";
 
@@ -15,6 +16,15 @@ import type { RelayEvent } from "@/shared/api/types";
  * functions below; the active `EventTransport` decides where the event goes.
  * Adding a second transport is `setEventTransport(...)` plus one new
  * implementation of this interface — no call site changes.
+ *
+ * The seam carries the app's LIVE READS too ({@link EventTransport.subscribeLive}).
+ * A transport that writes somewhere the app cannot read from is not a
+ * transport, it is a dead letter box: on TOON the paid write lands on a
+ * different relay than `relayClient` is attached to, so a message the user
+ * just sent would never come back. Live subscriptions therefore move with the
+ * write. History paging does NOT yet — `channelWindow.ts` still asks
+ * buzz-relay's REST window, which server-assembles thread summaries and aux
+ * overlays that a plain NIP-01 REQ cannot reproduce.
  *
  * Writes that are deliberately NOT on this seam:
  * - `ReadOnlyRelayClient` (`readOnlyRelayClient.ts`) publishes read-state to an
@@ -61,6 +71,16 @@ export interface EventTransport {
    * (typing indicators and friends).
    */
   publishEphemeral(event: RelayEvent): Promise<void>;
+
+  /**
+   * Attach a live subscription for `filter`, resolving with a dispose once the
+   * transport has caught the caller up. The tail of a channel arrives through
+   * here, so it must be served by the same network the writes go to.
+   */
+  subscribeLive(
+    filter: RelaySubscriptionFilter,
+    onEvent: (event: RelayEvent) => void,
+  ): Promise<() => Promise<void>>;
 }
 
 /**
@@ -114,4 +134,12 @@ export function publishEvent(
 /** See {@link EventTransport.publishEphemeral}. */
 export function publishEphemeralEvent(event: RelayEvent): Promise<void> {
   return activeTransport.publishEphemeral(event);
+}
+
+/** See {@link EventTransport.subscribeLive}. */
+export function subscribeLiveEvents(
+  filter: RelaySubscriptionFilter,
+  onEvent: (event: RelayEvent) => void,
+): Promise<() => Promise<void>> {
+  return activeTransport.subscribeLive(filter, onEvent);
 }

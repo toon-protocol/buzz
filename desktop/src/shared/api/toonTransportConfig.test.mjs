@@ -1,0 +1,131 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  decideTransport,
+  describeWriteBlocker,
+  parseTransportMode,
+  resolveToonTransportConfig,
+  TOON_DEVNET_DEFAULTS,
+} from "./toonTransportConfig.ts";
+
+test("an unset or blank transport falls back to the relay", () => {
+  assert.deepEqual(parseTransportMode(undefined), {
+    mode: "relay",
+    unrecognised: null,
+  });
+  assert.deepEqual(parseTransportMode("   "), {
+    mode: "relay",
+    unrecognised: null,
+  });
+});
+
+test("the transport name is case-insensitive and trimmed", () => {
+  assert.equal(parseTransportMode(" TOON ").mode, "toon");
+  assert.equal(parseTransportMode("Relay").mode, "relay");
+});
+
+test("an unknown transport name lands on the relay and says so", () => {
+  // Upstream parity: a typo must degrade to the transport `block/buzz` also
+  // runs, not to a broken app.
+  const parsed = parseTransportMode("tooon");
+
+  assert.equal(parsed.mode, "relay");
+  assert.equal(parsed.unrecognised, "tooon");
+});
+
+test("an empty environment resolves to the devnet defaults", () => {
+  const config = resolveToonTransportConfig({});
+
+  assert.equal(config.mode, "relay");
+  assert.equal(config.proxyUrl, TOON_DEVNET_DEFAULTS.proxyUrl);
+  assert.equal(config.relayUrl, TOON_DEVNET_DEFAULTS.relayUrl);
+  assert.equal(config.destination, TOON_DEVNET_DEFAULTS.destination);
+  assert.equal(config.chain, TOON_DEVNET_DEFAULTS.chain);
+  assert.equal(config.mnemonic, null);
+  assert.equal(config.accountIndex, 0);
+});
+
+test("every endpoint is overridable", () => {
+  const config = resolveToonTransportConfig({
+    BUZZ_TOON_PROXY_URL: "https://edge.example/ilp",
+    BUZZ_TOON_RELAY_URL: "wss://relay.example",
+    BUZZ_TOON_DESTINATION: "g.example.relay",
+    BUZZ_TOON_CHAIN: "evm:31337",
+    BUZZ_TOON_CHAIN_RPC_URL: "http://localhost:8545",
+    BUZZ_TOON_TOKEN_NETWORK: "0xtn",
+    BUZZ_TOON_PREFERRED_TOKEN: "0xusdc",
+  });
+
+  assert.equal(config.proxyUrl, "https://edge.example/ilp");
+  assert.equal(config.relayUrl, "wss://relay.example");
+  assert.equal(config.destination, "g.example.relay");
+  assert.equal(config.chain, "evm:31337");
+  assert.equal(config.chainRpcUrl, "http://localhost:8545");
+  assert.equal(config.tokenNetwork, "0xtn");
+  assert.equal(config.preferredToken, "0xusdc");
+});
+
+test("a blank override does not shadow the default", () => {
+  const config = resolveToonTransportConfig({ BUZZ_TOON_RELAY_URL: "  " });
+
+  assert.equal(config.relayUrl, TOON_DEVNET_DEFAULTS.relayUrl);
+});
+
+test("a non-numeric account index degrades to 0", () => {
+  assert.equal(
+    resolveToonTransportConfig({ BUZZ_TOON_ACCOUNT_INDEX: "3" }).accountIndex,
+    3,
+  );
+  assert.equal(
+    resolveToonTransportConfig({ BUZZ_TOON_ACCOUNT_INDEX: "-1" }).accountIndex,
+    0,
+  );
+  assert.equal(
+    resolveToonTransportConfig({ BUZZ_TOON_ACCOUNT_INDEX: "x" }).accountIndex,
+    0,
+  );
+});
+
+test("a missing payment key blocks writes but not reads", () => {
+  const config = resolveToonTransportConfig({});
+
+  assert.match(describeWriteBlocker(config), /BUZZ_TOON_MNEMONIC/);
+  assert.equal(
+    describeWriteBlocker({ ...config, mnemonic: "abandon ability" }),
+    null,
+  );
+});
+
+test("decideTransport keeps the relay unless TOON is asked for", () => {
+  assert.equal(decideTransport({}).mode, "relay");
+  assert.equal(decideTransport({ BUZZ_TRANSPORT: "relay" }).mode, "relay");
+  assert.equal(decideTransport({ BUZZ_TRANSPORT: "toon" }).mode, "toon");
+});
+
+test("the dev override outranks the runtime environment", () => {
+  const selection = decideTransport({ BUZZ_TRANSPORT: "relay" }, "toon");
+
+  assert.equal(selection.mode, "toon");
+  assert.equal(selection.config.mode, "toon");
+});
+
+test("decideTransport warns about an unusable TOON config", () => {
+  const selection = decideTransport({ BUZZ_TRANSPORT: "toon" });
+
+  assert.equal(selection.mode, "toon");
+  assert.equal(selection.warnings.length, 1);
+  assert.match(selection.warnings[0], /BUZZ_TOON_MNEMONIC/);
+});
+
+test("decideTransport stays quiet about a missing key on the relay", () => {
+  // The TOON payment key is irrelevant when TOON is not the transport.
+  assert.deepEqual(decideTransport({}).warnings, []);
+});
+
+test("decideTransport reports an unknown transport name", () => {
+  const selection = decideTransport({ BUZZ_TRANSPORT: "quic" });
+
+  assert.equal(selection.mode, "relay");
+  assert.match(selection.warnings[0], /quic/);
+});

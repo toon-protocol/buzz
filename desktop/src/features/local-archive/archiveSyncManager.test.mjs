@@ -102,7 +102,7 @@ function tick() {
 /** Build a manager wired to fakes. */
 function makeManager(relay, archive, extra = {}) {
   return new ArchiveSyncManager({
-    relayClient: relay,
+    subscribeLive: relay.subscribeLive,
     listSaveSubscriptions: () => archive.listSaveSubscriptions(),
     archiveEvents: (c) => archive.archiveEvents(c),
     onSubscriptionChange: (l) => archive.onSubscriptionChange(l),
@@ -775,7 +775,7 @@ test("manager_handles_out_of_order_list_resolution", async () => {
 
   const relay = makeFakeRelayClient();
   const mgr = new ArchiveSyncManager({
-    relayClient: relay,
+    subscribeLive: relay.subscribeLive,
     listSaveSubscriptions: fakeList,
     archiveEvents: (c) => archive.archiveEvents(c),
     onSubscriptionChange: (l) => archive.onSubscriptionChange(l),

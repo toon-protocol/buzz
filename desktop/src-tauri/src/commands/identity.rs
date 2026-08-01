@@ -96,6 +96,14 @@ pub fn get_relay_http_url(state: State<'_, AppState>) -> String {
     relay_api_base_url_with_override(&state)
 }
 
+/// Transport-selection environment for the frontend's event-transport seam.
+/// See `transport::transport_env` for why this is a runtime read and not a
+/// build-time constant.
+#[tauri::command]
+pub fn get_transport_env() -> std::collections::BTreeMap<String, String> {
+    crate::transport::transport_env()
+}
+
 #[tauri::command]
 pub fn get_media_proxy_port(state: State<'_, AppState>) -> u16 {
     state

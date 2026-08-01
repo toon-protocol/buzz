@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { channelsQueryKey } from "@/features/channels/hooks";
 import { getChannelIdFromTags } from "@/features/messages/lib/threading";
-import { relayClient } from "@/shared/api/relayClient";
+import { subscribeLiveEvents } from "@/shared/api/eventTransport";
 import type { RelayEvent } from "@/shared/api/types";
 import {
   KIND_MEMBER_ADDED_NOTIFICATION,
@@ -47,7 +47,7 @@ export function useMembershipNotifications(currentPubkey?: string) {
 
     const subscribe = async (): Promise<boolean> => {
       try {
-        const nextDispose = await relayClient.subscribeLive(
+        const nextDispose = await subscribeLiveEvents(
           {
             kinds: [
               KIND_MEMBER_ADDED_NOTIFICATION,

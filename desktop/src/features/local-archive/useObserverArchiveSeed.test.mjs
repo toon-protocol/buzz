@@ -95,7 +95,7 @@ test("test_archive_sync_blocked_until_reconciliation", async () => {
   };
 
   const manager = new ArchiveSyncManager({
-    relayClient: fakeRelay,
+    subscribeLive: fakeRelay.subscribeLive,
     listSaveSubscriptions: async () => [
       {
         scopeType: "owner_p",
@@ -150,7 +150,7 @@ test("test_archive_sync_blocked_on_reconciliation_rejection", async () => {
   };
 
   const manager = new ArchiveSyncManager({
-    relayClient: fakeRelay,
+    subscribeLive: fakeRelay.subscribeLive,
     listSaveSubscriptions: async () => [
       {
         scopeType: "owner_p",

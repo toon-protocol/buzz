@@ -1,4 +1,5 @@
 import { publishEvent } from "@/shared/api/eventTransport";
+import { subscribeLiveEvents } from "@/shared/api/eventTransport";
 import { relayClient } from "@/shared/api/relayClient";
 import {
   nip44DecryptFromSelf,
@@ -174,7 +175,7 @@ export class ChannelMuteSyncManager {
   async subscribeToMutes(
     onUpdate: (remote: RemoteMutes) => void,
   ): Promise<() => Promise<void>> {
-    return relayClient.subscribeLive(
+    return subscribeLiveEvents(
       {
         kinds: [KIND_CHANNEL_MUTES],
         authors: [this.pubkey],

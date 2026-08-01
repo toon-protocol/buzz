@@ -31,6 +31,7 @@ mod reset;
 mod secret_store;
 mod shutdown;
 mod templates;
+mod transport;
 #[cfg(target_os = "macos")]
 mod tray_menu;
 mod util;
@@ -710,6 +711,7 @@ pub fn run() {
             is_shared_identity,
             get_relay_ws_url,
             get_relay_http_url,
+            get_transport_env,
             get_media_proxy_port,
             fetch_link_preview_title,
             discover_acp_auth_methods,

@@ -26,6 +26,14 @@ export default defineConfig(async () => ({
     alias: {
       "@": "/src",
       "@features-manifest": path.resolve(__dirname, "../preview-features.json"),
+      // The TOON client dynamically imports these to settle on Mina, which
+      // this app never does. Left unaliased they add ~15 MB to the bundle.
+      // See `src/shared/api/minaUnavailable.ts`.
+      o1js: path.resolve(__dirname, "src/shared/api/minaUnavailable.ts"),
+      "mina-signer": path.resolve(
+        __dirname,
+        "src/shared/api/minaUnavailable.ts",
+      ),
     },
   },
 

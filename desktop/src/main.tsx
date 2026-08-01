@@ -14,6 +14,7 @@ import { PoofBurstProvider } from "@/shared/ui/PoofBurstProvider";
 import { Toaster } from "@/shared/ui/sonner";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 import { recoverLocalStorageQuotaOnStartup } from "@/shared/lib/localStorageQuota";
+import { installSelectedTransport } from "@/shared/api/transportSelection";
 
 type E2eWindow = Window & {
   __BUZZ_E2E__?: unknown;
@@ -113,6 +114,9 @@ async function bootstrap() {
   configureDevE2eBridgeFromUrl();
   recoverLocalStorageQuotaOnStartup();
   await installE2eBridgeIfConfigured();
+  // Before render, so no write or subscription can be issued against a
+  // transport that is about to be replaced.
+  await installSelectedTransport();
   await migrateLegacyCommunityStorageBeforeRender();
   renderApp();
 }
