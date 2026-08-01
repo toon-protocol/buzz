@@ -41,6 +41,12 @@ export type ToonTransportConfig = {
   tokenNetwork: string;
   /** Settlement token (USDC) contract on `chain`. */
   preferredToken: string;
+  /**
+   * Devnet faucet base URL. The onboarding wizard's fund step posts to
+   * `{faucetUrl}/api/base-sepolia/request` (toon-meta#258) — settlement token
+   * plus best-effort native gas, one request.
+   */
+  faucetUrl: string;
 };
 
 /**
@@ -64,6 +70,7 @@ export const TOON_DEVNET_DEFAULTS = {
   chainRpcUrl: "https://base-sepolia-rpc.publicnode.com",
   tokenNetwork: "0x1E95493fEF46707E034b4a1945f25a8C76A1823D",
   preferredToken: "0x49beE1Bca5d15Fb0963117923403F9498119a9Ce",
+  faucetUrl: "https://faucet.devnet.toonprotocol.dev",
 } as const;
 
 /** The environment keys this module reads, so callers can forward exactly these. */
@@ -78,6 +85,7 @@ export const TOON_TRANSPORT_ENV_KEYS = [
   "BUZZ_TOON_CHAIN_RPC_URL",
   "BUZZ_TOON_TOKEN_NETWORK",
   "BUZZ_TOON_PREFERRED_TOKEN",
+  "BUZZ_TOON_FAUCET_URL",
 ] as const;
 
 /** One value from the environment, with blanks treated as absent. */
@@ -133,6 +141,7 @@ export function resolveToonTransportConfig(
     preferredToken:
       text(env.BUZZ_TOON_PREFERRED_TOKEN) ??
       TOON_DEVNET_DEFAULTS.preferredToken,
+    faucetUrl: text(env.BUZZ_TOON_FAUCET_URL) ?? TOON_DEVNET_DEFAULTS.faucetUrl,
   };
 }
 

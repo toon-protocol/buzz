@@ -118,7 +118,7 @@ const createToonClient: PaidClientFactory = async (config) => {
 };
 
 export class ToonPaidWriter {
-  private readonly config: ToonTransportConfig;
+  private config: ToonTransportConfig;
   private readonly factory: PaidClientFactory;
   private readonly listeners = new Set<PaidWriteListener>();
   private client: PaidClient | null = null;
@@ -137,6 +137,23 @@ export class ToonPaidWriter {
   /** Whether a write can go out now without a start/channel-open first. */
   isWritable(): boolean {
     return this.client !== null;
+  }
+
+  /**
+   * Supply (or replace) the payment mnemonic before the client has started.
+   *
+   * `config` is otherwise frozen at construction, but the onboarding wizard
+   * generates this identity interactively — after the writer already exists,
+   * since it is built from whatever `BUZZ_TOON_MNEMONIC` (or a previously
+   * stored wizard identity) resolved to at app bootstrap, which may be
+   * nothing at all on a fresh install. A no-op once a client has started or
+   * is starting: a live client already committed to a signer, and switching
+   * the identity out from under it would desync the channel it opened from
+   * the one future writes would try to use.
+   */
+  setMnemonic(mnemonic: string): void {
+    if (this.client !== null || this.starting !== null) return;
+    this.config = { ...this.config, mnemonic };
   }
 
   /** The most recent paid write's cost, for status surfaces. */

@@ -37,6 +37,7 @@ import {
 } from "@/features/onboarding/ui/MachineOnboardingFlow";
 import { OnboardingFlow } from "@/features/onboarding/ui/OnboardingFlow";
 import { PendingInviteGate } from "@/features/onboarding/ui/PendingInviteGate";
+import { ToonOnboardingGate } from "@/features/onboarding/ui/ToonOnboardingGate";
 import { KeyringLockedScreen } from "@/features/onboarding/ui/KeyringLockedScreen";
 import { RelaunchRequiredScreen } from "@/features/onboarding/ui/RelaunchRequiredScreen";
 import { ResetFailedScreen } from "@/features/onboarding/ui/ResetFailedScreen";
@@ -551,6 +552,14 @@ function CommunityApp({
           key={communityKey}
           isSharedIdentity={sharedIdentity}
         />
+        {/*
+          Overlays the running app rather than gating its mount: the wizard's
+          last step needs a live community + channel list, and reads (unlike
+          writes) work on TOON with no wallet at all, so there is nothing
+          gained by delaying connection. Renders nothing once BUZZ_TRANSPORT
+          is not "toon" or the wizard's own state says it is done.
+        */}
+        <ToonOnboardingGate />
         {showBootSplashOverlay ? (
           <div
             aria-hidden="true"
