@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   deriveToonOnboardingStatus,
+  isChannelStepConfirmed,
   toonOnboardingStepNumber,
 } from "./toonOnboardingState.ts";
 
@@ -113,6 +114,54 @@ test("re-entrancy: a lost channel-confirmed flag re-quotes the channel step, not
     channelConfirmed: false,
   });
   assert.equal(status.step, "channel");
+});
+
+test("isChannelStepConfirmed: false unless something makes it true", () => {
+  assert.equal(
+    isChannelStepConfirmed({
+      channelConfirmedFlag: false,
+      transportWritable: false,
+      resumableChannelExists: false,
+    }),
+    false,
+  );
+});
+
+test("isChannelStepConfirmed: the wizard's own persisted flag is enough", () => {
+  assert.equal(
+    isChannelStepConfirmed({
+      channelConfirmedFlag: true,
+      transportWritable: false,
+      resumableChannelExists: false,
+    }),
+    true,
+  );
+});
+
+test("isChannelStepConfirmed: a live writer is enough, even without the flag", () => {
+  assert.equal(
+    isChannelStepConfirmed({
+      channelConfirmedFlag: false,
+      transportWritable: true,
+      resumableChannelExists: false,
+    }),
+    true,
+  );
+});
+
+test("isChannelStepConfirmed (buzz#28): a resumable channel counts as open on its own", () => {
+  // The exact scenario the fix targets: a channel persisted from an earlier
+  // launch, before this session's writer has started and with no persisted
+  // consent flag (e.g. a lost/never-set flag) — resuming spends nothing new,
+  // so there is nothing left to consent to.
+  assert.equal(
+    isChannelStepConfirmed({
+      channelConfirmedFlag: false,
+      transportWritable: false,
+      resumableChannelExists: true,
+    }),
+    true,
+  );
 });
 
 test("step numbers are 1-based and stable", () => {

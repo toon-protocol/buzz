@@ -67,6 +67,27 @@ function isPositive(amount: bigint | null): boolean {
 }
 
 /**
+ * Whether the channel step counts as done, from every source of truth that
+ * makes it so (buzz#28): the wizard's own persisted consent flag, a writer
+ * that is already live this session, or — new — a channel this session could
+ * RESUME with zero new spend. None of the three implies the others (a fresh
+ * install has none; a resumed session may have only the third), but any one
+ * is enough: nothing new would be spent by treating the step as finished, so
+ * there is nothing left to consent to.
+ */
+export function isChannelStepConfirmed(inputs: {
+  channelConfirmedFlag: boolean;
+  transportWritable: boolean;
+  resumableChannelExists: boolean;
+}): boolean {
+  return (
+    inputs.channelConfirmedFlag ||
+    inputs.transportWritable ||
+    inputs.resumableChannelExists
+  );
+}
+
+/**
  * Derive the wizard's current step and the fund step's sub-state from a
  * snapshot of reality. No side effects, no I/O — everything it needs has
  * already been read by the caller.
