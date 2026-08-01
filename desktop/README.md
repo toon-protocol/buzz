@@ -104,3 +104,67 @@ Two write surfaces are deliberately off the seam and documented in
 explicitly passed *other* community's relay) and the Rust half of the app,
 where Tauri commands build, sign, and POST their own events over NIP-98 HTTP.
 The Rust surface has no single chokepoint yet and needs its own seam.
+
+### Encrypted channels
+
+A private channel on TOON is not a channel the relay withholds — the relay
+serves everyone. It is a channel whose content is NIP-44 v2 encrypted with a
+**channel key** every member holds (ADR 0001, ADR 0002). Possession of the key
+is membership.
+
+**Encryption sits above the transport seam, never inside a transport.** A
+message is sealed in `shared/api/eventWrites.ts` before `signRelayEvent` —
+content sealed after signing is content the signature no longer covers — and
+opened where events enter the app: `subscribeLiveEvents` in
+`shared/api/eventTransport.ts` for the live tail, `getChannelWindowEvents` in
+`shared/api/channelWindow.ts` for history. Both are the transport-agnostic
+facade, so a channel is encrypted identically on the relay transport and on
+TOON, and a third transport inherits it without implementing anything.
+
+| File | Role |
+| --- | --- |
+| `shared/api/channelEncryption.ts` | NIP-44 v2 primitives, key parsing/format, key ids |
+| `shared/api/channelKeyStore.ts` | Which keys this client holds, across restarts |
+| `shared/api/channelMessageCrypto.ts` | Event-level seal/open and the wire layout |
+| `features/channels/ui/ChannelEncryptionSettings.tsx` | The paste-the-key field |
+
+On the wire an encrypted message is an ordinary `kind:9` with its
+`["h", <channelId>]` tag — nothing about routing, reading, or paying grows a
+second case. What changes is `content`, which becomes a NIP-44 v2 payload, plus
+one marker tag:
+
+```
+["encrypted", "nip44-v2", "<keyId>"]
+```
+
+`keyId` is a truncated domain-separated hash of the key, not the key. It exists
+so a client holding more than one key for a channel — what rotation produces —
+can choose without trial decryption.
+
+Tags stay in the clear: the channel id because a client needs it to pick a key
+at all, and `p` mention tags so a mentioned member is notified without every
+client decrypting every message. That last one is a real leak (an observer
+learns who was addressed) and is taken knowingly.
+
+**Getting the key to the other client is manual, on purpose.** Open channel
+settings, generate a key, and paste the same hex into every member's client;
+gift-wrapped delivery and admin-triggered rotation are separate work. For
+scripted or two-box setups there is an environment variable:
+
+| Variable | Meaning |
+| --- | --- |
+| `BUZZ_CHANNEL_KEYS` | `channelId=hexkey` pairs, comma- or newline-separated. Overrides stored keys |
+
+Keys persist in `localStorage` under `buzz-channel-keys.v1`, which is the
+honest statement of the threat model: this protects a channel from the relay
+and from non-members, not from someone with the user's disk.
+
+What is not encrypted yet:
+
+- **The Rust write path.** Threaded replies, media, and custom-emoji messages
+  are built and POSTed from `src-tauri`, never reach the seam, and therefore go
+  out in the clear even in a keyed channel.
+- **Media.** ADR 0002 puts private-channel blobs under the same channel key
+  before upload; the upload path is not on this yet.
+- **Search and the local archive**, which index whatever content reaches them —
+  plaintext for members, placeholders for everyone else.
