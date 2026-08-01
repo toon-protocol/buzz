@@ -57,7 +57,7 @@ fn extract_server_authority(url_str: &str) -> Option<String> {
 /// Returns the path the kernel associates with the inode, not the pathname
 /// used to open it. Immune to post-open renames/symlink swaps.
 #[cfg(target_os = "macos")]
-fn fd_real_path(file: &std::fs::File) -> Result<std::path::PathBuf, String> {
+pub(crate) fn fd_real_path(file: &std::fs::File) -> Result<std::path::PathBuf, String> {
     use std::os::unix::io::AsRawFd;
     let fd = file.as_raw_fd();
     let mut buf = vec![0u8; libc::PATH_MAX as usize];
@@ -74,14 +74,14 @@ fn fd_real_path(file: &std::fs::File) -> Result<std::path::PathBuf, String> {
 }
 
 #[cfg(target_os = "linux")]
-fn fd_real_path(file: &std::fs::File) -> Result<std::path::PathBuf, String> {
+pub(crate) fn fd_real_path(file: &std::fs::File) -> Result<std::path::PathBuf, String> {
     use std::os::unix::io::AsRawFd;
     let fd = file.as_raw_fd();
     std::fs::read_link(format!("/proc/self/fd/{fd}")).map_err(|e| e.to_string())
 }
 
 #[cfg(target_os = "windows")]
-fn fd_real_path(file: &std::fs::File) -> Result<std::path::PathBuf, String> {
+pub(crate) fn fd_real_path(file: &std::fs::File) -> Result<std::path::PathBuf, String> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         GetFinalPathNameByHandleW, FILE_NAME_NORMALIZED,
@@ -109,7 +109,7 @@ fn fd_real_path(file: &std::fs::File) -> Result<std::path::PathBuf, String> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-fn fd_real_path(_file: &std::fs::File) -> Result<std::path::PathBuf, String> {
+pub(crate) fn fd_real_path(_file: &std::fs::File) -> Result<std::path::PathBuf, String> {
     Err("fd_real_path not supported on this platform".to_string())
 }
 
@@ -467,7 +467,7 @@ pub(crate) async fn upload_image_bytes(
     do_upload(body, &mime, state, None).await
 }
 
-async fn do_upload(
+pub(crate) async fn do_upload(
     body: Vec<u8>,
     mime: &str,
     state: &AppState,
@@ -560,183 +560,6 @@ pub async fn upload_media(
     let mime = detect_and_validate_mime(&body)?;
     let body = sanitize_image_for_upload(body, &mime)?;
     do_upload(body, &mime, &state, None).await
-}
-
-/// Read a picked path through the TOCTOU-safe pipeline (fd pin → sniff →
-/// transcode-or-passthrough → MIME validation → upload).
-///
-/// When `images_only` is set, the file is rejected **before upload** if it is
-/// not an image (videos and non-image files error out; HEIC/HEIF still
-/// transcode to JPEG, which is an image). This keeps discarded/non-image
-/// files from ever leaving the client on image-only surfaces.
-async fn process_picked_path(
-    path: std::path::PathBuf,
-    state: &AppState,
-    images_only: bool,
-) -> Result<BlobDescriptor, String> {
-    // Pin the inode by opening the fd BEFORE spawn_blocking. This prevents a
-    // local attacker from swapping the file between dialog return and read.
-    let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-
-    // Extension hint for HEIC detection — some HEIC files from non-Apple
-    // tooling carry brands outside HEIC_BRANDS, but the `.heic`/`.heif`
-    // extension still tells us the webview can't render them. Computed before
-    // the closure since `path` isn't moved in.
-    let heic_by_ext = has_heic_extension(&path);
-
-    // All sync I/O (sniff, transcode, read) runs off the async runtime to
-    // avoid blocking Tokio worker threads during long ffmpeg transcodes.
-    let (body, poster_bytes) =
-        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
-            use std::io::Read;
-
-            // Sniff magic bytes from the pinned fd — no re-open, no TOCTOU.
-            let mut header = [0u8; 4096];
-            let n = file.read(&mut header).map_err(|e| e.to_string())?;
-
-            if is_video_file(&header[..n]) {
-                if images_only {
-                    return Err("Please choose an image file.".to_string());
-                }
-                // ffmpeg needs a path, not an fd. Resolve the fd's real path
-                // so we pass the actual inode's location, not the original
-                // (potentially swapped) pathname. Same pattern as upload_media.
-                // IMPORTANT: keep `file` alive (fd open) until after transcode
-                // completes — this prevents the inode from being unlinked or
-                // the resolved path from becoming stale during the ffmpeg run.
-                let fd_path = fd_real_path(&file)?;
-                let result = transcode_and_extract_poster(&fd_path);
-                drop(file); // release fd only after ffmpeg is done
-                result
-            } else if heic_by_ext || is_heic_file(&header[..n]) {
-                // HEIC/HEIF still: Chromium/the webview can't decode it, so
-                // transcode to JPEG before upload (mirrors mobile). Resolve the
-                // fd's real path so ffmpeg reads the pinned inode, and keep
-                // `file` alive until the transcode finishes.
-                let fd_path = fd_real_path(&file)?;
-                let result = transcode_heic_path_to_jpeg_bytes(&fd_path).map(|jpeg| (jpeg, None));
-                drop(file); // release fd only after ffmpeg is done
-                result
-            } else {
-                // Image: read the rest from the already-open fd (TOCTOU-safe).
-                let mut bytes = header[..n].to_vec();
-                file.read_to_end(&mut bytes)
-                    .map_err(|e| format!("failed to read file: {e}"))?;
-                Ok((bytes, None))
-            }
-        })
-        .await
-        .map_err(|e| format!("transcode task failed: {e}"))??;
-
-    let mime = detect_and_validate_mime(&body)?;
-    let body = sanitize_image_for_upload(body, &mime)?;
-
-    // Image-only surfaces (e.g. "Send feedback"): reject anything that didn't
-    // sniff as an image, BEFORE the upload leaves the client.
-    if images_only && !mime.starts_with("image/") {
-        return Err("Please choose an image file.".to_string());
-    }
-
-    // Upload video first, then poster (best-effort). If poster upload fails,
-    // the video descriptor is returned without an image field.
-    let mut descriptor = do_upload(body, &mime, state, None).await?;
-
-    if let Some(poster) = poster_bytes {
-        match do_upload(poster, "image/jpeg", state, None).await {
-            Ok(poster_desc) => descriptor.image = Some(poster_desc.url),
-            Err(e) => eprintln!("buzz-desktop: poster upload failed (non-fatal): {e}"),
-        }
-    }
-
-    descriptor.filename = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(sanitize_filename);
-
-    Ok(descriptor)
-}
-
-/// Open a native file dialog (multi-select), read each selected file, and
-/// upload it. Returns the resulting `BlobDescriptor` list — empty when the
-/// user cancels.
-///
-/// All file I/O happens in trusted Rust — the renderer never touches the
-/// filesystem. This is the secure path for the 📎 paperclip button.
-///
-/// **Residual TOCTOU note:** The Tauri dialog plugin returns pathnames, not
-/// file handles, so there is a small race window between dialog return and
-/// `File::open()` — an inherent limit of the OS file-picker API. The risk is
-/// bounded (local attacker winning a race against an immediate open) and
-/// server-side content validation (MIME, image decode, size caps) is the
-/// defense in depth.
-///
-/// Uploads run sequentially; on first failure, prior uploads are not
-/// rolled back (they're already content-addressed on the relay).
-#[tauri::command]
-pub async fn pick_and_upload_media(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Vec<BlobDescriptor>, String> {
-    use tauri_plugin_dialog::DialogExt;
-
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    // No filter — accept any file. The deny-list (active content + executables)
-    // and size caps are enforced by `detect_and_validate_mime` and the relay.
-    app.dialog().file().pick_files(move |paths| {
-        let _ = tx.send(paths);
-    });
-
-    let file_paths = match rx.await.map_err(|_| "dialog cancelled".to_string())? {
-        Some(paths) => paths,
-        None => return Ok(Vec::new()),
-    };
-
-    let mut descriptors = Vec::with_capacity(file_paths.len());
-    for file_path in file_paths {
-        let path = file_path.as_path().ok_or("invalid path")?.to_path_buf();
-        let descriptor = process_picked_path(path, &state, false).await?;
-        descriptors.push(descriptor);
-    }
-
-    Ok(descriptors)
-}
-
-/// Open a native single-file dialog constrained to images, read the picked
-/// file, and upload it — rejecting anything that doesn't sniff as an image
-/// **before** the bytes leave the client.
-///
-/// This is the secure path for image-only surfaces (e.g. the "Send feedback"
-/// attachment). Unlike [`pick_and_upload_media`], the dialog is filtered to
-/// common image extensions and `process_picked_path` runs with
-/// `images_only = true`, so a user who bypasses the extension filter still
-/// can't upload a non-image (videos and other files error out during MIME
-/// validation, before `do_upload`). Returns `None` when the user cancels.
-#[tauri::command]
-pub async fn pick_and_upload_image(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Option<BlobDescriptor>, String> {
-    use tauri_plugin_dialog::DialogExt;
-
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .add_filter(
-            "Images",
-            &["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "bmp"],
-        )
-        .pick_file(move |path| {
-            let _ = tx.send(path);
-        });
-
-    let file_path = match rx.await.map_err(|_| "dialog cancelled".to_string())? {
-        Some(path) => path,
-        None => return Ok(None),
-    };
-
-    let path = file_path.as_path().ok_or("invalid path")?.to_path_buf();
-    let descriptor = process_picked_path(path, &state, true).await?;
-    Ok(Some(descriptor))
 }
 
 /// Upload raw bytes directly (for paste and drag-drop).

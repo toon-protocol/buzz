@@ -1,10 +1,12 @@
 import * as React from "react";
 
+import type { BlobDescriptor } from "@/shared/api/tauri";
 import {
-  type BlobDescriptor,
-  pickAndUploadMedia,
-  uploadMediaBytes,
-} from "@/shared/api/tauri";
+  MediaUploadDeclined,
+  pickAndUploadThroughSeam,
+  uploadMediaThroughSeam,
+} from "@/shared/api/mediaUpload";
+import { requireMediaUploadConsent } from "@/shared/api/mediaPermanenceGate";
 
 /**
  * First 4 hex chars of the sha256 — used as a short display name.
@@ -317,6 +319,36 @@ export function useMediaUpload() {
     [finishUpload],
   );
 
+  /**
+   * Upload bytes through the media seam, but only after the permanence
+   * disclosure has been accepted.
+   *
+   * The gate sits here rather than at each of the five entry points (paperclip,
+   * drop, paste, editor paste, annotate-and-replace) so no future one can
+   * bypass it: the seam is the only way bytes leave, and this is the only way
+   * to reach the seam. A decline throws `MediaUploadDeclined`, which
+   * `onUploadError` recognises and reports as nothing at all.
+   */
+  const guardedUpload = React.useCallback(
+    async (
+      data: number[],
+      filename?: string,
+      progressId?: string,
+    ): Promise<BlobDescriptor> => {
+      await requireMediaUploadConsent();
+      return uploadMediaThroughSeam({ data, filename, progressId });
+    },
+    [],
+  );
+
+  /** The native picker, gated the same way — disclosure before the dialog. */
+  const guardedPickAndUpload = React.useCallback(async (): Promise<
+    BlobDescriptor[]
+  > => {
+    await requireMediaUploadConsent();
+    return pickAndUploadThroughSeam();
+  }, []);
+
   /** Reserve `count` null slots at the end; returns the starting index. */
   const reserveSlots = React.useCallback((count: number): number => {
     const startIndex = nextSlotRef.current;
@@ -361,6 +393,8 @@ export function useMediaUpload() {
     (err: unknown, previewId?: number) => {
       if (isUploadCanceled(previewId)) return;
       finishUpload(previewId);
+      // Declining the permanence disclosure is a decision, not a failure.
+      if (err instanceof MediaUploadDeclined) return;
       setUploadState({ status: "error", message: String(err) });
     },
     [finishUpload, isUploadCanceled],
@@ -374,7 +408,7 @@ export function useMediaUpload() {
     const previewId = reserveUploadingPreview();
     setUploadingCount((c) => c + 1);
     try {
-      const descriptors = await pickAndUploadMedia();
+      const descriptors = await guardedPickAndUpload();
       if (isUploadCanceled(previewId)) return;
       finishUpload(previewId);
       for (const descriptor of descriptors) {
@@ -385,7 +419,13 @@ export function useMediaUpload() {
       if (isUploadCanceled(previewId)) return;
       onUploadError(err, previewId);
     }
-  }, [finishUpload, isUploadCanceled, onUploadError, reserveUploadingPreview]);
+  }, [
+    finishUpload,
+    guardedPickAndUpload,
+    isUploadCanceled,
+    onUploadError,
+    reserveUploadingPreview,
+  ]);
 
   const handleDrop = React.useCallback(
     async (event: React.DragEvent<HTMLElement>) => {
@@ -411,7 +451,7 @@ export function useMediaUpload() {
           try {
             const buffer = await file.arrayBuffer();
             if (isUploadCanceled(previewId)) return;
-            const descriptor = await uploadMediaBytes(
+            const descriptor = await guardedUpload(
               [...new Uint8Array(buffer)],
               file.name,
               uploadProgressId(previewId),
@@ -426,6 +466,7 @@ export function useMediaUpload() {
     [
       reserveSlots,
       fillSlot,
+      guardedUpload,
       isUploadCanceled,
       onUploadError,
       reserveUploadingPreview,
@@ -508,7 +549,7 @@ export function useMediaUpload() {
           try {
             const buffer = await file.arrayBuffer();
             if (isUploadCanceled(previewId)) return;
-            const descriptor = await uploadMediaBytes(
+            const descriptor = await guardedUpload(
               [...new Uint8Array(buffer)],
               file.name,
               uploadProgressId(previewId),
@@ -523,6 +564,7 @@ export function useMediaUpload() {
     [
       reserveSlots,
       fillSlot,
+      guardedUpload,
       isUploadCanceled,
       onUploadError,
       reserveUploadingPreview,
@@ -537,7 +579,7 @@ export function useMediaUpload() {
       try {
         const buffer = await file.arrayBuffer();
         if (isUploadCanceled(previewId)) return;
-        const descriptor = await uploadMediaBytes(
+        const descriptor = await guardedUpload(
           [...new Uint8Array(buffer)],
           file.name,
           uploadProgressId(previewId),
@@ -547,7 +589,13 @@ export function useMediaUpload() {
         onUploadError(err, previewId);
       }
     },
-    [isUploadCanceled, onUploaded, onUploadError, reserveUploadingPreview],
+    [
+      guardedUpload,
+      isUploadCanceled,
+      onUploaded,
+      onUploadError,
+      reserveUploadingPreview,
+    ],
   );
 
   /**
@@ -577,7 +625,7 @@ export function useMediaUpload() {
       const previewId = reserveUploadingPreview();
       setUploadingCount((c) => c + 1);
       try {
-        const descriptor = await uploadMediaBytes(
+        const descriptor = await guardedUpload(
           [...bytes],
           filename,
           uploadProgressId(previewId),
@@ -601,7 +649,13 @@ export function useMediaUpload() {
         throw err;
       }
     },
-    [finishUpload, isUploadCanceled, onUploadError, reserveUploadingPreview],
+    [
+      finishUpload,
+      guardedUpload,
+      isUploadCanceled,
+      onUploadError,
+      reserveUploadingPreview,
+    ],
   );
 
   /**

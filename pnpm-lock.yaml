@@ -180,6 +180,9 @@ importers:
       '@tiptap/starter-kit':
         specifier: ^3.22.3
         version: 3.22.5
+      '@toon-protocol/arweave':
+        specifier: ^0.2.0
+        version: 0.2.0
       '@toon-protocol/client':
         specifier: ^0.25.1
         version: 0.25.1(@solana/sysvars@5.5.1(fastestsmallesttextencoderdecoder@1.0.22)(typescript@6.0.3))(@tanstack/query-core@5.100.14)(@tanstack/react-query@5.100.14(react@19.2.8))(@types/react@19.2.17)(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(react@19.2.8)(typescript@6.0.3)(utf-8-validate@6.0.6)(zod@4.4.3)
@@ -3121,6 +3124,9 @@ packages:
 
   '@toon-format/toon@1.4.0':
     resolution: {integrity: sha512-bjdhhIPjnX2oVk+pKy/nD3bwuESDLX/5fwW0TxwpV7Q4PVNkiRSv1S0sPeuy9TI4PfAlulow1HShdmMTnYvoLg==}
+
+  '@toon-protocol/arweave@0.2.0':
+    resolution: {integrity: sha512-+SQSrzzg1hmm6lzjptuCNxDcT8TkTEhP7E3k9HKdOm5kUHiCgdVfCtvnquzskmPYRSeEDKl7TJq0Lh5eY5hSqQ==}
 
   '@toon-protocol/client@0.25.1':
     resolution: {integrity: sha512-D80IA/SpNh30TXdZNjGDwezkKgMx4IMqlpvE2r4AkorKWlhPHtIfR2TnUYis2CCwEveFxLI8U9jnG/gSdIC8lw==}
@@ -10003,6 +10009,8 @@ snapshots:
       '@tiptap/pm': 3.22.5
 
   '@toon-format/toon@1.4.0': {}
+
+  '@toon-protocol/arweave@0.2.0': {}
 
   '@toon-protocol/client@0.25.1(@solana/sysvars@5.5.1(fastestsmallesttextencoderdecoder@1.0.22)(typescript@6.0.3))(@tanstack/query-core@5.100.14)(@tanstack/react-query@5.100.14(react@19.2.8))(@types/react@19.2.17)(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(react@19.2.8)(typescript@6.0.3)(utf-8-validate@6.0.6)(zod@4.4.3)':
     dependencies:

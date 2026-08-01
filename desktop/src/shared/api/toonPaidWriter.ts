@@ -68,6 +68,17 @@ type PaidClient = {
     code?: string;
     refusedBy?: string;
   }>;
+  uploadBlob(params: {
+    blobData: Uint8Array;
+    contentType?: string;
+    destination?: string;
+    ilpAmount?: bigint;
+  }): Promise<{
+    success: boolean;
+    txId?: string;
+    eventId?: string;
+    error?: string;
+  }>;
 };
 
 export type PaidClientFactory = (
@@ -124,6 +135,7 @@ export class ToonPaidWriter {
   private client: PaidClient | null = null;
   private starting: Promise<PaidClient> | null = null;
   private routePrice: bigint | null = null;
+  private storeRoutePrice: bigint | null = null;
   private lastReceipt: PaidWriteReceipt | null = null;
 
   constructor(
@@ -186,6 +198,60 @@ export class ToonPaidWriter {
     this.routePrice ??=
       (await client.getRoutePrice(this.config.destination)) ?? 0n;
     return this.routePrice;
+  }
+
+  /**
+   * What one blob upload costs, asked of the connector fronting the store node.
+   *
+   * Deliberately takes no size: TOON prices a route flat per packet (the
+   * connector's ADR 0020), so a 2 KB avatar and a 2 MB screenshot cost the same
+   * as long as both fit one packet. Callers that want to show "per upload"
+   * rather than "per megabyte" are reading this correctly.
+   */
+  async quoteStoreFee(): Promise<bigint> {
+    const client = await this.ensureClient();
+    this.storeRoutePrice ??=
+      (await client.getRoutePrice(this.config.storeDestination)) ?? 0n;
+    return this.storeRoutePrice;
+  }
+
+  /**
+   * Upload bytes to the store node as a paid write, resolving with the Arweave
+   * transaction id the bytes now live under.
+   *
+   * The write is permanent by construction — there is no companion `remove`,
+   * and adding one would be a lie (see `mediaTombstone.ts`).
+   */
+  async uploadBlob(
+    blobData: Uint8Array,
+    contentType: string,
+  ): Promise<{ txId: string; receipt: PaidWriteReceipt }> {
+    const client = await this.ensureClient();
+    const amount = await this.quoteStoreFee();
+
+    const result = await client.uploadBlob({
+      blobData,
+      contentType,
+      destination: this.config.storeDestination,
+      ...(amount > 0n ? { ilpAmount: amount } : {}),
+    });
+
+    if (!result.success || !result.txId) {
+      throw new ToonPaidWriteError(
+        `The store node refused the upload: ${result.error ?? "no reason given"}`,
+      );
+    }
+
+    const receipt: PaidWriteReceipt = {
+      eventId: result.eventId ?? "",
+      amount,
+      assetScale: SETTLEMENT_ASSET_SCALE,
+      asset: SETTLEMENT_ASSET,
+      destination: this.config.storeDestination,
+    };
+    this.lastReceipt = receipt;
+    for (const listener of this.listeners) listener(receipt);
+    return { txId: result.txId, receipt };
   }
 
   /** Publish a signed event as a paid write, resolving with what it cost. */

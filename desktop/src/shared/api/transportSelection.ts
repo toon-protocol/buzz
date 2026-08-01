@@ -1,7 +1,10 @@
 import { getStoredMnemonic } from "@/features/onboarding/toon/toonOnboardingStore";
 import { setEventTransport } from "@/shared/api/eventTransport";
+import { resetMediaUploader, setMediaUploader } from "@/shared/api/mediaUpload";
+import { StoreMediaUploader } from "@/shared/api/storeMediaUploader";
 import { getTransportEnv } from "@/shared/api/tauriTransport";
 import { ToonEventTransport } from "@/shared/api/toonEventTransport";
+import { setArweaveGateways } from "@/shared/lib/arweaveMedia";
 import {
   decideTransport,
   type ToonTransportEnv,
@@ -92,15 +95,21 @@ export async function installSelectedTransport(): Promise<TransportSelection> {
 
   if (selection.mode !== "toon") {
     activeToonTransport = null;
+    // Blossom on the community relay stays the media backend in relay mode —
+    // the transport switch governs media too, so a run that writes events to
+    // the relay never writes attachments to the permaweb.
+    resetMediaUploader();
     return selection;
   }
 
   try {
     const transport = new ToonEventTransport(selection.config);
     setEventTransport(transport);
+    setArweaveGateways(selection.config.arweaveGateways);
+    setMediaUploader(new StoreMediaUploader(transport.getPaidWriter()));
     activeToonTransport = transport;
     console.info(
-      `[transport] TOON active — paying ${selection.config.destination} via ${selection.config.proxyUrl}, reading ${selection.config.relayUrl}`,
+      `[transport] TOON active — paying ${selection.config.destination} via ${selection.config.proxyUrl}, reading ${selection.config.relayUrl}, storing media at ${selection.config.storeDestination}`,
     );
   } catch (error) {
     console.error(
@@ -108,6 +117,7 @@ export async function installSelectedTransport(): Promise<TransportSelection> {
       error,
     );
     activeToonTransport = null;
+    resetMediaUploader();
     activeSelection = { ...selection, mode: "relay" };
     return activeSelection;
   }

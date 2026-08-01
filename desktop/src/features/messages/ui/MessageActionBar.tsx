@@ -9,6 +9,7 @@ import {
   Link2,
   MailCheck,
   MailOpen,
+  EyeOff,
   Pencil,
   SmilePlus,
   Trash2,
@@ -18,6 +19,7 @@ import * as React from "react";
 import { buildMessageLink } from "@/features/messages/lib/messageLink";
 import { EmojiPicker } from "@/features/custom-emoji/ui/EmojiPicker";
 import { useCustomEmoji } from "@/features/custom-emoji/hooks";
+import { permanentMediaHashes } from "@/features/messages/lib/mediaTombstone";
 import { getThreadReference } from "@/features/messages/lib/threading";
 import { ReportMessageDialog } from "@/features/moderation/ui/ReportMessageDialog";
 import { MessageModerationMenuItems } from "@/features/moderation/ui/MessageModerationMenuItems";
@@ -30,6 +32,7 @@ import {
   useQuickReactionEmojis,
 } from "@/features/messages/ui/useQuickReactionEmojis";
 import { reactionEmojiUrl } from "@/shared/api/customEmoji";
+import { hideChannelMedia } from "@/shared/api/eventWrites";
 import { cn } from "@/shared/lib/cn";
 import { copyTextToClipboard } from "@/shared/lib/clipboard";
 import { emojiDisplayName } from "@/shared/lib/emojiName";
@@ -92,7 +95,19 @@ function MoreActionsMenu({
   isUnread?: boolean;
 }) {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = React.useState(false);
+  const [isHideMediaDialogOpen, setIsHideMediaDialogOpen] =
+    React.useState(false);
   const [isReportDialogOpen, setIsReportDialogOpen] = React.useState(false);
+  /**
+   * Attachments on this message that are on the permaweb and therefore cannot
+   * be removed (ADR 0002). Their presence changes what the app is allowed to
+   * say: "delete" becomes a lie, and a separate "hide" action becomes the only
+   * honest thing on offer. `onDelete` gates it because withdrawing your own
+   * attachment is the same authority as withdrawing your own message.
+   */
+  const permanentHashes = permanentMediaHashes(message.tags);
+  const canHideMedia =
+    Boolean(onDelete) && channelId != null && permanentHashes.length > 0;
   // Set true the moment the user picks "Edit message". The
   // `onCloseAutoFocus` handler on `DropdownMenuContent` reads it to
   // suppress Radix's default focus-restoration (which would yank focus
@@ -254,6 +269,20 @@ function MoreActionsMenu({
             </DropdownMenuItem>
           ) : null}
 
+          {canHideMedia ? (
+            <DropdownMenuItem
+              data-testid={`hide-media-${message.id}`}
+              onClick={() => {
+                setIsHideMediaDialogOpen(true);
+              }}
+            >
+              <EyeOff className="h-4 w-4" />
+              {permanentHashes.length === 1
+                ? "Hide attachment"
+                : "Hide attachments"}
+            </DropdownMenuItem>
+          ) : null}
+
           {onDelete ? (
             <DropdownMenuItem
               className="text-destructive focus:text-destructive"
@@ -285,7 +314,9 @@ function MoreActionsMenu({
             <AlertDialogHeader>
               <AlertDialogTitle>Delete message?</AlertDialogTitle>
               <AlertDialogDescription>
-                This will permanently delete this message and cannot be undone.
+                {permanentHashes.length > 0
+                  ? "This removes the message from view in Buzz and cannot be undone. Its attachments stay on the permaweb — deleting the message does not delete the files."
+                  : "This will permanently delete this message and cannot be undone."}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -301,6 +332,56 @@ function MoreActionsMenu({
                   variant="destructive"
                 >
                   Delete
+                </Button>
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      ) : null}
+
+      {canHideMedia ? (
+        <AlertDialog
+          onOpenChange={setIsHideMediaDialogOpen}
+          open={isHideMediaDialogOpen}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {permanentHashes.length === 1
+                  ? "Hide this attachment?"
+                  : "Hide these attachments?"}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                Buzz will stop showing{" "}
+                {permanentHashes.length === 1 ? "it" : "them"} to everyone
+                reading this channel. The{" "}
+                {permanentHashes.length === 1 ? "file" : "files"} cannot be
+                deleted:{" "}
+                {permanentHashes.length === 1 ? "it stays" : "they stay"} on the
+                permaweb and anyone who kept the link can still read{" "}
+                {permanentHashes.length === 1 ? "it" : "them"}.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel asChild>
+                <Button type="button" variant="outline">
+                  Cancel
+                </Button>
+              </AlertDialogCancel>
+              <AlertDialogAction asChild>
+                <Button
+                  onClick={() => {
+                    void hideChannelMedia(
+                      channelId,
+                      message.id,
+                      permanentHashes,
+                    ).catch((error: unknown) => {
+                      console.error("[media] hide failed", error);
+                    });
+                  }}
+                  type="button"
+                >
+                  Hide from view
                 </Button>
               </AlertDialogAction>
             </AlertDialogFooter>

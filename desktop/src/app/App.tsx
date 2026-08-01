@@ -20,6 +20,7 @@ import { deriveShellRoute } from "@/app/AppShell.helpers";
 import { ThemeGrainientBackground } from "@/app/ThemeGrainientBackground";
 import { useReloadShortcut } from "@/app/useReloadShortcut";
 import { KnownAgentPubkeysProvider } from "@/features/agents/useKnownAgentPubkeys";
+import { MediaPermanenceDialog } from "@/features/messages/ui/MediaPermanenceDialog";
 import { useAppOnboardingState } from "@/features/onboarding/hooks";
 import { useMachineOnboardingState } from "@/features/onboarding/machineOnboarding";
 import {
@@ -584,6 +585,9 @@ function CommunityApp({
   return (
     <>
       {appContent}
+      {/* App-root singleton: the permanence disclosure belongs to the user, not
+          to whichever composer is focused (see `mediaPermanenceGate.ts`). */}
+      <MediaPermanenceDialog />
       {transaction ? (
         <div
           className={isEnteringCurtain ? "fixed inset-0 z-50" : undefined}
