@@ -39,6 +39,36 @@ pub enum CliError {
     #[error("delivery unknown: {0}")]
     DeliveryUnknown(String),
 
+    /// The local `toon-clientd` sidecar could not be reached at all —
+    /// connection refused, DNS failure, or similar transport-level failure.
+    /// Kept distinct from `Network` (the buzz-relay HTTP client) so `toon`
+    /// subcommands name the sidecar and the exact URL that was tried, rather
+    /// than reporting a generic network error that reads as "the relay is
+    /// down" — and so a caller never mistakes "the sidecar isn't running"
+    /// for "the write silently failed".
+    #[error(
+        "toon-clientd sidecar not reachable at {url} — start it first, or point \
+--sidecar-url / TOON_DAEMON_URL at a running instance ({detail})"
+    )]
+    SidecarUnreachable { url: String, detail: String },
+
+    /// The sidecar answered but rejected the request, via its own
+    /// `{error, detail, retryable}` envelope (still bootstrapping, no funded
+    /// channel, insufficient channel balance, publish rejected by the apex,
+    /// ...). Surfaced verbatim — the sidecar's own message is almost always
+    /// more specific than anything this CLI could say on its behalf (e.g.
+    /// exactly which chain's faucet to hit).
+    #[error(
+        "toon-clientd sidecar error ({status} {error}){}",
+        detail.as_deref().map(|d| format!(": {d}")).unwrap_or_default()
+    )]
+    Sidecar {
+        status: u16,
+        error: String,
+        detail: Option<String>,
+        retryable: bool,
+    },
+
     /// Catch-all for unexpected failures
     #[error("{0}")]
     Other(String),
@@ -80,6 +110,13 @@ pub fn is_retryable_error(e: &CliError) -> bool {
         }
         CliError::Relay { status, .. } => matches!(status, 429 | 502 | 503 | 504),
         CliError::DeliveryUnknown(_) => false,
+        // Never auto-retried by this CLI (each command makes one attempt),
+        // but the JSON error's "retryable" field should still tell the
+        // caller whether trying again is worthwhile: a down sidecar might
+        // come up, and the sidecar's own envelope already says so for its
+        // errors.
+        CliError::SidecarUnreachable { .. } => true,
+        CliError::Sidecar { retryable, .. } => *retryable,
         _ => false,
     }
 }
@@ -103,6 +140,8 @@ pub fn exit_code(e: &CliError) -> i32 {
         CliError::Conflict(_) => 5,
         CliError::NotFound(_) => 1,
         CliError::DeliveryUnknown(_) => 2,
+        CliError::SidecarUnreachable { .. } => 2,
+        CliError::Sidecar { .. } => 2,
         CliError::Other(_) => 4,
     }
 }
@@ -125,6 +164,8 @@ pub fn print_error(e: &CliError) {
         CliError::Conflict(_) => "conflict",
         CliError::NotFound(_) => "not_found",
         CliError::DeliveryUnknown(_) => "delivery_unknown",
+        CliError::SidecarUnreachable { .. } => "sidecar_unreachable",
+        CliError::Sidecar { .. } => "sidecar_error",
         CliError::Other(_) => "error",
     };
     let obj = serde_json::json!({
@@ -216,6 +257,46 @@ mod tests {
             "retryable": is_retryable_error(&err),
         });
         assert_eq!(v["retryable"].as_bool(), Some(false));
+    }
+
+    // ---- Sidecar error variants ----
+
+    #[test]
+    fn sidecar_unreachable_names_the_url_and_is_retryable() {
+        let e = CliError::SidecarUnreachable {
+            url: "http://127.0.0.1:8787".into(),
+            detail: "Connection refused (os error 111)".into(),
+        };
+        let msg = e.to_string();
+        assert!(
+            msg.contains("http://127.0.0.1:8787"),
+            "message must name the expected URL: {msg}"
+        );
+        assert!(msg.to_lowercase().contains("sidecar"));
+        assert!(is_retryable_error(&e));
+        assert_eq!(exit_code(&e), 2);
+    }
+
+    #[test]
+    fn sidecar_error_surfaces_daemon_detail_and_retryable_flag() {
+        let e = CliError::Sidecar {
+            status: 502,
+            error: "rejected".into(),
+            detail: Some("insufficient channel balance".into()),
+            retryable: false,
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("rejected"));
+        assert!(msg.contains("insufficient channel balance"));
+        assert!(!is_retryable_error(&e));
+
+        let retryable = CliError::Sidecar {
+            status: 503,
+            error: "bootstrapping".into(),
+            detail: None,
+            retryable: true,
+        };
+        assert!(is_retryable_error(&retryable));
     }
 
     // ---- Display source-chain ----

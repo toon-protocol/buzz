@@ -2,6 +2,7 @@ pub mod agent_management;
 mod client;
 mod commands;
 mod error;
+mod sidecar;
 mod validate;
 
 use clap::{Parser, Subcommand};
@@ -70,8 +71,12 @@ Configuration (flags override env vars):
   BUZZ_RELAY_URL     Relay base URL        [default: http://localhost:3000]
   BUZZ_PRIVATE_KEY   Nostr private key (hex or nsec)  [required]
   BUZZ_AUTH_TAG      NIP-OA auth tag JSON  [optional]
+  TOON_DAEMON_URL    toon-clientd sidecar base URL  [default: http://127.0.0.1:8787]
 
 The 'pack' subcommand runs locally and does not require a relay connection.
+The 'toon' subcommand talks to a local toon-clientd sidecar instead of the
+relay above — it never needs BUZZ_PRIVATE_KEY, because the sidecar holds the
+agent's TOON identity and pays for the write from the agent's own channel.
 
 Exit codes: 0=ok  1=bad input  2=relay/network error  3=auth error  4=other  5=write conflict
 Errors are JSON on stderr: {\"error\": \"<category>\", \"message\": \"<detail>\"}"
@@ -88,6 +93,16 @@ struct Cli {
     /// NIP-OA auth tag JSON (owner attestation). Injected into every signed event.
     #[arg(long, env = "BUZZ_AUTH_TAG", hide_env_values = true)]
     auth_tag: Option<String>,
+
+    /// Base URL of the local toon-clientd sidecar, used only by `buzz toon`.
+    /// Overrides TOON_DAEMON_URL env var. The sidecar owns the agent's TOON
+    /// identity, channel, and claims — this CLI never holds a mnemonic.
+    #[arg(
+        long = "sidecar-url",
+        env = "TOON_DAEMON_URL",
+        default_value = "http://127.0.0.1:8787"
+    )]
+    sidecar_url: String,
 
     /// Output format: 'json' (default, full fields) or 'compact' (reduced fields).
     #[arg(long, value_enum, default_value = "json")]
@@ -236,6 +251,39 @@ enum Cmd {
     /// Community moderation — reports queue, bans, timeouts, audit trail
     #[command(subcommand)]
     Moderation(ModerationCmd),
+    /// Paid writes through a local toon-clientd sidecar (agent-member identity)
+    #[command(subcommand)]
+    Toon(ToonCmd),
+}
+
+#[derive(Subcommand)]
+pub enum ToonCmd {
+    /// Check the local sidecar's health, identity, and readiness to pay for writes
+    #[command(after_help = "Examples:\n  buzz toon status\n\n\
+If \"ready\" is false, the sidecar has no funded channel yet: fund the \
+identity it reports (nostrPubkey / evmAddress / solanaAddress) at \
+https://faucet.devnet.toonprotocol.dev, then run the sidecar's own \
+onboarding — this CLI never handles mnemonics or opens channels itself.")]
+    Status,
+    /// Post a plaintext message to a public channel, paid from the sidecar's own channel
+    #[command(
+        after_help = "Publishes a kind:9 event tagged [\"h\", <channel>] — the same shape \
+desktop clients render for public-channel messages — via the sidecar's \
+POST /publish-unsigned. The sidecar signs with its own key and spends a \
+claim against its own payment channel: this is the agent's identity and \
+wallet, never a shared one.\n\n\
+Examples:\n  \
+buzz toon send --channel <UUID> --content \"hello from the sidecar\"\n  \
+echo \"hello from stdin\" | buzz toon send --channel <UUID> --content -"
+    )]
+    Send {
+        /// Channel UUID (from 'buzz channels list', or the desktop channel URL)
+        #[arg(long)]
+        channel: String,
+        /// Message text. Use '-' to read from stdin.
+        #[arg(long)]
+        content: String,
+    },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -1779,6 +1827,15 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         };
     }
 
+    // Toon commands talk to the local toon-clientd sidecar, not the relay
+    // above — they never need BUZZ_PRIVATE_KEY, because the sidecar (not
+    // this CLI) holds the agent's TOON identity and pays from its own
+    // channel. Handled before the private-key check below for the same
+    // reason Pack is: this path must work with zero relay configuration.
+    if let Cmd::Toon(ref sub) = cli.command {
+        return commands::toon::dispatch(sub, &cli.sidecar_url).await;
+    }
+
     // Auth: private key is required for all relay operations.
     // The keypair IS the identity — no tokens, no other auth.
     let private_key_str = cli.private_key.ok_or_else(|| {
@@ -1827,6 +1884,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Mem(sub) => commands::mem::dispatch(sub, &client).await,
         Cmd::Moderation(sub) => commands::moderation::dispatch(sub, &client, &cli.format).await,
         Cmd::Pack(_) => unreachable!("handled above"),
+        Cmd::Toon(_) => unreachable!("handled above"),
     }
 }
 
@@ -1886,6 +1944,7 @@ mod tests {
             "reactions",
             "repos",
             "social",
+            "toon",
             "upload",
             "users",
             "workflows",
@@ -2058,6 +2117,7 @@ mod tests {
                 "untimeout"
             ]
         );
+        assert_eq!(names(&cmd, "toon"), vec!["send", "status"]);
     }
 
     #[test]
@@ -2078,6 +2138,7 @@ mod tests {
             ("reactions", 3),
             ("repos", 5),
             ("social", 7),
+            ("toon", 2),
             ("upload", 1),
             ("users", 5),
             ("workflows", 8),
