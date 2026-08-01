@@ -1,9 +1,9 @@
 import * as React from "react";
 
-import type { BlobDescriptor } from "@/shared/api/tauri";
 import {
   MediaUploadDeclined,
   pickAndUploadThroughSeam,
+  type UploadedMedia,
   uploadMediaThroughSeam,
 } from "@/shared/api/mediaUpload";
 import { requireMediaUploadConsent } from "@/shared/api/mediaPermanenceGate";
@@ -135,7 +135,16 @@ async function captureVideoPosterFrame(
   }
 }
 
-export function useMediaUpload() {
+/**
+ * @param channelId - The channel attachments are being composed for, when the
+ *   composer belongs to one. It reaches the media seam on every upload and is
+ *   what decides whether the bytes are sealed with the channel key before they
+ *   leave (ADR 0002, buzz#17). Omitting it is the honest signal for a composer
+ *   with no channel — nothing to key against — and never a shortcut: a keyed
+ *   channel whose composer forgot to pass it would upload plaintext to a store
+ *   that has no delete.
+ */
+export function useMediaUpload(channelId?: string) {
   const [uploadState, setUploadState] = React.useState<UploadState>({
     status: "idle",
   });
@@ -193,14 +202,14 @@ export function useMediaUpload() {
   /**
    * Internal slots array — may contain `null` for reserved-but-pending uploads.
    * Consumers see the filtered `pendingImeta` (nulls stripped) so the public
-   * type stays `BlobDescriptor[]`.
+   * type stays `UploadedMedia[]`.
    */
-  const [imetaSlots, setImetaSlots] = React.useState<(BlobDescriptor | null)[]>(
+  const [imetaSlots, setImetaSlots] = React.useState<(UploadedMedia | null)[]>(
     [],
   );
 
   const pendingImeta = React.useMemo(
-    () => imetaSlots.filter((d): d is BlobDescriptor => d !== null),
+    () => imetaSlots.filter((d): d is UploadedMedia => d !== null),
     [imetaSlots],
   );
 
@@ -215,7 +224,7 @@ export function useMediaUpload() {
    * across a draft round-trip is an explicit non-goal (#1491 review).
    */
   const [originalsByUrl, setOriginalsByUrl] = React.useState<
-    Map<string, BlobDescriptor>
+    Map<string, UploadedMedia>
   >(() => new Map());
   const originalsByUrlRef = React.useRef(originalsByUrl);
   originalsByUrlRef.current = originalsByUrl;
@@ -234,7 +243,7 @@ export function useMediaUpload() {
       if (prev.size === 0) return prev;
       const liveUrls = new Set(pendingImeta.map((d) => d.url));
       let changed = false;
-      const next = new Map<string, BlobDescriptor>();
+      const next = new Map<string, UploadedMedia>();
       for (const [url, original] of prev) {
         if (liveUrls.has(url)) {
           next.set(url, original);
@@ -334,20 +343,25 @@ export function useMediaUpload() {
       data: number[],
       filename?: string,
       progressId?: string,
-    ): Promise<BlobDescriptor> => {
+    ): Promise<UploadedMedia> => {
       await requireMediaUploadConsent();
-      return uploadMediaThroughSeam({ data, filename, progressId });
+      return uploadMediaThroughSeam({
+        data,
+        filename,
+        progressId,
+        ...(channelId ? { channelId } : {}),
+      });
     },
-    [],
+    [channelId],
   );
 
   /** The native picker, gated the same way — disclosure before the dialog. */
   const guardedPickAndUpload = React.useCallback(async (): Promise<
-    BlobDescriptor[]
+    UploadedMedia[]
   > => {
     await requireMediaUploadConsent();
-    return pickAndUploadThroughSeam();
-  }, []);
+    return pickAndUploadThroughSeam(channelId ? { channelId } : undefined);
+  }, [channelId]);
 
   /** Reserve `count` null slots at the end; returns the starting index. */
   const reserveSlots = React.useCallback((count: number): number => {
@@ -366,7 +380,7 @@ export function useMediaUpload() {
 
   /** Fill a previously-reserved slot by index. */
   const fillSlot = React.useCallback(
-    (index: number, descriptor: BlobDescriptor, previewId?: number) => {
+    (index: number, descriptor: UploadedMedia, previewId?: number) => {
       if (isUploadCanceled(previewId)) return;
       setImetaSlots((prev) => {
         const next = [...prev];
@@ -380,7 +394,7 @@ export function useMediaUpload() {
 
   /** Append a single descriptor (no pre-reserved slot). */
   const onUploaded = React.useCallback(
-    (descriptor: BlobDescriptor, previewId?: number) => {
+    (descriptor: UploadedMedia, previewId?: number) => {
       if (isUploadCanceled(previewId)) return;
       nextSlotRef.current += 1;
       setImetaSlots((prev) => [...prev, descriptor]);
@@ -612,7 +626,7 @@ export function useMediaUpload() {
     async (
       oldUrl: string,
       bytes: Uint8Array,
-    ): Promise<BlobDescriptor | null> => {
+    ): Promise<UploadedMedia | null> => {
       const oldDescriptor = pendingImetaRef.current.find(
         (d) => d.url === oldUrl,
       );
@@ -664,7 +678,7 @@ export function useMediaUpload() {
    * if the URL has no recorded original.
    */
   const revertAttachment = React.useCallback(
-    (url: string): BlobDescriptor | null => {
+    (url: string): UploadedMedia | null => {
       const original = originalsByUrlRef.current.get(url);
       if (!original) return null;
       setImetaSlots((prev) => prev.map((d) => (d?.url === url ? original : d)));
@@ -684,9 +698,9 @@ export function useMediaUpload() {
 
   /** Public setter — replaces all slots (used by MessageComposer to clear/restore). */
   const setPendingImeta = React.useCallback(
-    (action: React.SetStateAction<BlobDescriptor[]>) => {
+    (action: React.SetStateAction<UploadedMedia[]>) => {
       setImetaSlots((prev) => {
-        const current = prev.filter((d): d is BlobDescriptor => d !== null);
+        const current = prev.filter((d): d is UploadedMedia => d !== null);
         const next = typeof action === "function" ? action(current) : action;
         nextSlotRef.current = next.length;
         return next;

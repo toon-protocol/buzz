@@ -1,3 +1,5 @@
+import type { SealedMediaEnvelope } from "@/shared/api/channelMediaCrypto";
+
 export type TimelineReaction = {
   emoji: string;
   /** Custom (image) emoji URL from the reaction's NIP-30 `emoji` tag, if any. */
@@ -48,5 +50,14 @@ export type TimelineMessage = {
   highlighted?: boolean;
   kind?: number;
   tags?: string[][];
+  /**
+   * Sealed-media envelopes lifted out of the decrypted content, by blob URL.
+   *
+   * Present only for a keyed channel's attachments (buzz#17). It lives on the
+   * message rather than in `tags` because the envelope describes the
+   * *plaintext* — mime, size, dimensions, filename — and tags travel in the
+   * clear. See `mediaEnvelopeContent.ts`.
+   */
+  mediaEnvelopes?: ReadonlyMap<string, SealedMediaEnvelope>;
   reactions?: TimelineReaction[];
 };

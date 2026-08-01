@@ -25,12 +25,22 @@
  * `imetaMediaFromTags` zero-fills it (no consumer reads the value today).
  */
 
+import type { SealedMediaEnvelope } from "@/shared/api/channelMediaCrypto";
+import { appendMediaEnvelopes } from "@/shared/api/mediaEnvelopeContent";
 import type { BlobDescriptor } from "@/shared/api/tauri";
 import { parseImetaTags } from "@/shared/ui/markdown/parseImeta";
 
 export type ImetaMedia = BlobDescriptor & {
   /** Composer-only label used for attachment links; not emitted in imeta. */
   displayLabel?: string;
+  /**
+   * Set when the blob was sealed with the channel key before upload (buzz#17).
+   *
+   * Emphatically *not* emitted in imeta: it describes the plaintext, and imeta
+   * tags are in the clear. `buildOutgoingMessage` folds it into the message
+   * content instead, which a keyed channel seals before it leaves the process.
+   */
+  encryption?: SealedMediaEnvelope;
 };
 
 /**
@@ -51,6 +61,7 @@ export type ImetaMedia = BlobDescriptor & {
  */
 export function imetaMediaFromTags(
   tags: ReadonlyArray<ReadonlyArray<string>> | undefined,
+  envelopes?: ReadonlyMap<string, SealedMediaEnvelope>,
 ): ImetaMedia[] {
   if (!tags || tags.length === 0) return [];
   const entries = parseImetaTags(tags as string[][]);
@@ -59,6 +70,12 @@ export function imetaMediaFromTags(
     if (!entry.url) continue;
     out.push({
       url: entry.url,
+      // Carry the envelope back into composer state so re-saving an edited
+      // message re-emits it. Dropping it would leave the attachment's bytes on
+      // Arweave with nothing left that says how to open them.
+      ...(envelopes?.get(entry.url)
+        ? { encryption: envelopes.get(entry.url) }
+        : {}),
       type: entry.m ?? "image/jpeg",
       sha256: entry.x ?? "",
       size: entry.size ?? 0,
@@ -278,19 +295,26 @@ export function findSpoileredImetaMediaUrls(
  * image MIME so the renderer can upgrade them to the import/download card.
  */
 export function formatImetaMediaLine(
-  { url, type, filename }: ImetaMedia,
+  { url, type, filename, encryption }: ImetaMedia,
   options: { label?: string; spoiler?: boolean } = {},
 ): string {
+  // A sealed blob is `application/octet-stream` on the wire — that is the whole
+  // point — so the line shape has to come from the envelope's plaintext MIME.
+  // Getting this from `type` would render every private photo as a file card.
+  // Safe to read here: the line is written into the content, which a keyed
+  // channel seals, so the plaintext MIME is not disclosed by naming it.
+  const effectiveType = encryption?.mime ?? type;
+  const effectiveFilename = encryption?.filename ?? filename;
   // A PNG snapshot is image/png on the wire, but it is an importable file, not
   // inline media. Keep it on the anchor renderer's snapshot-card path.
-  const lower = filename?.toLowerCase();
+  const lower = effectiveFilename?.toLowerCase();
   const isSnapshotPng =
     lower?.endsWith(".agent.png") || lower?.endsWith(".team.png");
-  if (type.startsWith("video/")) {
+  if (effectiveType.startsWith("video/")) {
     const line = `![video](${url})`;
     return options.spoiler ? `\n||${line}||` : `\n${line}`;
   }
-  if (type.startsWith("image/") && !isSnapshotPng) {
+  if (effectiveType.startsWith("image/") && !isSnapshotPng) {
     const line = `![image](${url})`;
     return options.spoiler ? `\n||${line}||` : `\n${line}`;
   }
@@ -298,7 +322,10 @@ export function formatImetaMediaLine(
   // available, otherwise the original filename (falling back to the URL tail).
   // The filename remains in imeta for download/import integrity.
   const label =
-    options.label?.trim() || filename || url.split("/").pop() || "file";
+    options.label?.trim() ||
+    effectiveFilename ||
+    url.split("/").pop() ||
+    "file";
   // Escape markdown link-label metacharacters so filenames containing `[`, `]`,
   // or `\` (e.g. `a].pdf`) still render as a FileCard with the correct label
   // rather than breaking the link or mangling the visible text.
@@ -316,6 +343,13 @@ export function formatImetaMediaLine(
  * that need an explicit "wipe attachments" signal (the edit path, where
  * `[]` instructs the receiver overlay to drop existing imeta) should
  * coerce with `?? []`.
+ *
+ * Sealed attachments (buzz#17) additionally get their envelope appended to the
+ * content as a `<!--buzz:media/v1 …-->` record. That is the whole reason the
+ * envelope goes through `content` rather than through `mediaTags`: the caller
+ * seals `content` for a keyed channel and leaves tags in the clear, so this is
+ * the only field on the event that can carry the plaintext's mime, size and
+ * filename without broadcasting them.
  */
 export function buildOutgoingMessage(
   body: string,
@@ -323,15 +357,17 @@ export function buildOutgoingMessage(
   spoileredMediaUrls: ReadonlySet<string> = new Set(),
 ): { content: string; mediaTags: string[][] | undefined } {
   let content = body;
+  const envelopes = new Map<string, SealedMediaEnvelope>();
   for (const d of pendingImeta) {
     content += formatImetaMediaLine(d, {
       label: d.displayLabel,
       spoiler: spoileredMediaUrls.has(d.url),
     });
+    if (d.encryption) envelopes.set(d.url, d.encryption);
   }
   const mediaTags =
     pendingImeta.length > 0 ? buildImetaTags(pendingImeta) : undefined;
-  return { content, mediaTags };
+  return { content: appendMediaEnvelopes(content, envelopes), mediaTags };
 }
 
 /**

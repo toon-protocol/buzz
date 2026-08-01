@@ -173,7 +173,7 @@ export const ChannelPane = React.memo(function ChannelPane({
     activeChannel,
     currentPubkey,
   );
-  const mainComposerMedia = useMediaUpload();
+  const mainComposerMedia = useMediaUpload(activeChannel?.id);
   const isNonMemberView =
     activeChannel !== null &&
     !activeChannel.isMember &&

@@ -1,3 +1,4 @@
+import type { SealedMediaEnvelope } from "@/shared/api/channelMediaCrypto";
 import {
   type BlobDescriptor,
   pickAndUploadMedia,
@@ -84,6 +85,37 @@ export type MediaUploadRequest = {
   filename?: string;
   /** Correlation id for `media-upload-progress` events from the Rust side. */
   progressId?: string;
+  /**
+   * The channel these bytes are being attached to, when there is one.
+   *
+   * Carried on the request rather than configured on the uploader because a
+   * backend is installed once per transport while attachments are composed in
+   * several channels at once — and because it is the *only* thing that decides
+   * whether the bytes get encrypted before they leave (ADR 0002, buzz#17). A
+   * request with no channel is an upload with no channel key, which is exactly
+   * how the pre-#17 paths (avatars, agent snapshots) should behave.
+   */
+  channelId?: string;
+};
+
+/** Where an upload's bytes ended up, and how to read them back. */
+export type UploadedMedia = BlobDescriptor & {
+  /**
+   * Present when the bytes were sealed before upload — a keyed channel.
+   *
+   * The descriptor then describes the *ciphertext*: `sha256`, `size` and
+   * `type` are the blob as Arweave holds it, which is what `imeta` may say out
+   * loud and what a tombstone names. The plaintext's own mime, size,
+   * dimensions and filename live in here, and travel inside the sealed message
+   * content (`mediaEnvelopeContent.ts`).
+   */
+  encryption?: SealedMediaEnvelope;
+};
+
+/** What an upload was asked to do beyond the bytes themselves. */
+export type MediaPickOptions = {
+  /** See {@link MediaUploadRequest.channelId}. */
+  channelId?: string;
 };
 
 /** One backend that can accept attachment bytes. */
@@ -98,13 +130,13 @@ export interface MediaUploader {
   quote(): Promise<MediaUploadQuote>;
 
   /** Store `request`'s bytes, resolving with a descriptor the composer can render. */
-  upload(request: MediaUploadRequest): Promise<BlobDescriptor>;
+  upload(request: MediaUploadRequest): Promise<UploadedMedia>;
 
   /**
    * Open a native picker and store everything chosen. Resolves empty when the
    * user cancels.
    */
-  pickAndUpload(): Promise<BlobDescriptor[]>;
+  pickAndUpload(options?: MediaPickOptions): Promise<UploadedMedia[]>;
 }
 
 /**
@@ -113,6 +145,15 @@ export interface MediaUploader {
  * All of it already lives in Rust (`src-tauri/src/commands/media.rs`): MIME
  * sniffing, HEIC/video transcode, sanitisation, and the authenticated upload.
  * This is a shape adapter, not a reimplementation.
+ *
+ * It ignores {@link MediaUploadRequest.channelId} and so never encrypts.
+ * Deliberate, and narrower than it sounds: the Rust pipeline sniffs and
+ * transcodes by MIME and would reject an opaque ciphertext outright, and a
+ * Blossom blob is authenticated, operator-removable and *not* on the permaweb —
+ * the irreversibility that makes encryption mandatory for the store node
+ * (ADR 0002) does not apply here. A keyed channel on the relay transport
+ * therefore still posts attachments in the clear to its own community's relay;
+ * that is the pre-#17 status quo, and it goes away with Blossom itself.
  */
 export const relayMediaUploader: MediaUploader = {
   quote: () =>
@@ -155,11 +196,13 @@ export function quoteMediaUpload(): Promise<MediaUploadQuote> {
 /** See {@link MediaUploader.upload}. */
 export function uploadMediaThroughSeam(
   request: MediaUploadRequest,
-): Promise<BlobDescriptor> {
+): Promise<UploadedMedia> {
   return activeUploader.upload(request);
 }
 
 /** See {@link MediaUploader.pickAndUpload}. */
-export function pickAndUploadThroughSeam(): Promise<BlobDescriptor[]> {
-  return activeUploader.pickAndUpload();
+export function pickAndUploadThroughSeam(
+  options?: MediaPickOptions,
+): Promise<UploadedMedia[]> {
+  return activeUploader.pickAndUpload(options);
 }
