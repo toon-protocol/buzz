@@ -1,0 +1,124 @@
+{
+  "_schemaNote": "Stage-A capture (gate epic toon-protocol/toon-meta#210 ladder, entered via toon-protocol/toon-meta#257). Mirrors the org convention from relay#77 / store#59 / toon#120 et al: flat top-level `correctness`/`speed`/`performance`/`regressionTolerancePercent` keys are the machine-read contract for the LATER freeze+guard slice (stage B) — nothing consumes them yet in this repo; this file only captures what exists. The richer sections layered on top are the human-readable capture.",
+  "schemaVersion": 1,
+  "repo": "buzz",
+  "capturedAt": "2026-07-31",
+  "capturedFromCommit": "4d47aa83455a9fd024121a596154cd311dca1d76",
+  "capturedFrom": {
+    "commit": "4d47aa8",
+    "branch": "main",
+    "ciWorkflow": ".github/workflows/ci.yml",
+    "note": "toon-protocol/buzz is a fork of block/buzz. At capture time the fork has ZERO Actions run history of its own (gh run list is empty) — every CI number below is therefore either measured locally against this commit or sampled from the latest green upstream block/buzz main run, and is labeled as such. The capture working tree also contained the docs-only commit d0a4391 (PR #8, CONTEXT.md + 3 ADRs — no code/CI-affecting paths), which does not affect any measured number."
+  },
+  "regressionTolerancePercent": 30,
+  "method": [
+    "correctness: each gate command was run locally against main@4d47aa8 with the repo's",
+    "hermit-pinned toolchain (node 24.15.0, pnpm 11.4.0, just 1.46.0) and rust 1.95.0",
+    "(rust-toolchain.toml). Rust compile-level checks (clippy, test-unit) were run inside the",
+    ".sandcastle agent image (the host lacked pkg-config/libssl-dev; the image is the",
+    "environment the factory gate actually runs in, so it is the representative measurement).",
+    "speed: local wall-clock of the same runs. Rust numbers are COLD-compile (fresh target/",
+    "in the sandbox); warm iteration is far cheaper.",
+    "performance: fork has no Actions history, so runner-minutes are sampled from upstream",
+    "block/buzz main run 30680360633 (2026-08-01, green) as a like-for-like proxy —",
+    "same workflows, same commit lineage, GitHub-hosted ubuntu-latest."
+  ],
+  "correctness": {
+    "rustFmtViolations": 0,
+    "clippyWarnings": 0,
+    "rustUnitTestFailures": 0,
+    "desktopBiomeErrors": 0,
+    "desktopTestFailures": 0,
+    "desktopTypecheckErrors": 0,
+    "webBiomeErrors": 0,
+    "webTypecheckErrors": 0
+  },
+  "speed": {
+    "gateWallClockSeconds": 395
+  },
+  "performance": {
+    "runnerMinutes": null,
+    "dockerImageSizeBytes": 3970000000,
+    "pnpmCacheHitObserved": null
+  },
+  "gateShape": {
+    "taskRunner": "just (Justfile is the single de-facto gate driver; ci.yml calls just targets)",
+    "rustToolchain": "1.95.0 (rust-toolchain.toml, profile default)",
+    "packageManager": "pnpm@11.4.0 (package.json packageManager + hermit pin)",
+    "hermitPins": { "node": "24.15.0", "pnpm": "11.4.0", "just": "1.46.0", "biome": "2.4.7", "cargo-nextest (ci.yml)": "0.9.136", "flutter": "3.41.7" },
+    "workspaces": {
+      "rust": "26-member cargo workspace under crates/ + examples/countdown-bot (desktop/src-tauri is EXCLUDED from the workspace)",
+      "js": "pnpm workspace: desktop, web, admin-web"
+    },
+    "commands": {
+      "rustFmt": "just fmt-check",
+      "tauriRustFmt": "just desktop-tauri-fmt-check",
+      "rustLint": "just clippy  (cargo clippy --workspace --all-targets -- -D warnings)",
+      "rustTest": "just test-unit  (cargo nextest: buzz-core/buzz-auth --lib, buzz-cli, buzz-db --lib, buzz-conformance, buzz-push-gateway — the infra-free unit set)",
+      "desktopLint": "just desktop-check  (biome check + file-size + px-text + pubkey-truncation guards)",
+      "desktopTest": "just desktop-test  (node --test over desktop/src/**/*.test.mjs)",
+      "desktopBuild": "just desktop-build  (tsc && vite build — doubles as the desktop typecheck)",
+      "webLint": "just web-check  (biome check + file-size + pubkey-truncation guards)",
+      "webBuild": "just web-build  (tsc && vite build — doubles as the web typecheck)"
+    },
+    "ciWiring": "Upstream ci.yml gates via paths-filter: rust-lint (fmt-check + desktop-tauri-fmt-check + clippy), unit-tests (test-unit via nextest 0.9.136 + mold), desktop-core (desktop-check/test/build + tauri clippy/check/test), web (web-check + web-build), mobile (dart format + flutter analyze/test + android build), security (cargo-deny), desktop smoke/integration e2e (Playwright, sharded), backend-integration + relay-e2e (Postgres/Redis), server-cross-compile (musl x2), windows-rust, desktop-build-macos. The agent-gate subset above is the infra-free intersection an agent sandbox can honestly run."
+  },
+  "gateCorrectness": {
+    "description": "Violation counts against a clean checkout of main@4d47aa8. buzz enters the ladder with ZERO measured debt on every check in the agent gate — there is nothing to freeze; stage B can guard at zero.",
+    "rustFmt": { "command": "just fmt-check", "violations": 0, "localSeconds": 3.4 },
+    "clippy": { "command": "just clippy", "errors": 0, "warnings": 0, "note": "PASS measured inside the sandcastle:buzz agent image (exit 0, -D warnings); see gateSpeed for cold-compile cost" },
+    "rustUnit": { "command": "just test-unit", "failures": 0, "note": "PASS inside the agent image via cargo-nextest 0.9.136 (exit 0; final suite 15 passed / 6 skipped — skips are the #[ignore]d Postgres-backed set, by design)" },
+    "desktopCheck": { "command": "just desktop-check", "errors": 0, "localSeconds": 4.9 },
+    "desktopTest": { "command": "just desktop-test", "failures": 0, "localSeconds": 20.1 },
+    "desktopTypecheck": { "command": "just desktop-typecheck", "errors": 0, "localSeconds": 13.0 },
+    "webCheck": { "command": "just web-check", "errors": 0, "localSeconds": 3.8 },
+    "webTypecheck": { "command": "just web-typecheck", "errors": 0, "localSeconds": 2.4 },
+    "pnpmInstallFrozenSeconds": 11.2
+  },
+  "gateSpeed": {
+    "description": "Local capture environment: WSL2, cold Rust target/ inside the agent image for clippy/test-unit; hermit toolchain on the host for the JS side. No fork CI history exists to sample.",
+    "unit": "seconds",
+    "local": {
+      "rustFmtSeconds": 3.4,
+      "tauriRustFmtSeconds": 2.1,
+      "clippyColdSeconds": 202,
+      "testUnitSeconds": 121,
+      "jsSideTotalSeconds": 55,
+      "note": "clippy/test-unit measured INSIDE the sandcastle:buzz agent image against a bind-mounted worktree with a cold target/ (real 3m21.6s / 2m0.6s; ~5x core parallelism). gateWallClockSeconds (395) = fmt + tauri-fmt + clippy-cold + test-unit + pnpm install + JS-side checks run sequentially — the honest worst-case first-iteration cost of the full agent gate; warm iterations are far cheaper."
+    },
+    "upstreamCiSample": {
+      "note": "block/buzz main run 30680360633 (green, 2026-08-01), Swatinem/rust-cache warm — the realistic CI-side cost of the same checks",
+      "rustLintJobSeconds": 172,
+      "unitTestsJobSeconds": 231,
+      "desktopCoreJobSeconds": 663,
+      "webJobSeconds": 33,
+      "mobileJobSeconds": 589,
+      "wholeWorkflowWallClockSeconds": 1190
+    }
+  },
+  "gatePerformance": {
+    "description": "toon-protocol/buzz is PUBLIC — GitHub-hosted Actions minutes are unmetered. No fork runs exist yet, so runnerMinutes stays null until the first representative run of the agent gate on this fork; the guard slice (stage B) treats null as record-only.",
+    "dockerImageSize": { "status": "measured at scaffold time", "imageTag": "sandcastle:buzz", "sizeBytes": 3970000000, "note": "`docker images` reports 3.97GB after the first local build; node:24-bookworm + the rustup 1.95.0 default-profile toolchain dominates. Roughly 2x the org's pnpm-only images (~2.07GB)." }
+  },
+  "outOfScope": {
+    "description": "Explicitly NOT part of the factory agent gate (no silent rubber stamps — these are excluded by design and still covered by upstream ci.yml on every PR):",
+    "items": [
+      "Flutter/mobile (mobile/**): flutter 3.41.7 + Android SDK not in the agent image; the mobile CI job and mobile-release-candidate pipeline stay upstream-only.",
+      "desktop/src-tauri compile-level checks (desktop-tauri-clippy/check/test): excluded from the cargo workspace; need GTK/WebKit system libraries + generated sidecar stubs. Only its rustfmt check (just desktop-tauri-fmt-check) is in the agent gate.",
+      "Playwright e2e (desktop smoke/integration, web e2e, relay e2e): browser + docker-compose service dependencies.",
+      "Postgres/Redis-backed integration tests (just test-integration, backend-integration job): live infra.",
+      "cargo-deny (security job): stays in upstream CI; not re-run per agent iteration.",
+      "server-cross-compile, windows-rust, desktop-build-macos, signing/canary/release/helm workflows: platform/secret-bound, untouched by the factory (KEEP rule).",
+      "admin-web: pre-existing gap — upstream ci.yml has NO admin-web job (its check/test scripts exist but nothing gates them); the agent gate mirrors CI and does not add it. Candidate for a later ratchet slice."
+    ]
+  },
+  "environment": {
+    "node": "v24.15.0 (hermit pin)",
+    "pnpm": "11.4.0",
+    "rust": "1.95.0",
+    "just": "1.46.0",
+    "cargoNextest": "0.9.136",
+    "localHost": "WSL2 (Linux 6.6), docker 29",
+    "ciRunner": "ubuntu-latest (GitHub-hosted; fork is public — minutes unmetered)"
+  }
+}
