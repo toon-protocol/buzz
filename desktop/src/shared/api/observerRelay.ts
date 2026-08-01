@@ -2,6 +2,7 @@ import { buildObserverControlEvent } from "@/shared/api/tauriObserver";
 import type { RelayEvent } from "@/shared/api/types";
 import { KIND_AGENT_OBSERVER_FRAME } from "@/shared/constants/kinds";
 import { publishEvent } from "@/shared/api/eventTransport";
+import { subscribeLiveEvents } from "./eventTransport";
 import { relayClient } from "./relayClient";
 
 // How far back (in seconds) the live subscription looks on connect/reconnect.
@@ -16,7 +17,7 @@ export function subscribeToAgentObserverFrames(
   ownerPubkey: string,
   onEvent: (event: RelayEvent) => void,
 ) {
-  return relayClient.subscribeLive(
+  return subscribeLiveEvents(
     {
       kinds: [KIND_AGENT_OBSERVER_FRAME],
       "#p": [ownerPubkey],

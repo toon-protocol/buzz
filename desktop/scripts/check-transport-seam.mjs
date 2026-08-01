@@ -11,6 +11,16 @@ import { fileURLToPath } from "node:url";
  * wire-level write verbs, so nothing but the seam's own implementation may
  * call them: a call site that reaches for `relayClient.publishEvent` is
  * hard-wiring itself to the relay again.
+ *
+ * `subscribeLive` is guarded for the same reason even though it reads rather
+ * than writes. A transport that carries writes to a network the app does not
+ * read back from is a dead letter box: on TOON the paid write lands on a
+ * different relay than the relay session is attached to, so a call site that
+ * subscribes through `relayClient` would silently never see its own message.
+ * The narrower relay-shaped read verbs (`fetchChannelHistory`,
+ * `subscribeToChannel`, the aux backfills) are NOT guarded yet — history
+ * paging still goes to buzz-relay's server-assembled window, which a plain
+ * NIP-01 REQ cannot reproduce.
  */
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -21,15 +31,24 @@ const SCRIPT_PATH = "desktop/scripts/check-transport-seam.mjs";
 const SCAN_ROOT = "src";
 const EXTENSIONS = new Set([".ts", ".tsx"]);
 
-// The relay session's write verbs, reachable only through the seam's
+// The relay session's seamed verbs, reachable only through the seam's
 // implementation. `ensureConnected` is here because a pre-publish connect is
-// part of writing, not reading.
+// part of writing, not reading; `subscribeLive` because a write the app cannot
+// read back has not arrived anywhere useful.
 const RELAY_WRITE_CALL_RE =
-  /\brelayClient\.(publishEvent|publishEphemeralEvent|ensureConnected|isWritable)\s*\(/;
+  /\brelayClient\.(publishEvent|publishEphemeralEvent|ensureConnected|isWritable|subscribeLive)\s*\(/;
 
 // Only the seam's relay implementation may drive those verbs. Tests are
 // skipped: mocking the delegate is how the seam's wiring is asserted.
-const ALLOWED_FILES = new Set(["src/shared/api/relayEventTransport.ts"]);
+const ALLOWED_FILES = new Set([
+  "src/shared/api/relayEventTransport.ts",
+  // `ReadStateManager` is constructed with a `RelayClient` and reads through
+  // it (`fetchEvents` + `subscribeLive`); it issues none of the write verbs.
+  // Moving it onto the seam means replacing that constructor dependency with
+  // a narrower one, the same per-instance form `readOnlyRelayClient` needs —
+  // see the note in `eventTransport.ts`.
+  "src/features/channels/readState/readStateManager.ts",
+]);
 
 async function walkFiles(directory) {
   const entries = await fs.readdir(directory, { withFileTypes: true });

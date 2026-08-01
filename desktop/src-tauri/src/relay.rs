@@ -16,7 +16,7 @@ const DEFAULT_RELAY_WS_URL: &str = "ws://localhost:3000";
 // classifier keys on. Extracted to a const so a test can pin that contract.
 const MALFORMED_RESPONSE_MESSAGE: &str = "relay returned malformed response: not valid JSON";
 
-fn configured_env_var(name: &str) -> Option<String> {
+pub(crate) fn configured_env_var(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
         .map(|value| value.trim().to_string())
@@ -28,7 +28,6 @@ pub fn relay_ws_url() -> String {
         .or_else(|| option_env!("BUZZ_DESKTOP_BUILD_RELAY_URL").map(str::to_string))
         .unwrap_or_else(|| DEFAULT_RELAY_WS_URL.to_string())
 }
-
 /// Read the workspace relay URL override, if set. Returns `None` when no
 /// override is active or when the mutex is poisoned (best-effort).
 fn workspace_relay_override(state: &AppState) -> Option<String> {

@@ -279,6 +279,11 @@ export function isTransactionStillConnecting(
  * must return a cancellation handle (like `window.setTimeout`) so the timer
  * can be cleared when the fetch settles before the deadline.
  *
+ * The handle is typed off `window.setTimeout`, not bare `setTimeout`: the TOON
+ * client's dependency tree drags `@types/node` into the global scope, which
+ * retypes bare `setTimeout` as returning a `NodeJS.Timeout`. This is browser
+ * code, so it says so.
+ *
  * Any fetch error or timeout → `{ action: "show-profile" }` (never strands
  * onboarding).
  */
@@ -288,9 +293,9 @@ export async function resolveProfileCheckAction(
   scheduleTimeout: (
     fn: () => void,
     ms: number,
-  ) => ReturnType<typeof setTimeout> = (fn, ms) => window.setTimeout(fn, ms),
+  ) => ReturnType<Window["setTimeout"]> = (fn, ms) => window.setTimeout(fn, ms),
 ): Promise<ProfileCheckAction> {
-  let timerId: ReturnType<typeof setTimeout> | undefined;
+  let timerId: ReturnType<Window["setTimeout"]> | undefined;
   try {
     const profile = await Promise.race([
       fetchProfile(),

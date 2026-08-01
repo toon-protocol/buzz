@@ -9,6 +9,7 @@ import {
   isThreadReply,
 } from "@/features/messages/lib/threading";
 import { shouldNotifyForEvent } from "@/features/notifications/lib/shouldNotify";
+import { subscribeLiveEvents } from "@/shared/api/eventTransport";
 import { relayClient } from "@/shared/api/relayClient";
 import {
   CHANNEL_EVENT_KINDS,
@@ -382,7 +383,9 @@ export function useLiveChannelUpdates(
         .filter((channelId) => !activeSubs.has(channelId))
         .map(async (channelId) => {
           try {
-            const dispose = await relayClient.subscribeLive(
+            // Through the transport seam, not the relay session: the tail of a
+            // channel has to come from whichever network the writes went to.
+            const dispose = await subscribeLiveEvents(
               {
                 kinds: [...CHANNEL_EVENT_KINDS],
                 "#h": [channelId],

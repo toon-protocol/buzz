@@ -3,6 +3,7 @@ import type {
   PublishFailureMessages,
 } from "@/shared/api/eventTransport";
 import { relayClient } from "@/shared/api/relayClient";
+import type { RelaySubscriptionFilter } from "@/shared/api/relayClientShared";
 import type { RelayClient } from "@/shared/api/relayClientSession";
 import type { RelayEvent } from "@/shared/api/types";
 
@@ -40,6 +41,13 @@ export class RelayEventTransport implements EventTransport {
 
   publishEphemeral(event: RelayEvent): Promise<void> {
     return this.client.publishEphemeralEvent(event);
+  }
+
+  subscribeLive(
+    filter: RelaySubscriptionFilter,
+    onEvent: (event: RelayEvent) => void,
+  ): Promise<() => Promise<void>> {
+    return this.client.subscribeLive(filter, onEvent);
   }
 }
 

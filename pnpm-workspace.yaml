@@ -3,7 +3,20 @@ packages:
   - "web"
   - "admin-web"
 allowBuilds:
+  # Native accelerations pulled in transitively by @toon-protocol/client's
+  # settlement stack. Every one of them ships a pure-JS fallback that is used
+  # when the addon is absent, and none is on a hot path here — the desktop app
+  # signs a handful of balance proofs, it does not run a validator. Left
+  # unbuilt so a checkout needs no toolchain and CI cannot fail on node-gyp.
+  bigint-buffer: false
+  bufferutil: false
   esbuild: true
+  keccak: false
+  secp256k1: false
+  utf-8-validate: false
+minimumReleaseAgeExclude:
+  - '@toon-protocol/client@0.25.1'
+  - '@toon-protocol/core@3.1.4'
 overrides:
   # Force a single copy of the dismissable-layer. Radix packages otherwise
   # resolve different versions (react-menu pulled 1.1.11, react-dialog 1.1.15),

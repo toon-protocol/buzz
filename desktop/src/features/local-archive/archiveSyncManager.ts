@@ -1,4 +1,4 @@
-import { relayClient as defaultRelayClient } from "@/shared/api/relayClient";
+import { subscribeLiveEvents } from "@/shared/api/eventTransport";
 import type { RelaySubscriptionFilter } from "@/shared/api/relayClientShared";
 import type { RelayEvent } from "@/shared/api/types";
 import {
@@ -18,12 +18,15 @@ const FLUSH_IDLE_MS = 2_000;
 
 /** Dependency injection interface — production uses module singletons; tests inject fakes. */
 export interface ArchiveSyncDeps {
-  relayClient: {
-    subscribeLive: (
-      filter: RelaySubscriptionFilter,
-      onEvent: (event: RelayEvent) => void,
-    ) => Promise<() => Promise<void>>;
-  };
+  /**
+   * Live event source. Named for what it does rather than for the relay,
+   * because it defaults to the transport seam: the archive follows whichever
+   * network the app is on.
+   */
+  subscribeLive: (
+    filter: RelaySubscriptionFilter,
+    onEvent: (event: RelayEvent) => void,
+  ) => Promise<() => Promise<void>>;
   listSaveSubscriptions: () => Promise<SaveSubscription[]>;
   archiveEvents: (
     candidates: Array<{
@@ -103,7 +106,7 @@ export class ArchiveSyncManager {
 
   constructor(deps?: ArchiveSyncDeps) {
     this.deps = {
-      relayClient: deps?.relayClient ?? defaultRelayClient,
+      subscribeLive: deps?.subscribeLive ?? subscribeLiveEvents,
       listSaveSubscriptions:
         deps?.listSaveSubscriptions ?? defaultListSaveSubscriptions,
       archiveEvents: deps?.archiveEvents ?? defaultArchiveEvents,
@@ -234,12 +237,9 @@ export class ArchiveSyncManager {
 
       let dispose: (() => Promise<void>) | undefined;
       try {
-        dispose = await this.deps.relayClient.subscribeLive(
-          filter,
-          (event: RelayEvent) => {
-            this.enqueue(event, scopeType, scopeValue);
-          },
-        );
+        dispose = await this.deps.subscribeLive(filter, (event: RelayEvent) => {
+          this.enqueue(event, scopeType, scopeValue);
+        });
       } catch (err) {
         console.warn(
           `[archiveSyncManager] subscribeLive failed for ${scopeKey(scopeType, scopeValue)}:`,
