@@ -31,6 +31,8 @@ import type {
   SetChannelTopicInput,
   UpdateChannelInput,
 } from "@/shared/api/types";
+import { rotateChannelKeyForRemoval } from "@/shared/api/channelKeyRotation";
+import { hasChannelKey } from "@/shared/api/channelKeyStore";
 import {
   grantChannelKeyToMembers,
   provisionPrivateChannel,
@@ -533,6 +535,69 @@ export function useDeleteChannelMutation(channelId: string | null) {
   });
 }
 
+/**
+ * Rotate an encrypted channel's key after someone is removed from it (buzz#18).
+ *
+ * Awaited, unlike the add-member gift wraps. Removing a member is a rare,
+ * deliberate act whose whole point is that the person can no longer read the
+ * channel, and that is not true until the new key has reached the survivors
+ * and the new epoch is on the wire. A spinner for the length of those writes
+ * is the honest rendering of what the user asked for; returning early would
+ * report "removed" while the removal had not happened.
+ *
+ * The roster is re-read after the removal rather than taken from the query
+ * cache, which may still list the member being removed — wrapping the new key
+ * to them would undo the rotation in the same breath as performing it.
+ *
+ * An unencrypted channel — every public one, and every private one nobody has
+ * keyed — costs nothing here: `hasChannelKey` is a synchronous local lookup
+ * and there is no key to rotate, so the removal is only the roster change it
+ * has always been.
+ */
+async function rotateAfterRemoval(
+  channelId: string,
+  removed: string,
+): Promise<void> {
+  if (!hasChannelKey(channelId)) return;
+
+  try {
+    const remaining = await getChannelMembers(channelId);
+    const outcome = await rotateChannelKeyForRemoval({
+      channelId,
+      removed: [removed],
+      remaining: remaining.map((member) => member.pubkey),
+    });
+
+    if (!outcome.rotated) {
+      console.warn(
+        `[channel-keys] ${channelId} was not rotated after removing ${removed}: ${outcome.reason}`,
+      );
+      return;
+    }
+
+    outcome.published.catch((error) => {
+      console.warn(
+        `[channel-keys] ${channelId}'s rotated admin list did not reach the relay`,
+        error,
+      );
+    });
+    for (const skip of outcome.skipped) {
+      console.warn(
+        `[channel-keys] the rotated key did not reach ${skip.pubkey}: ${skip.reason}`,
+      );
+    }
+  } catch (error) {
+    // The member is already off the roster; failing the mutation here would
+    // report a removal that did happen as one that did not. The channel stays
+    // on its old epoch, which is visible in channel settings, and removing
+    // anyone else rotates again.
+    console.warn(
+      `[channel-keys] could not rotate ${channelId} after removing ${removed}`,
+      error,
+    );
+  }
+}
+
 export function useAddChannelMembersMutation(channelId: string | null) {
   const queryClient = useQueryClient();
 
@@ -599,6 +664,7 @@ export function useRemoveChannelMemberMutation(channelId: string | null) {
       }
 
       await removeChannelMember(channelId, pubkey);
+      await rotateAfterRemoval(channelId, pubkey);
     },
     onSettled: async () => {
       await Promise.all([

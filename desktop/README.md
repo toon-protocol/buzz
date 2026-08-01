@@ -159,13 +159,15 @@ TOON, and a third transport inherits it without implementing anything.
 | File | Role |
 | --- | --- |
 | `shared/api/channelEncryption.ts` | NIP-44 v2 primitives, key parsing/format, key ids |
-| `shared/api/channelKeyStore.ts` | Which keys this client holds, across restarts |
+| `shared/api/channelKeyStore.ts` | Which keys this client holds, across restarts — a ring per channel |
 | `shared/api/channelMessageCrypto.ts` | Event-level seal/open and the wire layout |
 | `shared/api/channelAdminList.ts` | The signed admin list: build, parse, validate the chain |
 | `shared/api/channelAdminListStore.ts` | Admin lists this client has seen, and their resolved state |
 | `shared/api/channelKeyDelivery.ts` | NIP-59 gift wrap / unwrap of a channel key |
 | `shared/api/channelMembership.ts` | The write verbs: publish the admin list, announce the key epoch, hand out the key |
 | `shared/api/channelKeyInbox.ts` | Watches for wraps and unlocks channels |
+| `shared/api/channelKeyRotation.ts` | Rotation on removal: new key, wraps to survivors, new epoch |
+| `shared/api/channelKeyEpoch.ts` | Which held key a channel sends with, decided by its admin list |
 | `features/channels/ui/ChannelEncryptionSettings.tsx` | The admin list, and the manual paste-the-key field |
 
 On the wire an encrypted message is an ordinary `kind:9` with its
@@ -225,6 +227,53 @@ held until it does.
 Both are ordinary writes through the transport seam, so on TOON both are paid:
 one claim for the admin list, one per recipient for the wraps.
 
+#### Rotation on removal (buzz#18)
+
+Removing someone from an encrypted channel is not a roster edit. Membership IS
+key possession, so a removal that leaves the key alone removes nothing.
+`channelKeyRotation.rotateChannelKeyForRemoval` is the actual removal, and it
+publishes in a fixed order:
+
+```
+1. gift-wrap a fresh key to every REMAINING member        (N paid writes)
+2. publish the admin list: epoch + 1, new keyId, member gone   (1 write)
+3. only then switch this client's sending key
+```
+
+**Wraps first**, because a recipient validates a wrap against the admin list
+*they* currently hold — the pre-rotation one, in which the sender is still an
+admin. Publishing the list first would open a window where the channel names an
+epoch whose key nobody has been sent, which every survivor reads as "I have been
+removed".
+
+**Sending switches last**, and receivers never have to switch at all: every
+sealed message names its key id, and a survivor's ring opens both epochs. So the
+only order that can hurt is sealing under a key the channel has not announced,
+and that is the one this rule forbids. Nothing is ever written in the clear —
+the old key stays the sending key right up to the swap.
+
+A survivor's client makes the same move from the other side.
+`channelKeyInbox.ts` adopts an arriving key into the ring **for reading only**,
+and `channelKeyEpoch.ts` promotes it to the sending position when the validated
+admin list names its `keyId`. The two events can land in either order; whichever
+is second triggers the promotion.
+
+Removing an admin is the same call — the new list simply omits them, so the
+demotion and the epoch bump are one signed event and no client observes half of
+it. The channel's *creator* is the exception: the chain is rooted in them, so
+removing them rotates the key (they lose the content like anyone else) while
+their name stays on the list. Re-rooting a channel is a different feature.
+
+**The removed member keeps their history.** They hold the old key and everything
+sealed under it stays readable to them forever — ADR 0001's Slack-export
+semantics, and the only honest position against an open relay where they could
+have archived every ciphertext already. Rotation protects the future.
+
+Failure is partial, never silent. Wraps that do not land are reported per
+recipient and leave the channel on its old epoch; a list that does not publish
+leaves this client sending under a key the others hold but have not promoted, so
+everyone still reads everyone. Removing anyone else rotates again.
+
 **The manual paste field stays** as the recovery path — channels created before
 this feature have no admin list, a failed paid write sends nothing, and a
 client whose keyring was locked at launch never started its inbox. For scripted
@@ -234,9 +283,21 @@ or two-box setups there is an environment variable:
 | --- | --- |
 | `BUZZ_CHANNEL_KEYS` | `channelId=hexkey` pairs, comma- or newline-separated. Overrides stored keys |
 
-Keys persist in `localStorage` under `buzz-channel-keys.v1`, which is the
+Keys persist in `localStorage` under `buzz-channel-keys.v2`, which is the
 honest statement of the threat model: this protects a channel from the relay
-and from non-members, not from someone with the user's disk.
+and from non-members, not from someone with the user's disk. The record is
+`{ version: 2, channels: { <channelId>: [<hexKey>, ...] } }` — **index 0 is the
+key the channel sends with**, the rest are held so history from earlier epochs
+still opens. A pre-#18 `buzz-channel-keys.v1` record (one key per channel) is
+migrated to one-key rings on first read and then deleted; keeping it would leave
+a copy of every key that "Forget key" and rotation both promise to have moved
+on from. Rings are capped at 16 epochs.
+
+Rust holds one key per channel (`src-tauri/src/channel_keys.rs`) and only ever
+seals, so `channelKeySync.ts` pushes the *sending* key of each channel and
+nothing else. `sync_channel_keys` replaces rather than merges, so a rotation
+reaches the Rust write path as an ordinary re-sync — no new command, and the
+superseded key is gone from that side the moment the ring's front moves.
 
 What is not encrypted yet:
 
@@ -247,10 +308,11 @@ What is not encrypted yet:
 
 What key management does not do yet:
 
-- **Rotation on removal** (buzz#18). Removing a member takes their roster row
-  away and leaves them holding a working key. The admin list already carries
-  the `keyId` and `epoch` a rotation would bump, and the chain refuses an epoch
-  that moves backwards, so the wire format is ready and the act is not.
+- **Rotation on anything but removal.** Leaving a channel voluntarily, and a
+  key an admin believes has leaked, both still need the removal path run by
+  hand. There is no scheduled or periodic rotation.
+- **Re-rooting a channel**, so its creator can be removed from the admin list
+  rather than only from its content.
 - **Unwrapping in Rust.** The renderer reads the user's secret key over
   `get_nsec` to do the two NIP-44 layers (`shared/api/identitySecretKey.ts` —
   the single exception to "the key stays in Rust"). A `sign_event`-style

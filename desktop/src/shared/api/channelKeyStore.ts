@@ -9,11 +9,8 @@ import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota"
 /**
  * Where this client's channel keys live between launches.
  *
- * Key *delivery* is out of scope for now — a human copies the hex out of one
- * client's channel settings and pastes it into another's, or an operator sets
- * `BUZZ_CHANNEL_KEYS` before launch. What is in scope is that the key survives
- * a restart: history on TOON is ciphertext held by an open relay, so a client
- * that forgets its key does not lose "new messages", it loses the channel.
+ * History on TOON is ciphertext held by an open relay, so a client that
+ * forgets a key does not lose "new messages", it loses the channel.
  * Persistence is therefore a correctness requirement, not a convenience.
  *
  * Keys are held as bytes in a module-level cache and as hex in the backing
@@ -26,10 +23,51 @@ import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota"
  * relay and from non-members, not from someone with the user's disk. Moving
  * to the OS keychain is a change of backend behind {@link setChannelKeyStorage}
  * and nothing else.
+ *
+ * ## A ring per channel, not a key (buzz#18)
+ *
+ * Rotation on member removal mints a new key and leaves the old one valid for
+ * everything already written under it (ADR 0001: "removed members retain
+ * history they already had"). So a channel holds a *ring* of keys rather than
+ * one, and the ring is ordered: **index 0 is the sending key**, the rest are
+ * held for reading only.
+ *
+ * That ordering is the whole state model. There is no separate "current key
+ * id" field to fall out of sync with the ring's contents — a channel with any
+ * key has exactly one sending key, and it is the first one. Two operations
+ * move it: {@link adoptChannelKey} takes a newly delivered key in (behind the
+ * sending key by default, because a key is only *this channel's* key once the
+ * validated admin list says so — see `channelKeyEpoch.ts`), and
+ * {@link promoteChannelKey} moves a held key to the front when it does.
+ *
+ * ## v1 → v2
+ *
+ * v1 stored `{ channelId: hexKey }`. v2 stores
+ * `{ version: 2, channels: { channelId: [hexKey, ...] } }`. A v1 record is
+ * migrated on first read — its single key becomes a one-key ring — and then
+ * **deleted**. Deleting it loses the rollback path to a pre-#18 build, and
+ * that is the intended trade: leaving it behind would mean "Forget key" and a
+ * rotation both left the superseded bytes sitting in a record nothing ever
+ * rewrites, which is a worse promise to break than downgrade convenience.
  */
 
-/** Versioned so a future re-encoding can migrate rather than mis-read. */
-const STORAGE_KEY = "buzz-channel-keys.v1";
+/** Versioned so a re-encoding migrates rather than mis-reads. */
+const STORAGE_KEY = "buzz-channel-keys.v2";
+
+/** The pre-#18 record: one key per channel. Read once, migrated, removed. */
+const STORAGE_KEY_V1 = "buzz-channel-keys.v1";
+
+/**
+ * How many keys one channel may keep.
+ *
+ * A bound rather than unlimited history because the ring lives in
+ * `localStorage`, which the whole app shares and which
+ * `setLocalStorageItemWithRecovery` has to be able to fit. Sixteen epochs of a
+ * channel is a lot of removals; past that the oldest key is dropped and the
+ * messages sealed under it stop opening, which is the same outcome as never
+ * having been sent the key and renders the same way.
+ */
+const MAX_KEYS_PER_CHANNEL = 16;
 
 /**
  * The slice of `Storage` this module needs.
@@ -80,8 +118,11 @@ function defaultStorage(): ChannelKeyStorage {
   };
 }
 
+/** One channel's keys, sending key first. Never empty — the entry is removed. */
+type ChannelKeyRing = ChannelKey[];
+
 let storage: ChannelKeyStorage = defaultStorage();
-let cache: Map<string, ChannelKey> | null = null;
+let cache: Map<string, ChannelKeyRing> | null = null;
 const listeners = new Set<() => void>();
 
 /** Swap the backing store. For tests and for a future keychain backend. */
@@ -90,53 +131,115 @@ export function setChannelKeyStorage(next: ChannelKeyStorage | null): void {
   cache = null;
 }
 
-function readStore(): Map<string, ChannelKey> {
-  const loaded = new Map<string, ChannelKey>();
+function readRaw(key: string): unknown {
   let raw: string | null = null;
   try {
-    raw = storage.getItem(STORAGE_KEY);
+    raw = storage.getItem(key);
   } catch (error) {
     console.warn("[channel-keys] could not read stored keys", error);
-    return loaded;
+    return null;
   }
-  if (!raw) return loaded;
+  if (!raw) return null;
 
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    return JSON.parse(raw);
   } catch (error) {
     // A corrupted record is dropped rather than repaired: the only thing worse
     // than losing a key is decrypting with something that is not it.
     console.warn("[channel-keys] stored keys were not readable JSON", error);
-    return loaded;
+    return null;
   }
-  if (typeof parsed !== "object" || parsed === null) return loaded;
+}
 
+function sameKey(left: ChannelKey, right: ChannelKey): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+/** Parse a ring, dropping entries that are not 32 bytes of hex. */
+function parseRing(value: unknown): ChannelKeyRing {
+  if (!Array.isArray(value)) return [];
+  const ring: ChannelKeyRing = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") continue;
+    const key = parseChannelKey(entry);
+    if (key && !ring.some((held) => sameKey(held, key))) ring.push(key);
+  }
+  return ring.slice(0, MAX_KEYS_PER_CHANNEL);
+}
+
+/** The pre-#18 record, as one-key rings. Null when there is nothing to migrate. */
+function readV1(): Map<string, ChannelKeyRing> | null {
+  const parsed = readRaw(STORAGE_KEY_V1);
+  if (typeof parsed !== "object" || parsed === null) return null;
+
+  const loaded = new Map<string, ChannelKeyRing>();
   for (const [channelId, value] of Object.entries(
     parsed as Record<string, unknown>,
   )) {
     if (typeof value !== "string") continue;
     const key = parseChannelKey(value);
-    if (key) loaded.set(channelId, key);
+    if (key) loaded.set(channelId, [key]);
   }
   return loaded;
 }
 
-function ensureCache(): Map<string, ChannelKey> {
-  cache ??= readStore();
+function readStore(): {
+  rings: Map<string, ChannelKeyRing>;
+  migrated: boolean;
+} {
+  const parsed = readRaw(STORAGE_KEY);
+  if (typeof parsed === "object" && parsed !== null) {
+    const channels = (parsed as { channels?: unknown }).channels;
+    const rings = new Map<string, ChannelKeyRing>();
+    if (typeof channels === "object" && channels !== null) {
+      for (const [channelId, value] of Object.entries(
+        channels as Record<string, unknown>,
+      )) {
+        const ring = parseRing(value);
+        if (ring.length > 0) rings.set(channelId, ring);
+      }
+    }
+    return { rings, migrated: false };
+  }
+
+  const legacy = readV1();
+  if (legacy === null) return { rings: new Map(), migrated: false };
+  return { rings: legacy, migrated: true };
+}
+
+function ensureCache(): Map<string, ChannelKeyRing> {
+  if (cache === null) {
+    const { rings, migrated } = readStore();
+    cache = rings;
+    // Rewrite in the v2 shape immediately, so the migration is a one-off
+    // rather than something every launch redoes, and drop the v1 record with
+    // it — see the module doc on why the rollback path is not kept.
+    if (migrated) {
+      persist(cache);
+      try {
+        storage.removeItem(STORAGE_KEY_V1);
+      } catch (error) {
+        console.warn("[channel-keys] could not clear the v1 key store", error);
+      }
+    }
+  }
   return cache;
 }
 
-function persist(keys: Map<string, ChannelKey>): void {
-  const record: Record<string, string> = {};
-  for (const [channelId, key] of keys) {
-    record[channelId] = formatChannelKey(key);
+function persist(rings: Map<string, ChannelKeyRing>): void {
+  const channels: Record<string, string[]> = {};
+  for (const [channelId, ring] of rings) {
+    channels[channelId] = ring.map(formatChannelKey);
   }
   try {
-    if (Object.keys(record).length === 0) {
+    if (Object.keys(channels).length === 0) {
       storage.removeItem(STORAGE_KEY);
     } else {
-      storage.setItem(STORAGE_KEY, JSON.stringify(record));
+      storage.setItem(STORAGE_KEY, JSON.stringify({ version: 2, channels }));
     }
   } catch (error) {
     console.warn("[channel-keys] could not persist keys", error);
@@ -159,26 +262,127 @@ export function reloadChannelKeys(): void {
   notify();
 }
 
-/** The key for `channelId`, or null when this client is not a member. */
+/**
+ * The key `channelId` *sends* with, or null when this client is not a member.
+ *
+ * The front of the ring. A reader wanting the key a specific message was
+ * sealed under wants {@link findChannelKey} instead — after a rotation the two
+ * differ for exactly the history the rotation left behind.
+ */
 export function getChannelKey(channelId: string): ChannelKey | null {
-  return ensureCache().get(channelId) ?? null;
+  return ensureCache().get(channelId)?.[0] ?? null;
 }
 
-/** Whether this client can read `channelId`. */
+/** Every key held for `channelId`, sending key first. */
+export function getChannelKeys(channelId: string): readonly ChannelKey[] {
+  return ensureCache().get(channelId) ?? [];
+}
+
+/**
+ * The key named by `keyId`, or null when this client does not hold it.
+ *
+ * What the `["encrypted", "nip44-v2", <keyId>]` marker on every sealed message
+ * resolves to. Null is the ordinary answer for a message from an epoch this
+ * client was not in — including every post-rotation message for a removed
+ * member, which is the point of rotating.
+ */
+export function findChannelKey(
+  channelId: string,
+  keyId: string,
+): ChannelKey | null {
+  for (const key of getChannelKeys(channelId)) {
+    if (channelKeyId(key) === keyId) return key;
+  }
+  return null;
+}
+
+/** Whether this client can read `channelId` at all. */
 export function hasChannelKey(channelId: string): boolean {
   return ensureCache().has(channelId);
 }
 
-/** Store (or, with null, forget) the key for `channelId`. */
-export function setChannelKey(channelId: string, key: ChannelKey | null): void {
-  const keys = ensureCache();
-  if (key === null) {
-    if (!keys.delete(channelId)) return;
-  } else {
-    keys.set(channelId, key);
+/**
+ * Take a key into `channelId`'s ring. Returns whether anything changed.
+ *
+ * Held for *reading* by default, not for sending: a key that has just arrived
+ * in a gift wrap is not yet the epoch the channel agrees on, and a client that
+ * started sealing with it the moment it landed would be posting messages the
+ * other members cannot open (`channelKeyEpoch.ts` promotes it when the
+ * validated admin list names it). The exception is a channel with no key at
+ * all, where there is no ambiguity and nothing to be inconsistent with.
+ *
+ * A key already in the ring is left exactly where it is. That refusal is a
+ * downgrade defence: re-adopting a superseded key would otherwise move it back
+ * to the front and start sealing new messages under an epoch a removed member
+ * still holds.
+ */
+export function adoptChannelKey(
+  channelId: string,
+  key: ChannelKey,
+  options?: { makeCurrent?: boolean },
+): boolean {
+  const rings = ensureCache();
+  const ring = rings.get(channelId);
+
+  if (!ring) {
+    rings.set(channelId, [key]);
+    persist(rings);
+    notify();
+    return true;
   }
-  persist(keys);
+
+  if (ring.some((held) => sameKey(held, key))) return false;
+
+  ring.splice(options?.makeCurrent ? 0 : 1, 0, key);
+  if (ring.length > MAX_KEYS_PER_CHANNEL) ring.length = MAX_KEYS_PER_CHANNEL;
+  persist(rings);
   notify();
+  return true;
+}
+
+/**
+ * Make a held key the one `channelId` sends with. Returns whether it moved.
+ *
+ * False for a key this client does not hold — the caller has seen an admin
+ * list naming an epoch whose gift wrap has not arrived yet, which is ordinary
+ * and self-correcting: the wrap lands, and adopting it runs this again.
+ */
+export function promoteChannelKey(channelId: string, keyId: string): boolean {
+  const rings = ensureCache();
+  const ring = rings.get(channelId);
+  if (!ring) return false;
+
+  const index = ring.findIndex((key) => channelKeyId(key) === keyId);
+  if (index <= 0) return false;
+
+  const [key] = ring.splice(index, 1);
+  ring.unshift(key);
+  persist(rings);
+  notify();
+  return true;
+}
+
+/**
+ * Adopt `key` as `channelId`'s sending key, or with null forget the channel
+ * entirely — every epoch of it, not just the current one.
+ *
+ * The blunt verb, for the two places a human is the authority: pasting a key
+ * into channel settings, and "Forget key". Automatic delivery goes through
+ * {@link adoptChannelKey} instead, which does not presume the arriving key is
+ * the one to send with.
+ */
+export function setChannelKey(channelId: string, key: ChannelKey | null): void {
+  if (key === null) {
+    const rings = ensureCache();
+    if (!rings.delete(channelId)) return;
+    persist(rings);
+    notify();
+    return;
+  }
+
+  const keyId = channelKeyId(key);
+  if (adoptChannelKey(channelId, key, { makeCurrent: true })) return;
+  promoteChannelKey(channelId, keyId);
 }
 
 /** The channels this client holds a key for. */
@@ -187,19 +391,27 @@ export function encryptedChannelIds(): string[] {
 }
 
 /**
- * The full key map as hex: `{ channelId: hexKey }`.
+ * The *sending* key of every keyed channel, as hex: `{ channelId: hexKey }`.
  *
  * What `channelKeySync.ts` pushes to Rust's `sync_channel_keys` command so
  * Rust-built events (threaded replies, media messages, custom emoji, the
- * huddle STT pipeline — buzz#33) can seal against the same keys this store
- * holds. Same shape `persist` writes to `localStorage`, produced fresh from
- * the cache rather than reread from disk so it reflects whatever the caller
- * just changed.
+ * huddle STT pipeline — buzz#33) can seal against the same key
+ * `sendStreamMessage` would. Produced fresh from the cache rather than reread
+ * from disk so it reflects whatever the caller just changed.
+ *
+ * One key per channel, deliberately: Rust only *seals*, and sealing has
+ * exactly one right answer. The older epochs a rotation leaves behind matter
+ * only for opening history, which is the frontend's job
+ * (`channelMessageCrypto.ts`). Rotation therefore reaches Rust as a plain
+ * re-sync of a changed value — no new command, no shape change — and because
+ * `sync_channel_keys` replaces rather than merges, the superseded key is gone
+ * from the Rust side the moment the front of the ring moves.
  */
 export function channelKeyRecord(): Record<string, string> {
   const record: Record<string, string> = {};
-  for (const [channelId, key] of ensureCache()) {
-    record[channelId] = formatChannelKey(key);
+  for (const [channelId, ring] of ensureCache()) {
+    const current = ring[0];
+    if (current) record[channelId] = formatChannelKey(current);
   }
   return record;
 }
@@ -263,11 +475,16 @@ export function parseChannelKeyEnv(value: string | null | undefined): {
 }
 
 /**
- * Load `BUZZ_CHANNEL_KEYS` into the store, overwriting what is persisted.
+ * Load `BUZZ_CHANNEL_KEYS` into the store, overriding what each named channel
+ * sends with.
  *
  * The environment wins on purpose. It is set by whoever launched the process,
  * which makes it the more recent instruction, and a harness that cannot
  * override a stale saved key cannot be relied on to test anything.
+ *
+ * It overrides the *sending* key and keeps the rest of the ring: an operator
+ * pointing a client at one epoch of a channel is not asking it to forget the
+ * history it can already read.
  */
 export function seedChannelKeysFromEnv(
   env: Record<string, string | null | undefined>,
@@ -275,14 +492,11 @@ export function seedChannelKeysFromEnv(
   const { entries, warnings } = parseChannelKeyEnv(env.BUZZ_CHANNEL_KEYS);
   if (entries.length === 0) return warnings;
 
-  const keys = ensureCache();
   for (const entry of entries) {
-    keys.set(entry.channelId, entry.key);
+    setChannelKey(entry.channelId, entry.key);
     console.info(
       `[channel-keys] ${entry.channelId} keyed from the environment (key ${channelKeyId(entry.key)})`,
     );
   }
-  persist(keys);
-  notify();
   return warnings;
 }
