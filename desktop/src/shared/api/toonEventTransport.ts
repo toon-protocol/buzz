@@ -66,6 +66,11 @@ export class ToonEventTransport implements EventTransport {
     return this.writer.isWritable();
   }
 
+  /** See {@link ToonPaidWriter.setMnemonic}. */
+  setMnemonic(mnemonic: string): void {
+    this.writer.setMnemonic(mnemonic);
+  }
+
   async publish(
     event: RelayEvent,
     messages: PublishFailureMessages,

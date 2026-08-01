@@ -44,6 +44,7 @@ test("an empty environment resolves to the devnet defaults", () => {
   assert.equal(config.chain, TOON_DEVNET_DEFAULTS.chain);
   assert.equal(config.mnemonic, null);
   assert.equal(config.accountIndex, 0);
+  assert.equal(config.faucetUrl, TOON_DEVNET_DEFAULTS.faucetUrl);
 });
 
 test("every endpoint is overridable", () => {
@@ -55,6 +56,7 @@ test("every endpoint is overridable", () => {
     BUZZ_TOON_CHAIN_RPC_URL: "http://localhost:8545",
     BUZZ_TOON_TOKEN_NETWORK: "0xtn",
     BUZZ_TOON_PREFERRED_TOKEN: "0xusdc",
+    BUZZ_TOON_FAUCET_URL: "https://faucet.example",
   });
 
   assert.equal(config.proxyUrl, "https://edge.example/ilp");
@@ -64,6 +66,7 @@ test("every endpoint is overridable", () => {
   assert.equal(config.chainRpcUrl, "http://localhost:8545");
   assert.equal(config.tokenNetwork, "0xtn");
   assert.equal(config.preferredToken, "0xusdc");
+  assert.equal(config.faucetUrl, "https://faucet.example");
 });
 
 test("a blank override does not shadow the default", () => {

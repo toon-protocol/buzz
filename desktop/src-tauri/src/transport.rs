@@ -33,6 +33,11 @@ const TRANSPORT_ENV_KEYS: &[&str] = &[
     "BUZZ_TOON_CHAIN_RPC_URL",
     "BUZZ_TOON_TOKEN_NETWORK",
     "BUZZ_TOON_PREFERRED_TOKEN",
+    // Devnet faucet base URL — the onboarding wizard's fund step posts here
+    // (toon-meta#258). Config, not a constant, for the same reason every
+    // other TOON_* endpoint above is: the devnet redeploys independently of
+    // an app release.
+    "BUZZ_TOON_FAUCET_URL",
 ];
 
 /// The transport environment, with unset and blank keys omitted.
