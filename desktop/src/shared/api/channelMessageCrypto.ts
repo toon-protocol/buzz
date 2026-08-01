@@ -4,7 +4,11 @@ import {
   decryptChannelContent,
   encryptChannelContent,
 } from "@/shared/api/channelEncryption";
-import { getChannelKey } from "@/shared/api/channelKeyStore";
+import {
+  findChannelKey,
+  getChannelKey,
+  getChannelKeys,
+} from "@/shared/api/channelKeyStore";
 import type { RelayEvent } from "@/shared/api/types";
 
 /**
@@ -141,6 +145,35 @@ export function sealChannelContent(
   };
 }
 
+/**
+ * Open `payload` with whichever of `channelId`'s keys sealed it.
+ *
+ * The marker tag names the key, so after a rotation the right one is a lookup
+ * rather than a search: a client holding four epochs does one NIP-44 decrypt,
+ * not four (`channelKeyStore.findChannelKey`).
+ *
+ * The fallback — try the rest of the ring — exists for a message whose marker
+ * names a key id this client cannot resolve but whose bytes it may still hold:
+ * an event written by a client on a different key-id derivation, or a tag
+ * mangled in transit. Bounded by the ring (at most a handful) and reached only
+ * when the lookup already failed, so the common path stays one decrypt while a
+ * mislabelled message does not become permanently unreadable.
+ */
+function openWithHeldKeys(
+  channelId: string,
+  keyId: string,
+  payload: string,
+): string | null {
+  const named = keyId ? findChannelKey(channelId, keyId) : null;
+  if (named) return decryptChannelContent(payload, named);
+
+  for (const key of getChannelKeys(channelId)) {
+    const plaintext = decryptChannelContent(payload, key);
+    if (plaintext !== null) return plaintext;
+  }
+  return null;
+}
+
 function lockedEncryption(
   event: RelayEvent,
   scheme: string,
@@ -177,11 +210,12 @@ export function openChannelEvent(
   }
 
   const channelId = readChannelTag(event.tags);
-  const channelKey = key ?? (channelId ? getChannelKey(channelId) : null);
   const plaintext =
-    channelKey === null
-      ? null
-      : decryptChannelContent(event.content, channelKey);
+    key !== null
+      ? decryptChannelContent(event.content, key)
+      : channelId === null
+        ? null
+        : openWithHeldKeys(channelId, marker.keyId, event.content);
 
   if (plaintext === null) {
     return {

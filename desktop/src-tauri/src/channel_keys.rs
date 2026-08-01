@@ -16,7 +16,7 @@
 //! ## Key access: sync from the frontend, env as a fallback layer
 //!
 //! Rust has no UI of its own for pasting a channel key, and the source of
-//! truth — `buzz-channel-keys.v1` — lives in the webview's `localStorage`.
+//! truth — `buzz-channel-keys.v2` — lives in the webview's `localStorage`.
 //! The frontend's `channelKeySync.ts` pushes the full map through the
 //! `sync_channel_keys` Tauri command once at startup and again on every
 //! `subscribeToChannelKeys` notification, mirroring how
@@ -71,11 +71,18 @@ pub const NIP44_V2_SCHEME: &str = "nip44-v2";
 /// `channelMessageCrypto.ts`'s `ENCRYPTION_TAG`.
 pub const ENCRYPTION_TAG: &str = "encrypted";
 
-/// Channel keys synced from the frontend's `buzz-channel-keys.v1` store,
+/// Channel keys synced from the frontend's `buzz-channel-keys.v2` store,
 /// keyed by channel id. Process-global rather than an `AppState` field:
 /// nothing outside this module needs to reach it, the same reasoning
 /// `event_transport::bridge`'s `PENDING` map documents for its own
 /// process-wide state.
+///
+/// One key per channel, not the frontend's ring (buzz#18). This side only
+/// ever *seals*, and sealing has exactly one right answer: the epoch the
+/// channel currently sends under. The older keys a rotation leaves behind
+/// matter only for opening history, which stays the frontend's job — so
+/// `channelKeyRecord()` pushes the sending key and a rotation arrives here as
+/// an ordinary re-sync of a changed value.
 static CHANNEL_KEYS: LazyLock<Mutex<HashMap<String, ChannelKey>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -377,6 +384,36 @@ mod tests {
         sync_keys(second);
         assert!(get_channel_key("design").is_none());
         assert!(get_channel_key("engineering").is_some());
+
+        sync_keys(HashMap::new());
+    }
+
+    /// buzz#18: rotation reaches this side as a plain re-sync of one channel's
+    /// key. The frontend pushes only the *sending* key
+    /// (`channelKeyStore.channelKeyRecord`), so a Rust-built event written
+    /// after a rotation must seal under the new epoch and carry the new key id
+    /// in its marker tag — and the superseded key must be gone, because a
+    /// removed member still holds it.
+    #[test]
+    fn seal_for_channel_follows_a_rotation_to_the_new_epoch() {
+        let _guard = channel_keys_test_lock();
+        let rotated: ChannelKey = [0x7c; CHANNEL_KEY_BYTES];
+
+        let mut before = HashMap::new();
+        before.insert("engineering".to_string(), hex::encode(FIXED_KEY));
+        sync_keys(before);
+        let old = seal_for_channel("engineering", "before the removal");
+        assert_eq!(old.tag.unwrap()[2], FIXED_KEY_ID);
+
+        let mut after = HashMap::new();
+        after.insert("engineering".to_string(), hex::encode(rotated));
+        sync_keys(after);
+        let new = seal_for_channel("engineering", "after the removal");
+
+        assert_eq!(new.tag.unwrap()[2], channel_key_id(&rotated));
+        assert_eq!(open(&new.content, &rotated).unwrap(), "after the removal");
+        // The epoch the removed member holds no longer opens what we write.
+        assert!(open(&new.content, &FIXED_KEY).is_none());
 
         sync_keys(HashMap::new());
     }

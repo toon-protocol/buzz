@@ -20,6 +20,7 @@ import {
   installChannelKeyInbox,
   loadChannelKeysFromEnvironment,
 } from "@/shared/api/channelKeyBootstrap";
+import { installChannelKeyEpochSync } from "@/shared/api/channelKeyEpoch";
 import { installChannelKeySync } from "@/shared/api/channelKeySync";
 
 type E2eWindow = Window & {
@@ -133,6 +134,10 @@ async function bootstrap() {
   // BUZZ_CHANNEL_KEYS-provided keys and Rust-built writes can seal from the
   // very first message (buzz#33).
   installChannelKeySync();
+  // Before the inbox opens, so the first admin list to arrive can already
+  // promote a rotation key this client was sent in an earlier session
+  // (buzz#18). Local and synchronous — it reads two in-memory stores.
+  installChannelKeyEpochSync();
   await migrateLegacyCommunityStorageBeforeRender();
   renderApp();
   // After render, and deliberately not awaited: the gift-wrap inbox opens relay

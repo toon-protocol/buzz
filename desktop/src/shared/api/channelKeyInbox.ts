@@ -4,14 +4,14 @@ import {
   recordChannelAdminListEvent,
   subscribeToChannelAdminLists,
 } from "@/shared/api/channelAdminListStore";
-import { channelKeyId } from "@/shared/api/channelEncryption";
 import {
   acceptChannelKeyGrant,
   type ChannelKeyGrant,
   channelKeyWrapFilter,
   unwrapChannelKey,
 } from "@/shared/api/channelKeyDelivery";
-import { getChannelKey, setChannelKey } from "@/shared/api/channelKeyStore";
+import { reconcileChannelKeyEpochs } from "@/shared/api/channelKeyEpoch";
+import { adoptChannelKey, findChannelKey } from "@/shared/api/channelKeyStore";
 import { subscribeLiveEvents } from "@/shared/api/eventTransport";
 import type { RelaySubscriptionFilter } from "@/shared/api/relayClientShared";
 import type { RelayEvent } from "@/shared/api/types";
@@ -36,11 +36,21 @@ import type { RelayEvent } from "@/shared/api/types";
  *
  * ## Unlocking is one call
  *
- * `setChannelKey` — #12's store — and nothing else. Its listeners re-render
- * channel settings, and because every encrypted message carries the `keyId`
- * that sealed it, history that was rendering as locked placeholders opens on
- * the next read with no re-fetch and no special case here. The whole unlock
- * path this module is responsible for is that one line.
+ * `adoptChannelKey` — #12's store, widened to a ring by #18 — and nothing
+ * else. Its listeners re-render channel settings, and because every encrypted
+ * message carries the `keyId` that sealed it, history that was rendering as
+ * locked placeholders opens on the next read with no re-fetch and no special
+ * case here. The whole unlock path this module is responsible for is that one
+ * line.
+ *
+ * What the ring changes is *which* key the adopted one becomes. A first key is
+ * unambiguously the channel's key. A rotation key arrives while the channel is
+ * still agreeing on the previous epoch — the wraps are published before the
+ * admin list that names them (buzz#18's ordering) — so it is taken in for
+ * reading and only starts sealing outbound messages once the validated list
+ * says so. {@link reconcileChannelKeyEpochs} is that promotion, called here
+ * for the wrap-after-list order and driven by the admin-list subscription for
+ * the list-after-wrap one.
  */
 
 /** How a subscription is opened. Swapped for a fake in tests. */
@@ -116,8 +126,10 @@ function applyGrant(
   grant: ChannelKeyGrant,
   report: (event: ChannelKeyInboxEvent) => void,
 ): boolean {
-  const existing = getChannelKey(grant.channelId);
-  if (existing && channelKeyId(existing) === grant.keyId) {
+  // Any epoch, not just the current one. A relay re-delivering a pre-rotation
+  // wrap must not send this back round the admin check, and must never be
+  // able to move a superseded key back to the front of the ring.
+  if (findChannelKey(grant.channelId, grant.keyId)) {
     report({
       type: "already-held",
       channelId: grant.channelId,
@@ -148,7 +160,12 @@ function applyGrant(
     return true;
   }
 
-  setChannelKey(grant.channelId, grant.key);
+  // Into the ring, not necessarily to the front of it. A first key unlocks the
+  // channel outright; a rotation key is held for reading until the validated
+  // admin list names its epoch, so no member starts sealing under a key the
+  // rest of the channel has not agreed on yet (buzz#18).
+  adoptChannelKey(grant.channelId, grant.key);
+  reconcileChannelKeyEpochs([grant.channelId]);
   report({
     type: "unlocked",
     channelId: grant.channelId,

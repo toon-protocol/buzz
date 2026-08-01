@@ -216,3 +216,55 @@ test("an explicit key overrides the store, for callers that hold one", () => {
 
   assert.equal(openChannelEvent(event, key).content, "explicit");
 });
+
+test("the marker tag picks the epoch that sealed the message", () => {
+  // After a rotation a client holds several keys for one channel. The marker
+  // names which one, so opening history is a lookup rather than a search —
+  // and the message this client can no longer open is the one whose key it was
+  // never given.
+  const retired = generateChannelKey();
+  const current = generateChannelKey();
+  const neverHeld = generateChannelKey();
+
+  setChannelKey(CHANNEL, retired);
+  setChannelKey(CHANNEL, current);
+
+  const sealedUnder = (key, text) => {
+    const sealed = sealChannelContent(CHANNEL, text, key);
+    return {
+      ...publishMessage(CHANNEL, "ignored"),
+      content: sealed.content,
+      tags: [["h", CHANNEL], ...sealed.tags],
+    };
+  };
+
+  const history = sealedUnder(retired, "before the rotation");
+  const recent = sealedUnder(current, "after the rotation");
+  const foreign = sealedUnder(neverHeld, "another epoch entirely");
+
+  assert.equal(openChannelEvent(history).content, "before the rotation");
+  assert.equal(
+    openChannelEvent(history).encryption.keyId,
+    channelKeyId(retired),
+  );
+  assert.equal(openChannelEvent(recent).content, "after the rotation");
+  assert.equal(openChannelEvent(foreign).content, LOCKED_MESSAGE_PLACEHOLDER);
+  assert.equal(openChannelEvent(foreign).encryption.opened, false);
+});
+
+test("a message whose marker names an unknown key is still tried", () => {
+  // The fallback: the key id is a label, and a label mangled in transit must
+  // not permanently lock a message this client can in fact open.
+  setChannelKey(CHANNEL, CHANNEL_KEY);
+  const sealed = sealChannelContent(CHANNEL, "mislabelled", CHANNEL_KEY);
+  const event = {
+    ...publishMessage(CHANNEL, "ignored"),
+    content: sealed.content,
+    tags: [
+      ["h", CHANNEL],
+      [ENCRYPTION_TAG, NIP44_V2_SCHEME, "0".repeat(16)],
+    ],
+  };
+
+  assert.equal(openChannelEvent(event).content, "mislabelled");
+});
