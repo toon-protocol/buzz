@@ -6,6 +6,7 @@ mod commands;
 mod deep_link;
 mod egress_guard;
 mod event_sync;
+mod event_transport;
 mod events;
 mod huddle;
 mod key_backup;
@@ -712,6 +713,7 @@ pub fn run() {
             get_relay_ws_url,
             get_relay_http_url,
             get_transport_env,
+            report_bridged_write_result,
             get_media_proxy_port,
             fetch_link_preview_title,
             discover_acp_auth_methods,

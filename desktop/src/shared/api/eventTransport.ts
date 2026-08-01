@@ -35,11 +35,11 @@ import type { RelayEvent } from "@/shared/api/types";
  *   absorb this path.
  * - The Rust side. Tauri commands such as `send_channel_message`, `add_reaction`
  *   and `create_channel` build, sign, and POST their events from
- *   `src-tauri/src` over NIP-98 HTTP. Most go through `relay::submit_event*`,
- *   but several sites (`relay::sync_managed_agent_profile`, the team/persona
- *   snapshot importers, the huddle STT pipeline) hand-roll the same POST. That
- *   surface needs consolidating into a Rust-side seam of its own before a
- *   second transport can cover it.
+ *   `src-tauri/src`. As of buzz#27 they all funnel through
+ *   `event_transport::dispatch` — a seam of its own, mirroring this one — so
+ *   the same `BUZZ_TRANSPORT` switch this file reads also governs the Rust
+ *   side; on `toon` it bridges to whichever `EventTransport` is active here
+ *   (see `rustWriteBridge.ts`) rather than POSTing directly.
  */
 export interface EventTransport {
   /**

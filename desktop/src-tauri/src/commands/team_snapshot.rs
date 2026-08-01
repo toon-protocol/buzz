@@ -894,62 +894,15 @@ fn retain_agent_pending(app: &AppHandle, state: &AppState, record: &ManagedAgent
 }
 
 /// POST a pre-built signed engram event to the relay, authenticating as the
-/// new agent. Mirrors the same helper in `snapshot::import`.
-pub(crate) async fn submit_engram_event(
-    state: &AppState,
-    agent_keys: &nostr::Keys,
-    event_json: &[u8],
-    url: &str,
-    auth_tag: Option<&str>,
-) -> Result<(), String> {
-    use crate::relay::build_nip98_auth_header_for_keys;
-    use reqwest::Method;
-
-    crate::egress_guard::assert_no_key_backup_bytes(event_json, "team snapshot engram submit")?;
-
-    // Wait before signing: the relay enforces NIP-98 freshness (±60s) and the
-    // gate may hold for up to MAX_HINT_SECONDS (300s). Building auth before the
-    // wait produces a stale `created_at` that the relay will reject.
-    crate::relay_admission::wait_for_rate_limit().await;
-    let auth = build_nip98_auth_header_for_keys(agent_keys, &Method::POST, url, event_json)?;
-    let mut request = state
-        .http_client
-        .post(url)
-        .header("Authorization", auth)
-        .header("Content-Type", "application/json");
-    if let Some(tag) = auth_tag {
-        request = request.header("x-auth-tag", tag);
-    }
-    let response = request
-        .body(event_json.to_vec())
-        .send()
-        .await
-        .map_err(|e| crate::relay::classify_request_error(&e))?;
-
-    if !response.status().is_success() {
-        let msg = crate::relay::relay_error_message(response).await;
-        return Err(format!("relay rejected engram: {msg}"));
-    }
-
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("failed to read relay response: {e}"))?;
-    let parsed: serde_json::Value =
-        serde_json::from_str(&body).map_err(|e| format!("relay response not JSON: {e}"))?;
-    let accepted = parsed
-        .get("accepted")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if !accepted {
-        let message = parsed
-            .get("message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-        return Err(format!("relay rejected engram: {message}"));
-    }
-    Ok(())
-}
+/// new agent.
+///
+/// Re-exported from `event_transport` (buzz#27) rather than defined here:
+/// this file and `commands::personas::snapshot::import` used to each carry a
+/// hand-rolled, near-identical copy of this function (down to the doc
+/// comment noting the other one); both now share one implementation that
+/// goes through the write seam, so a TOON-mode restore reaches the network
+/// too instead of silently landing nowhere.
+pub(crate) use crate::event_transport::submit_engram_event;
 
 #[cfg(test)]
 mod tests;

@@ -9,6 +9,7 @@ use std::sync::{
 };
 
 use nostr::JsonUtil;
+use tauri::Manager;
 use uuid::Uuid;
 
 use crate::app_state::AppState;
@@ -251,21 +252,27 @@ pub(crate) async fn maybe_start_tts_pipeline(state: &AppState) -> Result<bool, S
     Ok(true)
 }
 
-/// Sign an STT transcript event and produce the guarded POST body.
+/// Sign an STT transcript event and run the egress guard on its bytes.
 ///
 /// Factored out of the transcription loop so egress boundary 5 (huddle STT)
 /// has a directly testable seam: the NIP-49 egress guard runs here, before
-/// any bytes can reach the network.
+/// any bytes can reach the network — the actual submission goes through
+/// `event_transport::dispatch`, which guards its input again as every
+/// caller's single, universal check, but this boundary's own guard call
+/// stays local (and directly tested) rather than trusting the seam alone.
+/// Returns the signed event rather than just its bytes: the caller needs the
+/// sendable body for `dispatch` and has no other reason to keep the event
+/// around separately.
 pub(crate) fn sign_and_guard_stt_body(
     builder: nostr::EventBuilder,
     keys: &nostr::Keys,
-) -> Result<Vec<u8>, String> {
+) -> Result<nostr::Event, String> {
     let event = builder
         .sign_with_keys(keys)
         .map_err(|e| format!("sign event: {e}"))?;
     let body_bytes = event.as_json().into_bytes();
     crate::egress_guard::assert_no_key_backup_bytes(&body_bytes, "huddle STT publish")?;
-    Ok(body_bytes)
+    Ok(event)
 }
 
 /// Spawn a tokio task that reads text_rx and posts kind:9 events.
@@ -286,14 +293,23 @@ pub(crate) fn spawn_transcription_task(
     // Capture the current generation at spawn time.
     let spawned_gen = session_generation.load(Ordering::Acquire);
 
-    let http_client = state.http_client.clone();
     let keys = match state.keys.lock() {
         Ok(k) => k.clone(),
         Err(_) => return,
     };
     let relay_base_url = crate::relay::relay_api_base_url_with_override(state);
+    // `state: &AppState` cannot outlive this spawn, so the spawned task
+    // re-derives it each iteration from an owned `AppHandle` — the standard
+    // pattern for `AppState` access from inside a 'static Tokio task
+    // (see e.g. `lib.rs`'s scheduled-sweep handlers).
+    let app_handle = state.app_handle.lock().ok().and_then(|guard| guard.clone());
 
     tauri::async_runtime::spawn(async move {
+        let Some(app_handle) = app_handle else {
+            eprintln!("buzz-desktop: STT publish: app handle not available yet");
+            return;
+        };
+
         // recv().await yields (not blocks) until text arrives or sender is dropped.
         // When the STT worker exits and drops its Sender, recv() returns None → loop ends.
         while let Some(t) = text_rx.recv().await {
@@ -324,51 +340,31 @@ pub(crate) fn spawn_transcription_task(
                 };
             // Wait before signing: the relay enforces NIP-98 freshness (±60s)
             // and the gate may hold for up to MAX_HINT_SECONDS (300s). Sign
-            // the kind event and build NIP-98 auth after the wait so both
-            // timestamps are fresh — single clean order: wait → sign → auth → send.
+            // the kind event after the wait so both the event's own
+            // timestamp and (inside `dispatch`, for the relay transport) the
+            // NIP-98 auth header's are fresh — single clean order:
+            // wait → sign → guard → dispatch.
             crate::relay_admission::wait_for_rate_limit().await;
-            let body_bytes = match sign_and_guard_stt_body(builder, &keys) {
-                Ok(b) => b,
+            let event = match sign_and_guard_stt_body(builder, &keys) {
+                Ok(event) => event,
                 Err(e) => {
                     eprintln!("buzz-desktop: STT publish: {e}");
                     continue;
                 }
             };
+            let body_bytes = event.as_json().into_bytes();
             let url = format!("{relay_base_url}/events");
-            let auth_header = match crate::relay::build_nip98_auth_header_for_keys(
-                &keys,
-                &reqwest::Method::POST,
-                &url,
-                &body_bytes,
-            ) {
-                Ok(h) => h,
-                Err(e) => {
-                    eprintln!("buzz-desktop: STT NIP-98 auth: {e}");
-                    continue;
-                }
+            let app_state = app_handle.state::<AppState>();
+            let submission = crate::event_transport::SignedEventSubmission {
+                body: &body_bytes,
+                api_url: url,
+                keys: &keys,
+                auth_tag: None,
+                context: "huddle STT publish",
             };
 
-            let response = {
-                http_client
-                    .post(&url)
-                    .header("Authorization", auth_header)
-                    .header("Content-Type", "application/json")
-                    .body(body_bytes)
-                    .send()
-                    .await
-            };
-
-            match response {
-                Ok(resp) if resp.status().is_success() => {}
-                Ok(resp) => {
-                    // Route through relay_error_message so a 429 arms the
-                    // admission gate for subsequent relay sends.
-                    let msg = crate::relay::relay_error_message(resp).await;
-                    eprintln!("buzz-desktop: STT kind:9 post failed: {msg}");
-                }
-                Err(e) => {
-                    eprintln!("buzz-desktop: STT kind:9 post failed: {e}");
-                }
+            if let Err(e) = crate::event_transport::dispatch(&app_state, submission).await {
+                eprintln!("buzz-desktop: STT kind:9 post failed: {e}");
             }
         }
     });

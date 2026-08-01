@@ -31,10 +31,12 @@ import type { RelayEvent } from "@/shared/api/types";
  *   indicators. Paying a per-packet fee for a keystroke is not a tradeoff
  *   worth making silently, and the seam already defines these events as
  *   loss-tolerant.
- * - **It does not cover the Rust write path.** Threaded replies, media, and
- *   custom-emoji messages are built and POSTed from `src-tauri` and never
- *   reach this seam (see `eventTransport.ts`). On TOON those writes go
- *   nowhere; a plaintext top-level message is what round-trips today.
+ * - **The Rust write path bridges in, rather than calling this class
+ *   directly.** Threaded replies, media, and custom-emoji messages are built
+ *   and signed in `src-tauri` (see `eventTransport.ts`). As of buzz#27, when
+ *   `BUZZ_TRANSPORT=toon` those writes are handed to whichever transport is
+ *   active here over `rustWriteBridge.ts` — this class included — instead of
+ *   going nowhere.
  */
 export class ToonEventTransport implements EventTransport {
   private readonly writer: ToonPaidWriter;
