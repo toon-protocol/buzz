@@ -23,6 +23,26 @@ export type ToonTransportConfig = {
   /** ILP address of the publish route on that edge. */
   destination: string;
   /**
+   * ILP address of the *store* route — the Arweave blob node fronted by its
+   * own connector (ADR 0002). Media goes here; events go to
+   * {@link ToonTransportConfig.destination}.
+   *
+   * Separate key rather than a suffix of `destination` because the two routes
+   * are terminated by different boxes on the devnet, and the store box's
+   * kind:10032 announce advertises its own address (`routes.store`). Same
+   * reasoning as `destination`: the devnet moves, the app should not need a
+   * release to follow it.
+   */
+  storeDestination: string;
+  /**
+   * Ordered Arweave gateways to render permaweb media through, primary first.
+   *
+   * Empty means "use the shared default list from `@toon-protocol/arweave`".
+   * Every gateway serves the same content-addressed bytes, so this is a
+   * preference/availability list, not a trust boundary.
+   */
+  arweaveGateways: string[];
+  /**
    * BIP-39 phrase the *payment* identity is derived from.
    *
    * Distinct from the Buzz signing identity, which stays in Rust and never
@@ -66,6 +86,12 @@ export const TOON_DEVNET_DEFAULTS = {
    */
   relayUrl: "wss://relay-ws.devnet.toonprotocol.dev",
   destination: "g.toon.relay",
+  /**
+   * The store box's own ILP address, as advertised by its kind:10032 announce
+   * (`routes.store`). NOT derivable from `destination`: the store node is a
+   * sibling of the relay on the devnet, not a child route of it.
+   */
+  storeDestination: "g.toon.ario",
   chain: "evm:84532",
   chainRpcUrl: "https://base-sepolia-rpc.publicnode.com",
   tokenNetwork: "0x1E95493fEF46707E034b4a1945f25a8C76A1823D",
@@ -79,6 +105,8 @@ export const TOON_TRANSPORT_ENV_KEYS = [
   "BUZZ_TOON_PROXY_URL",
   "BUZZ_TOON_RELAY_URL",
   "BUZZ_TOON_DESTINATION",
+  "BUZZ_TOON_STORE_DESTINATION",
+  "BUZZ_TOON_ARWEAVE_GATEWAYS",
   "BUZZ_TOON_MNEMONIC",
   "BUZZ_TOON_ACCOUNT_INDEX",
   "BUZZ_TOON_CHAIN",
@@ -116,6 +144,20 @@ export function parseTransportMode(value: string | null | undefined): {
   return { mode: "relay", unrecognised: normalised };
 }
 
+/**
+ * Split a comma-separated gateway list, dropping blanks.
+ *
+ * Returns `[]` — not a default list — when nothing survives, so "unset" and
+ * "set to junk" both mean the same thing to the consumer: fall back to the
+ * shared list in `@toon-protocol/arweave` rather than to a half-parsed one.
+ */
+export function parseGatewayList(value: string | null | undefined): string[] {
+  return (text(value) ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
 function accountIndexOf(value: string | null | undefined): number {
   const parsed = Number.parseInt(text(value) ?? "", 10);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
@@ -131,6 +173,10 @@ export function resolveToonTransportConfig(
     relayUrl: text(env.BUZZ_TOON_RELAY_URL) ?? TOON_DEVNET_DEFAULTS.relayUrl,
     destination:
       text(env.BUZZ_TOON_DESTINATION) ?? TOON_DEVNET_DEFAULTS.destination,
+    storeDestination:
+      text(env.BUZZ_TOON_STORE_DESTINATION) ??
+      TOON_DEVNET_DEFAULTS.storeDestination,
+    arweaveGateways: parseGatewayList(env.BUZZ_TOON_ARWEAVE_GATEWAYS),
     mnemonic: text(env.BUZZ_TOON_MNEMONIC),
     accountIndex: accountIndexOf(env.BUZZ_TOON_ACCOUNT_INDEX),
     chain: text(env.BUZZ_TOON_CHAIN) ?? TOON_DEVNET_DEFAULTS.chain,

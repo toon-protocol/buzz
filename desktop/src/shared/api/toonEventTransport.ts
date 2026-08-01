@@ -120,6 +120,18 @@ export class ToonEventTransport implements EventTransport {
     return this.writer.quoteFee();
   }
 
+  /**
+   * The paying half, for the media seam.
+   *
+   * Media does not travel as an event, so it cannot ride `publish` — but it is
+   * paid for out of the same channel by the same identity, and a second client
+   * would mean a second channel and a split nonce sequence. The media uploader
+   * therefore borrows this writer rather than building its own.
+   */
+  getPaidWriter(): ToonPaidWriter {
+    return this.writer;
+  }
+
   async close(): Promise<void> {
     this.reader.close();
     await this.writer.close();

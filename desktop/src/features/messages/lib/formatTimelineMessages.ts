@@ -10,6 +10,12 @@ import type {
   TimelineReaction,
 } from "@/features/messages/types";
 import {
+  collectHiddenMedia,
+  hiddenMediaNotice,
+  hideTombstonedMedia,
+  isMediaTombstone,
+} from "@/features/messages/lib/mediaTombstone";
+import {
   getThreadReference,
   isBroadcastReply,
 } from "@/features/messages/lib/threading";
@@ -62,7 +68,16 @@ export function isTimelineContentEvent(event: RelayEvent) {
   );
 }
 
+/**
+ * The messages a deletion event withdraws.
+ *
+ * Media tombstones share kind:5 but withdraw an *attachment*, not the message
+ * carrying it (see `mediaTombstone.ts`), so they name no deletion targets at
+ * all. Filtering here rather than at each of the three call sites means a
+ * reducer cannot forget: adding an `x` tag can never make a message vanish.
+ */
 function getDeletionTargets(tags: string[][]) {
+  if (isMediaTombstone(tags)) return [];
   return tags
     .filter(
       (tag) =>
@@ -413,6 +428,12 @@ export function formatTimelineMessages(
     return depth;
   }
 
+  // Attachments their author has withdrawn (ADR 0002). Collected from the raw
+  // window rather than `visibleEvents` because a tombstone is not itself a
+  // content event, and applied per message below — it hides media, never the
+  // message, so the event stays in the timeline with its remaining body.
+  const hiddenMediaByEventId = collectHiddenMedia(events);
+
   return visibleEvents.map((event) => {
     const author = getAuthorLabel(event);
     const authorPubkey =
@@ -429,6 +450,17 @@ export function formatTimelineMessages(
     const authorProfile = profiles?.[authorPubkey.toLowerCase()];
     const isAgent = role === "bot" || authorProfile?.isAgent === true;
     const ownerPubkey = isAgent ? (authorProfile?.ownerPubkey ?? null) : null;
+    const withdrawn = hideTombstonedMedia({
+      content: edit ? edit.content : event.content,
+      tags: applyEditTagOverlay(event.tags, edit?.tags),
+      hiddenHashes: hiddenMediaByEventId.get(event.id.toLowerCase()),
+    });
+    const body =
+      withdrawn.hiddenCount > 0
+        ? [withdrawn.content, hiddenMediaNotice(withdrawn.hiddenCount)]
+            .filter((part) => part.length > 0)
+            .join("\n\n")
+        : withdrawn.content;
     return {
       id: event.id,
       renderKey: event.localKey ?? event.id,
@@ -457,7 +489,7 @@ export function formatTimelineMessages(
           ? respondToLookup?.get(authorPubkey.toLowerCase())
           : undefined,
       time: formatTime(event.created_at),
-      body: edit ? edit.content : event.content,
+      body,
       parentId: thread.parentId,
       rootId: thread.rootId,
       depth: getDepth(event),
@@ -468,8 +500,9 @@ export function formatTimelineMessages(
       // When edited, swap the original event's imeta tags for the edit's
       // imeta tags. All non-imeta tags on the original are preserved.
       // Logic lives in `applyEditTagOverlay.mjs` so prod and tests share
-      // a single source.
-      tags: applyEditTagOverlay(event.tags, edit?.tags),
+      // a single source. Withdrawn attachments are then dropped from the
+      // result, so the gallery enumerates exactly what the body renders.
+      tags: withdrawn.tags,
       reactions: (() => {
         const reactions = reactionsByEventId.get(event.id);
         if (!reactions) return undefined;

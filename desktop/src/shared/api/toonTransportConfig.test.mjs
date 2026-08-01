@@ -132,3 +132,35 @@ test("decideTransport reports an unknown transport name", () => {
   assert.equal(selection.mode, "relay");
   assert.match(selection.warnings[0], /quic/);
 });
+
+test("the store route defaults to the store box and is independently overridable", () => {
+  // The store node is a sibling of the relay on the devnet, not a child route,
+  // so it cannot be derived from `destination` — see ADR 0002.
+  assert.equal(
+    resolveToonTransportConfig({}).storeDestination,
+    TOON_DEVNET_DEFAULTS.storeDestination,
+  );
+  assert.equal(
+    resolveToonTransportConfig({
+      BUZZ_TOON_DESTINATION: "g.other.relay",
+    }).storeDestination,
+    TOON_DEVNET_DEFAULTS.storeDestination,
+    "moving the publish route must not silently move media with it",
+  );
+  assert.equal(
+    resolveToonTransportConfig({
+      BUZZ_TOON_STORE_DESTINATION: " g.test.store ",
+    }).storeDestination,
+    "g.test.store",
+  );
+});
+
+test("the Arweave gateway list is comma-separated, trimmed, and empty when unset", () => {
+  assert.deepEqual(resolveToonTransportConfig({}).arweaveGateways, []);
+  assert.deepEqual(
+    resolveToonTransportConfig({
+      BUZZ_TOON_ARWEAVE_GATEWAYS: " https://a.example , ,https://b.example ",
+    }).arweaveGateways,
+    ["https://a.example", "https://b.example"],
+  );
+});

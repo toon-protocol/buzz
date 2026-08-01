@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { cn } from "@/shared/lib/cn";
+import { useArweaveGatewayFallover } from "@/shared/lib/useArweaveGatewayFallover";
 
 const IMAGE_CLASS =
   "absolute inset-0 block h-full w-full rounded-2xl object-contain";
@@ -50,6 +51,9 @@ export function ProgressiveImage({
   const thumbnailSrc = isSameImageSource(thumbSrc, resolvedSrc)
     ? undefined
     : thumbSrc;
+  // Permaweb images are mirrored across gateways, so a failed load is an
+  // availability problem with one host, not a missing file.
+  const fullImage = useArweaveGatewayFallover(resolvedSrc);
   const [loadFullImage, setLoadFullImage] = React.useState(!thumbnailSrc);
   const [fullImageLoaded, setFullImageLoaded] = React.useState(!thumbnailSrc);
 
@@ -130,9 +134,10 @@ export function ProgressiveImage({
           height={height}
           loading={thumbnailSrc ? undefined : "lazy"}
           ref={setFullImageRef}
-          src={resolvedSrc}
+          src={fullImage.src}
           style={style}
           width={width}
+          onError={fullImage.onError}
           onLoad={(event) => void handleFullLoad(event.currentTarget)}
         />
       ) : null}

@@ -785,6 +785,7 @@ pub fn run() {
             upload_media,
             pick_and_upload_media,
             pick_and_upload_image,
+            pick_media_bytes,
             upload_media_bytes,
             download_image,
             save_png_data_url,

@@ -674,3 +674,86 @@ test("CHANNEL_TIMELINE_CONTENT_KINDS matches isTimelineContentEvent", () => {
     );
   }
 });
+
+// ── Media tombstones (ADR 0002) ──────────────────────────────────────────────
+//
+// A media tombstone shares kind:5 with whole-message deletion but means
+// something narrower: hide these attachments, keep the message. The
+// discriminator is the `x` tag, so these cases guard the boundary between the
+// two readings — a mis-classification either resurrects a deleted message or
+// vanishes one that only had an attachment withdrawn.
+
+const TOMBSTONE_TX = "hR1kmVIiK4WsRLwGwfCLl1WPdEVGGKtRr8YbQXsq8Xk";
+const TOMBSTONE_URL = `https://ar-io.dev/${TOMBSTONE_TX}`;
+const TOMBSTONE_SHA = "c".repeat(64);
+
+function messageWithAttachment() {
+  return streamMessage({
+    content: `look at this\n![image](${TOMBSTONE_URL})`,
+    tags: [
+      ["h", CHANNEL_ID],
+      ["imeta", `url ${TOMBSTONE_URL}`, "m image/png", `x ${TOMBSTONE_SHA}`],
+    ],
+  });
+}
+
+function mediaTombstone(targetId, sha = TOMBSTONE_SHA) {
+  return deletionEvent(5, targetId, {
+    tags: [
+      ["h", CHANNEL_ID],
+      ["e", targetId],
+      ["x", sha],
+    ],
+  });
+}
+
+test("a media tombstone hides the attachment but keeps the message", () => {
+  const events = [messageWithAttachment(), mediaTombstone(HEX64_A)];
+  const out = formatTimelineMessages(events, null, undefined, null);
+
+  assert.equal(out.length, 1, "the message itself must survive");
+  assert.equal(
+    out[0].body.includes(TOMBSTONE_URL),
+    false,
+    "the attachment's markdown line must be gone",
+  );
+  assert.equal(
+    out[0].tags.some((tag) => tag[0] === "imeta"),
+    false,
+    "the attachment's imeta tag must be gone, or the gallery still shows it",
+  );
+  assert.match(out[0].body, /look at this/);
+});
+
+test("the placeholder left behind says hidden, not deleted", () => {
+  const events = [messageWithAttachment(), mediaTombstone(HEX64_A)];
+  const [message] = formatTimelineMessages(events, null, undefined, null);
+  assert.match(message.body, /hidden by the author/);
+  assert.match(message.body, /permaweb/);
+  assert.doesNotMatch(message.body, /delet/i);
+});
+
+test("a tombstone for an attachment the message does not carry leaves it alone", () => {
+  const events = [
+    messageWithAttachment(),
+    mediaTombstone(HEX64_A, "d".repeat(64)),
+  ];
+  const [message] = formatTimelineMessages(events, null, undefined, null);
+  assert.match(message.body, new RegExp(TOMBSTONE_TX));
+});
+
+test("countTopLevelTimelineRows still counts a message whose media was hidden", () => {
+  // The row-count reducer drives history paging. Treating a media tombstone as
+  // a deletion there would make the timeline think it had fewer rows than it
+  // renders and page too far.
+  const events = [messageWithAttachment(), mediaTombstone(HEX64_A)];
+  assert.equal(countTopLevelTimelineRows(events), 1);
+});
+
+test("a kind:5 with no x tag is still a whole-message deletion", () => {
+  // Regression guard for the discriminator: adding media tombstones must not
+  // weaken the existing deletion path.
+  const events = [messageWithAttachment(), deletionEvent(5, HEX64_A)];
+  assert.equal(formatTimelineMessages(events, null, undefined, null).length, 0);
+  assert.equal(countTopLevelTimelineRows(events), 0);
+});

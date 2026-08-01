@@ -1,3 +1,7 @@
+import {
+  buildMediaTombstoneTags,
+  KIND_MEDIA_TOMBSTONE,
+} from "@/features/messages/lib/mediaTombstone";
 import { buildThreadReferenceTags } from "@/features/messages/lib/threading";
 import {
   openChannelEvent,
@@ -73,6 +77,37 @@ export async function sendStreamMessage(
   // Back through the same door inbound events come in by, so the sender's own
   // echo is the plaintext everyone else will see rather than its own ciphertext.
   return openChannelEvent(published);
+}
+
+/**
+ * Withdraw attachments from a message: publish a media tombstone.
+ *
+ * Named `hide`, not `delete`, everywhere it appears — the bytes are on Arweave
+ * and stay there (ADR 0002). What this publishes is a signed request that
+ * clients stop rendering the named attachments, and that is all it can ever
+ * be. See `mediaTombstone.ts` for the event shape and the reasoning.
+ *
+ * Not encrypted: a tombstone carries no content, only hashes of blobs whose
+ * existence is already public.
+ */
+export async function hideChannelMedia(
+  channelId: string,
+  eventId: string,
+  sha256s: ReadonlyArray<string>,
+): Promise<RelayEvent> {
+  await ensureTransportReady();
+
+  const event = await signRelayEvent({
+    kind: KIND_MEDIA_TOMBSTONE,
+    content: "",
+    tags: buildMediaTombstoneTags({ channelId, eventId, sha256s }),
+  });
+
+  return publishEvent(
+    event,
+    "Timed out while hiding the attachments.",
+    "Failed to hide the attachments.",
+  );
 }
 
 /** Broadcast the signed-in user's presence. */

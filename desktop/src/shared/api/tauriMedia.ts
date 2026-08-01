@@ -10,6 +10,27 @@ export async function pickAndUploadImage(): Promise<BlobDescriptor | null> {
   return invokeTauri<BlobDescriptor | null>("pick_and_upload_image", {});
 }
 
+/** A file the user picked, prepared by Rust but not yet stored anywhere. */
+export type PickedMedia = {
+  /** Prepared bytes, as the number array the IPC bridge speaks. */
+  data: number[];
+  type: string;
+  filename?: string;
+};
+
+/**
+ * Open a native multi-file picker and return each file's prepared bytes
+ * **without uploading them**.
+ *
+ * For media backends the renderer drives itself — the TOON store node, whose
+ * uploads are paid ILP writes (ADR 0002). Rust still owns the filesystem and
+ * the pre-upload pipeline (MIME sniffing, transcode, deny-list, sanitisation);
+ * only the destination moves. Resolves empty when the user cancels.
+ */
+export async function pickMediaBytes(): Promise<PickedMedia[]> {
+  return invokeTauri<PickedMedia[]>("pick_media_bytes", {});
+}
+
 /**
  * Fetch relay media bytes over IPC (Rust reqwest, VPN-tunneled).
  *
