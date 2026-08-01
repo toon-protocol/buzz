@@ -166,6 +166,38 @@ stored rules in `validation_error` so an owner can remove and repair them.
 | | `set` | Write a memory value (use `-` for stdin) |
 | | `patch` | Apply unified diff to memory value |
 | | `rm` | Publish a tombstone to delete memory |
+| `toon` | `status` | Check the local toon-clientd sidecar's health, identity, readiness |
+| | `send` | Post a paid public-channel message via the sidecar |
+
+## `toon` — the sidecar write path
+
+`buzz toon` is a second, independent transport: it does not talk to the Buzz
+relay above at all, and needs no `BUZZ_PRIVATE_KEY`. It talks over plain HTTP
+to a local `toon-clientd` sidecar (the daemon behind
+`@toon-protocol/client-mcp`), which owns the agent's TOON identity, payment
+channel, and claims — its own keypair and its own wallet, scoped to that
+identity like any other member (see `CONTEXT.md`'s "Agent-member" and
+"Sidecar" entries). This CLI never holds a mnemonic and never opens a channel
+itself; `toon status`'s hint points at the sidecar's own onboarding when it
+has none.
+
+```bash
+# Base URL of the sidecar (default: http://127.0.0.1:8787)
+export TOON_DAEMON_URL="http://127.0.0.1:8787"
+
+buzz toon status
+buzz toon send --channel <UUID> --content "hello from the sidecar"
+echo "hello from stdin" | buzz toon send --channel <UUID> --content -
+```
+
+`send` publishes a `kind:9` event tagged `["h", <channel>]` — the exact shape
+desktop's public-channel messages use (`desktop/src/shared/api/eventWrites.ts`
+`sendStreamMessage`) — via the sidecar's `POST /publish-unsigned`: the sidecar
+signs with its own key and spends a claim against its own channel. If the
+sidecar is not running, the error names the exact URL that was tried
+(`sidecar_unreachable`) rather than reading like a dropped write; if the
+sidecar rejects the write (no funded channel, insufficient balance, apex
+refusal), its own `{error, detail}` is surfaced verbatim (`sidecar_error`).
 
 ## Architecture
 
@@ -173,12 +205,15 @@ stored rules in `validation_error` so an owner can remove and repair them.
 buzz <group> <subcommand> [flags]
     │
     ├─ main.rs ──▶ commands/*.rs ──▶ client.rs ──▶ Buzz Relay REST API
-    │  (clap)       (handlers)       (reqwest)
+    │  (clap)       (handlers)       (reqwest)         (BUZZ_PRIVATE_KEY signs)
+    │
+    ├─ main.rs ──▶ commands/toon.rs ──▶ sidecar.rs ──▶ toon-clientd control API
+    │  (clap)       (handler)           (reqwest)      (sidecar signs + pays)
     │
     ├─ validate.rs   (UUID, hex, content size, percent-encode)
     └─ error.rs      (CliError → JSON stderr + exit code)
 
-stdout: raw relay JSON
+stdout: raw relay JSON (or, for `toon`, the sidecar's JSON receipt)
 stderr: {"error": "category", "message": "detail"}
 exit:   0=ok  1=user  2=network  3=auth  4=other  5=write conflict
 ```
