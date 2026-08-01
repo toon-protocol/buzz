@@ -17,6 +17,7 @@ import {
 } from "./mediaPermanenceGate.ts";
 import {
   MediaUploadDeclined,
+  MediaUploadUnavailable,
   relayMediaUploader,
   resetMediaUploader,
   setMediaUploader,
@@ -167,4 +168,37 @@ test("the disclosure is honest that hiding is not deleting", () => {
   const hideParagraph = copy.body.find((line) => /hiding/i.test(line));
   assert.notEqual(hideParagraph, undefined);
   assert.match(hideParagraph, /stays on the permaweb/i);
+});
+
+test("an unavailable backend blocks consent instead of asking for it", async () => {
+  // The disclosure must not open for an upload that cannot happen — accepting
+  // permanence for a write the edge will refuse is consent to nothing.
+  setMediaUploader({
+    quote: async () => {
+      throw new MediaUploadUnavailable(
+        "Upload unavailable — the TOON store route is unpriced or unreachable.",
+      );
+    },
+    upload: async () => {
+      throw new Error("must not be reached");
+    },
+    pickAndUpload: async () => [],
+  });
+
+  await assert.rejects(
+    () => requireMediaUploadConsent(),
+    (error) => error instanceof MediaUploadUnavailable,
+  );
+  assert.equal(getMediaPermanenceDisclosure(), null);
+});
+
+test("unavailability is not mistaken for a decline", () => {
+  // `onUploadError` swallows a decline silently; unavailability must reach the
+  // user, so the two must never be confused for one another.
+  const unavailable = new MediaUploadUnavailable("nope");
+  assert.equal(unavailable instanceof MediaUploadDeclined, false);
+  assert.equal(
+    new MediaUploadDeclined() instanceof MediaUploadUnavailable,
+    false,
+  );
 });

@@ -38,6 +38,20 @@ export class MediaUploadDeclined extends Error {
   }
 }
 
+/**
+ * Thrown when the active media backend cannot accept an upload at all.
+ *
+ * Distinct from an upload that was attempted and failed: nothing has been sent
+ * and nothing has been paid for. The message is user-facing copy, because the
+ * only useful thing to say about an unreachable store route is what it is.
+ */
+export class MediaUploadUnavailable extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "MediaUploadUnavailable";
+  }
+}
+
 /** What an upload will cost and what it commits the uploader to. */
 export type MediaUploadQuote = {
   /**

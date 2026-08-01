@@ -1,8 +1,9 @@
 import { arweaveMediaUrls } from "@/shared/lib/arweaveMedia";
-import type {
-  MediaUploader,
-  MediaUploadQuote,
-  MediaUploadRequest,
+import {
+  MediaUploadUnavailable,
+  type MediaUploader,
+  type MediaUploadQuote,
+  type MediaUploadRequest,
 } from "@/shared/api/mediaUpload";
 import { pickMediaBytes } from "@/shared/api/tauriMedia";
 import type { BlobDescriptor } from "@/shared/api/tauri";
@@ -119,8 +120,27 @@ export class StoreMediaUploader implements MediaUploader {
     this.writer = writer;
   }
 
+  /**
+   * The store route's price, or a refusal.
+   *
+   * An unpriced route is reported as {@link MediaUploadUnavailable} rather than
+   * as free. `getRoutePrice` returning null means the edge is not terminating
+   * the store address, so an upload would be refused downstream — after the
+   * user had accepted a permanence disclosure quoting a fee of zero. Since
+   * every upload path quotes before it moves bytes, raising here is what makes
+   * "refuse to attempt the upload" true by construction rather than by each
+   * call site remembering to check.
+   */
   async quote(): Promise<MediaUploadQuote> {
-    const amount = await this.writer.quoteStoreFee();
+    let amount: bigint;
+    try {
+      amount = await this.writer.quoteStoreFee();
+    } catch (error) {
+      throw new MediaUploadUnavailable(
+        "Upload unavailable — the TOON store route is unpriced or unreachable, so attachments cannot be uploaded right now.",
+        { cause: error },
+      );
+    }
     return {
       amount,
       asset: "USDC",
@@ -135,6 +155,11 @@ export class StoreMediaUploader implements MediaUploader {
     filename,
   }: MediaUploadRequest): Promise<BlobDescriptor> {
     if (data.length === 0) throw new Error("empty upload");
+
+    // Quote before hashing, not just before paying: an unpriced route must
+    // refuse the upload outright, and there is no reason to spend time on
+    // bytes that are not going anywhere.
+    await this.quote();
 
     const bytes = Uint8Array.from(data);
     const contentType = detectContentType(data, filename);

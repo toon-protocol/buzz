@@ -207,12 +207,27 @@ export class ToonPaidWriter {
    * connector's ADR 0020), so a 2 KB avatar and a 2 MB screenshot cost the same
    * as long as both fit one packet. Callers that want to show "per upload"
    * rather than "per megabyte" are reading this correctly.
+   *
+   * Throws when the connector has no price for the store route. A null price
+   * does NOT mean free — it means the edge is not terminating
+   * `storeDestination` at all, so the packet would be refused downstream after
+   * the user had already been told the upload was permanent and free. Treating
+   * it as zero turns a routing outage into a silent wrong answer; the honest
+   * report is that uploads are unavailable. The failure is also not cached, so
+   * a route that comes back does not stay broken for the session.
    */
   async quoteStoreFee(): Promise<bigint> {
     const client = await this.ensureClient();
-    this.storeRoutePrice ??=
-      (await client.getRoutePrice(this.config.storeDestination)) ?? 0n;
-    return this.storeRoutePrice;
+    if (this.storeRoutePrice !== null) return this.storeRoutePrice;
+
+    const price = await client.getRoutePrice(this.config.storeDestination);
+    if (price === null || price === undefined) {
+      throw new ToonPaidWriteError(
+        `The connector has no price for the store route ${this.config.storeDestination} — it is unpriced or unreachable, so uploads cannot be paid for.`,
+      );
+    }
+    this.storeRoutePrice = price;
+    return price;
   }
 
   /**
