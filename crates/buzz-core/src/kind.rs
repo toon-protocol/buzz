@@ -410,6 +410,13 @@ pub const KIND_AGENT_OBSERVER_FRAME: u32 = 24200;
 /// Ephemeral: huddle emoji reaction burst. Channel-scoped to the ephemeral
 /// huddle channel with an `h` tag; never stored in the timeline.
 pub const KIND_HUDDLE_REACTION: u32 = 24810;
+/// Ephemeral: one ~20 ms Opus huddle audio frame, published as a dust-priced
+/// paid write over the connector's BTP session (ADR 0003). Channel-scoped to
+/// the ephemeral huddle channel with an `h` tag; never stored. Content is
+/// base64 of the 8-byte v2 frame header followed by the Opus payload, sealed
+/// with the channel key (NIP-44) when the huddle's channel is keyed. Not
+/// 20001 — that is [`KIND_PRESENCE_UPDATE`], which the relay parses.
+pub const KIND_HUDDLE_AUDIO_FRAME: u32 = 24820;
 // Stream messaging
 /// NIP-29 group chat message kind. V1 used kind:10001 (replaceable range — wrong), then 40001.
 ///
@@ -624,6 +631,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_PRESENCE_UPDATE,
     KIND_TYPING_INDICATOR,
     KIND_HUDDLE_REACTION,
+    KIND_HUDDLE_AUDIO_FRAME,
     KIND_BLOSSOM_AUTH,
     KIND_PAIRING,
     KIND_AGENT_OBSERVER_FRAME,

@@ -51,6 +51,11 @@ export const KIND_GIFT_WRAP = 1059;
 export const KIND_CHANNEL_KEY_DELIVERY = 44300;
 export const KIND_TYPING_INDICATOR = 20002;
 export const KIND_HUDDLE_REACTION = 24810;
+// One ~20 ms Opus huddle audio frame, published as a dust-priced ephemeral
+// paid write (ADR 0003). Content is base64(8-byte v2 header || Opus payload),
+// NIP-44-sealed with the channel key for keyed-channel huddles. Not 20001 —
+// that is the presence kind, which the relay parses.
+export const KIND_HUDDLE_AUDIO_FRAME = 24820;
 export const KIND_HUDDLE_STARTED = 48100;
 export const KIND_HUDDLE_PARTICIPANT_JOINED = 48101;
 export const KIND_HUDDLE_PARTICIPANT_LEFT = 48102;

@@ -33,10 +33,13 @@ pub mod pocket;
 pub mod preprocessing;
 pub mod reconnect;
 pub mod relay_api;
+pub mod speaker_slots;
 pub mod state;
 pub mod stt;
+pub mod toon_frames;
 pub mod transcription;
 pub mod tts;
+pub mod vad;
 pub mod wire;
 
 // ── Shared utilities ──────────────────────────────────────────────────────────
