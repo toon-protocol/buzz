@@ -50,6 +50,11 @@ struct StateFile {
     channels: BTreeMap<String, ChannelCursor>,
     #[serde(default)]
     evaluated: BTreeSet<String>,
+    /// `schedule:` trigger last-fired times, unix seconds, keyed by workflow
+    /// name (buzz#22) — a schedule workflow has no channel cursor to hang
+    /// this off of, since it is never driven by a channel walk.
+    #[serde(default)]
+    scheduled: BTreeMap<String, u64>,
 }
 
 /// The agent's resume state: one file, one identity, written atomically.
@@ -59,6 +64,7 @@ pub struct WorkflowState {
     identity: Option<String>,
     cursors: BTreeMap<String, ChannelCursor>,
     evaluated: BTreeSet<String>,
+    scheduled: BTreeMap<String, u64>,
 }
 
 impl WorkflowState {
@@ -99,12 +105,14 @@ pass --state or set BUZZ_WORKFLOW_STATE"
                 identity: file.identity,
                 cursors: file.channels,
                 evaluated: file.evaluated,
+                scheduled: file.scheduled,
             },
             None => Self {
                 path,
                 identity: None,
                 cursors: BTreeMap::new(),
                 evaluated: BTreeSet::new(),
+                scheduled: BTreeMap::new(),
             },
         }
     }
@@ -149,6 +157,23 @@ is {pubkey} — point --state / BUZZ_WORKFLOW_STATE at this agent's own file",
         self.evaluated.insert(event_id.to_string());
     }
 
+    /// When `workflow_name`'s schedule last fired, in unix seconds — `None`
+    /// if it has never fired (including "never fired *by this state file*",
+    /// e.g. a fresh install or a renamed workflow), which
+    /// [`crate::workflow_agent::is_schedule_due`] treats as "due only at the
+    /// next tick after now", never retroactively (see that function's doc).
+    pub fn last_fired(&self, workflow_name: &str) -> Option<u64> {
+        self.scheduled.get(workflow_name).copied()
+    }
+
+    /// Record that `workflow_name`'s schedule fired at `at` (unix seconds).
+    /// Recorded whether the resulting action was sent, dropped, or refused —
+    /// mirroring [`Self::mark_evaluated`]'s "not queued for a later cycle"
+    /// rule: a schedule slot that already fired is not retried.
+    pub fn set_last_fired(&mut self, workflow_name: &str, at: u64) {
+        self.scheduled.insert(workflow_name.to_string(), at);
+    }
+
     /// Write cursors and the evaluated set to disk in one atomic replacement.
     /// Temp file in the same directory, owner-only, `fsync`, then `rename` —
     /// identical shape to [`crate::search_index::SearchIndex::save`], for the
@@ -165,6 +190,7 @@ is {pubkey} — point --state / BUZZ_WORKFLOW_STATE at this agent's own file",
             identity: self.identity.clone(),
             channels: self.cursors.clone(),
             evaluated: self.evaluated.clone(),
+            scheduled: self.scheduled.clone(),
         };
         let json = serde_json::to_string(&file).map_err(|e| {
             CliError::Other(format!("failed to serialize the workflow agent state: {e}"))
@@ -273,6 +299,25 @@ mod tests {
             !state.is_evaluated("e1"),
             "a version this build cannot read is discarded whole"
         );
+    }
+
+    #[test]
+    fn a_workflow_that_never_fired_has_no_last_fired_time() {
+        let (_dir, path) = scratch();
+        let state = WorkflowState::open(path);
+        assert_eq!(state.last_fired("standup"), None);
+    }
+
+    #[test]
+    fn last_fired_round_trips_through_one_atomic_save() {
+        let (_dir, path) = scratch();
+        let mut state = WorkflowState::open(path.clone());
+        state.set_last_fired("standup", 1_700_000_000);
+        state.save().unwrap();
+
+        let reopened = WorkflowState::open(path);
+        assert_eq!(reopened.last_fired("standup"), Some(1_700_000_000));
+        assert_eq!(reopened.last_fired("other"), None);
     }
 
     #[cfg(unix)]

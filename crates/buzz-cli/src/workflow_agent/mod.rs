@@ -27,21 +27,38 @@
 //!
 //! ## Loop prevention
 //!
-//! Two mechanisms, of unequal weight:
+//! Three mechanisms now (buzz#22 added the third), in the order
+//! [`walk_channel`] checks them:
 //!
-//! 1. **[`is_own_event`] — the one that actually does the work.** An event
-//!    authored by this identity is never evaluated, full stop, checked before
-//!    a single byte of it is opened. A workflow whose reply text happens to
-//!    match its own trigger (`contains: "hello"` replying `"hello back"`)
-//!    therefore cannot loop: its own action event is the ineligible one, not
-//!    the next incoming message.
-//! 2. **The `["client", "buzz-workflow"]` marker tag** ([`CLIENT_MARKER`]),
-//!    carried on every action event via `send_message`'s `extra_tags` — the
-//!    same idempotency-tag idiom desktop's write path uses
-//!    (`desktop/src-tauri/src/events.rs`). This buys nothing against a
-//!    *single* runner re-triggering itself (rule 1 already closes that), but
-//!    gives a future multi-runner deployment (buzz#22) something to filter on
-//!    before rule 1 alone would have to do the work across identities.
+//! 1. **[`is_own_event`] — the single-runner case.** An event authored by
+//!    this identity is never evaluated, full stop, checked before a single
+//!    byte of it is opened. A workflow whose reply text happens to match its
+//!    own trigger (`contains: "hello"` replying `"hello back"`) therefore
+//!    cannot loop: its own action event is the ineligible one, not the next
+//!    incoming message.
+//! 2. **[`is_workflow_action_event`] — the multi-runner case.** The
+//!    `["client", "buzz-workflow"]` marker tag ([`CLIENT_MARKER`]) is carried
+//!    on every action event via `send_message`'s `extra_tags` (the same
+//!    idempotency-tag idiom desktop's write path uses,
+//!    `desktop/src-tauri/src/events.rs`), and buzz#21 wrote it without ever
+//!    reading it back — sufficient for one runner (rule 1 already closes
+//!    that loop) but not for two: identity A's workflow replying to identity
+//!    B's workflow's action, and vice versa, are each an ordinary *foreign*
+//!    event to the other's `is_own_event` check. buzz#22 closes this by
+//!    skipping *any* event carrying the marker, regardless of who signed it —
+//!    the same "an action is never itself a trigger" invariant, extended from
+//!    "by this identity" to "by any workflow runner". This is the direct
+//!    analogue of upstream's `is_workflow_execution_kind` /
+//!    `buzz:workflow`-tag check in `crates/buzz-relay/src/handlers/event.rs`
+//!    — see `docs/workflow-agent-parity.md`.
+//! 3. **A cross-triggering pair terminates in one hop either way.** With (2)
+//!    in place, workflow A's action (tagged, from A) is never re-evaluated by
+//!    B, and B's action is never re-evaluated by A — even when both are
+//!    loaded into the *same* runner (rule 1 also applies there) or into two
+//!    runners with different identities (rule 2 is what actually stops it).
+//!    `tests/workflow_agent.rs`'s `a_cross_triggering_pair_of_workflows_terminates`
+//!    and this module's `a_foreign_marked_event_never_fires` exercise the two
+//!    halves.
 //!
 //! ## The walk: tail only, deliberately not backfill
 //!
@@ -85,6 +102,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use buzz_channel_crypto::ChannelKey;
+use chrono::{TimeZone, Utc};
 use serde_json::{json, Value};
 
 pub use schema::Workflow;
@@ -151,6 +169,12 @@ pub enum SkipReason {
     Empty,
     /// Opened and readable, but no workflow's condition matched.
     NoMatch,
+    /// Carries the `["client", "buzz-workflow"]` marker tag — some workflow
+    /// runner's own action, never a trigger. See the module doc's "Loop
+    /// prevention" section, mechanism 2. Checked before decryption, like
+    /// [`is_own_event`]: an action event is exactly as ineligible as one's
+    /// own, whichever identity signed it.
+    WorkflowAction,
 }
 
 impl SkipReason {
@@ -160,6 +184,7 @@ impl SkipReason {
             Self::Locked => "locked",
             Self::Empty => "empty",
             Self::NoMatch => "no-match",
+            Self::WorkflowAction => "workflow-action",
         }
     }
 }
@@ -173,6 +198,10 @@ pub enum TriggerOutcome {
     Fire {
         workflow: String,
         reply: String,
+        /// `action.channel`, when the workflow overrides the default
+        /// "reply into the channel the trigger fired in" destination
+        /// (buzz#22).
+        channel_override: Option<String>,
     },
 }
 
@@ -187,15 +216,33 @@ pub fn is_own_event(identity: &str, event_pubkey: &str) -> bool {
     identity.eq_ignore_ascii_case(event_pubkey)
 }
 
-/// Decide whether an already-opened, already-known-not-own event fires a
-/// workflow.
+/// Does `tags` carry the `["client", "buzz-workflow"]` marker
+/// ([`CLIENT_MARKER`])? See the module doc's "Loop prevention" section,
+/// mechanism 2 — this is what makes the marker `send_message`'s
+/// `extra_tags` writes actually mean something, across runner identities and
+/// not just within one.
+///
+/// Only the first two slots are checked (`["client", "buzz-workflow", ...]`
+/// still matches) so a future third slot — e.g. naming which workflow acted —
+/// does not require touching this check.
+pub fn is_workflow_action_event(tags: &[Vec<String>]) -> bool {
+    tags.iter().any(|tag| {
+        tag.first().map(String::as_str) == Some("client")
+            && tag.get(1).map(String::as_str) == Some(CLIENT_MARKER)
+    })
+}
+
+/// Decide whether an already-opened, already-known-not-own,
+/// already-known-not-a-workflow-action event fires a workflow.
 ///
 /// Pure, like `crate::search_agent::plan_index` — the whole point is that
 /// "membership is checked before readability, which is checked before
 /// matching" is provable without a relay, a sidecar, or even a keystore in
 /// the loop. Workflows are tried in file order (see
 /// [`schema::load_workflows`]'s sort); the first whose channel scope and
-/// condition both match wins, and later ones are not consulted.
+/// condition both match wins, and later ones are not consulted. Schedule
+/// workflows are never consulted here — [`Workflow::applies_to_channel`]
+/// always returns `false` for them (see [`fire_schedules`] for their path).
 pub fn plan_trigger(
     holds_key: bool,
     opened: &Opened,
@@ -217,10 +264,14 @@ pub fn plan_trigger(
         if !workflow.applies_to_channel(channel_id) {
             continue;
         }
-        if workflow.condition.evaluate(text) {
+        let Some(condition) = workflow.condition() else {
+            continue;
+        };
+        if condition.evaluate(text) {
             return TriggerOutcome::Fire {
                 workflow: workflow.name.clone(),
                 reply: workflow.reply.clone(),
+                channel_override: workflow.action_channel.clone(),
             };
         }
     }
@@ -236,6 +287,11 @@ pub struct ChannelReport {
     pub fired: usize,
     pub sent: usize,
     pub dropped: usize,
+    /// A fired action whose destination channel (`action.channel`, or a
+    /// schedule's required destination) this identity holds no key for —
+    /// refused before a publish was even attempted (buzz#22). See
+    /// [`act`]'s doc.
+    pub refused: usize,
     pub skipped: BTreeMap<&'static str, usize>,
 }
 
@@ -269,6 +325,10 @@ impl CycleReport {
         self.channels.values().map(|c| c.dropped).sum()
     }
 
+    pub fn refused(&self) -> usize {
+        self.channels.values().map(|c| c.refused).sum()
+    }
+
     pub fn to_json(&self) -> Value {
         json!({
             "wrapsSeen": self.wraps_seen,
@@ -276,12 +336,14 @@ impl CycleReport {
             "fired": self.fired(),
             "sent": self.sent(),
             "dropped": self.dropped(),
+            "refused": self.refused(),
             "channels": self.channels.iter().map(|(id, report)| json!({
                 "channel": id,
                 "seen": report.seen,
                 "fired": report.fired,
                 "sent": report.sent,
                 "dropped": report.dropped,
+                "refused": report.refused,
                 "skipped": report.skipped,
             })).collect::<Vec<_>>(),
             "errors": self.errors.iter().map(|(id, error)| json!({
@@ -296,8 +358,17 @@ impl CycleReport {
 
 /// The outcome of trying to publish one action.
 enum ActionResult {
-    Sent { event_id: String },
-    Dropped { reason: String },
+    Sent {
+        event_id: String,
+    },
+    Dropped {
+        reason: String,
+    },
+    /// The destination channel is one this identity holds no key for —
+    /// refused before a publish was even attempted. See [`act`]'s doc.
+    Refused {
+        reason: String,
+    },
 }
 
 /// Full-jitter delay for attempt `attempt` (0-indexed).
@@ -309,13 +380,35 @@ fn backoff_delay(attempt: u32) -> Duration {
 /// Post one workflow's reply, sealed through the same [`send_message`] path
 /// `buzz toon send` uses, retrying a transient sidecar failure with backoff
 /// before giving up loudly.
+///
+/// `target_channel` is the *destination* — the channel the trigger fired in
+/// by default, or `action.channel`'s override / required schedule
+/// destination (buzz#22). Whichever it is, this identity must hold a key for
+/// it: [`send_message`]'s own `plan_send` would happily post plaintext into
+/// an unkeyed *public* channel with no key held at all, which is the right
+/// call for a human typing `buzz toon send`, but not for an unattended
+/// workflow action — a YAML file naming an arbitrary public channel must not
+/// be enough, by itself, to make this identity post there on a timer or on
+/// every matching message. Refusing (loud: logged, counted, never silently
+/// dropped) is strictly narrower than what `send_message` alone would allow,
+/// and that narrowing is deliberate.
 async fn act(
     client: &SidecarClient,
     relay_url: &str,
     keystore: &AgentKeystore,
-    channel_id: &str,
+    target_channel: &str,
     reply: String,
 ) -> ActionResult {
+    if keystore.sending_key(target_channel).is_none() {
+        return ActionResult::Refused {
+            reason: format!(
+                "this identity holds no channel key for {target_channel} — refusing to post \
+there; an admin has to add this identity to that channel (the key arrives as a gift wrap), \
+then `buzz toon inbox` before this action can succeed"
+            ),
+        };
+    }
+
     let extra_tags = vec![vec!["client".to_string(), CLIENT_MARKER.to_string()]];
     let mut last_error = String::new();
 
@@ -324,7 +417,7 @@ async fn act(
             client,
             relay_url,
             keystore,
-            channel_id,
+            target_channel,
             reply.clone(),
             &extra_tags,
         )
@@ -346,7 +439,7 @@ async fn act(
                     "{}",
                     json!({
                         "event": "workflow-action-retry",
-                        "channel": channel_id,
+                        "channel": target_channel,
                         "attempt": attempt + 1,
                         "maxAttempts": PUBLISH_MAX_ATTEMPTS,
                         "error": last_error,
@@ -388,12 +481,21 @@ pub async fn run(opts: WorkflowAgentOptions<'_>) -> Result<(), CliError> {
                 "name": w.name,
                 "source": w.source.display().to_string(),
                 "channel": w.channel,
+                "schedule": w.schedule().map(|s| s.source.clone()),
+                "actionChannel": w.action_channel,
             })).collect::<Vec<_>>(),
             "state": state.path().display().to_string(),
             "keystore": keystore.path().display().to_string(),
             "relay": opts.relay_url,
         })
     );
+
+    // Fixed for the process's lifetime — the anchor a never-yet-fired
+    // schedule is measured from (see `is_schedule_due`'s doc: "no
+    // retroactive fire" means "not due until the first tick after *this*
+    // moment", not after some arbitrary historical instant a restart would
+    // otherwise have to persist to keep meaning the same thing).
+    let started_at = Utc::now();
 
     loop {
         let report = cycle(
@@ -403,6 +505,7 @@ pub async fn run(opts: WorkflowAgentOptions<'_>) -> Result<(), CliError> {
             &mut keystore,
             &mut state,
             &workflows,
+            started_at,
         )
         .await?;
         println!(
@@ -428,6 +531,7 @@ async fn cycle(
     keystore: &mut AgentKeystore,
     state: &mut WorkflowState,
     workflows: &[Workflow],
+    started_at: chrono::DateTime<Utc>,
 ) -> Result<CycleReport, CliError> {
     let mut report = CycleReport::default();
 
@@ -469,10 +573,174 @@ async fn cycle(
         }
     }
 
-    // 3. One atomic commit for the whole cycle: the evaluated set and every
-    //    cursor land together or not at all.
+    // 3. Fire any `schedule:` workflows that are due (buzz#22) — a separate
+    //    pass, not part of the channel walk above, because a schedule has no
+    //    triggering channel or event; see the module doc.
+    for (channel_id, sched_report) in fire_schedules(
+        client,
+        opts.relay_url,
+        keystore,
+        workflows,
+        state,
+        started_at,
+        Utc::now(),
+    )
+    .await
+    {
+        let entry = report.channels.entry(channel_id).or_default();
+        entry.fired += sched_report.fired;
+        entry.sent += sched_report.sent;
+        entry.dropped += sched_report.dropped;
+        entry.refused += sched_report.refused;
+    }
+
+    // 4. One atomic commit for the whole cycle: the evaluated set, every
+    //    cursor, and every schedule's last-fired time land together or not
+    //    at all.
     state.save()?;
     Ok(report)
+}
+
+/// Check every `schedule:` workflow against the wall clock, act on the ones
+/// that are due, and record their fire time — the schedule analogue of
+/// [`walk_channel`]'s "evaluate, act, persist" shape, minus a channel walk to
+/// drive it (see the module doc's "buzz#22" section).
+///
+/// Returns one [`ChannelReport`] per destination channel a schedule fired
+/// into, for the caller to fold into [`CycleReport::channels`].
+async fn fire_schedules(
+    client: &SidecarClient,
+    relay_url: &str,
+    keystore: &AgentKeystore,
+    workflows: &[Workflow],
+    state: &mut WorkflowState,
+    started_at: chrono::DateTime<Utc>,
+    now: chrono::DateTime<Utc>,
+) -> BTreeMap<String, ChannelReport> {
+    let mut reports: BTreeMap<String, ChannelReport> = BTreeMap::new();
+    // `timestamp()` is negative only before 1970 — clamped rather than
+    // `as u64`-wrapped, so a clock that is merely wrong reads as "never due"
+    // instead of "due since a huge unsigned time in the future".
+    let now_secs = now.timestamp().max(0) as u64;
+    let started_at_secs = started_at.timestamp().max(0) as u64;
+
+    for workflow in workflows {
+        let Some(schedule) = workflow.schedule() else {
+            continue;
+        };
+        // A schedule that has never fired (by this state file) is measured
+        // from the process's start time, not from `now` at each individual
+        // check — anchoring to "now" would mean every check re-bases its own
+        // reference point to itself, and a strictly-after comparison against
+        // its own instant is never due, ever, no matter how much wall-clock
+        // time actually passes. See `is_schedule_due`'s doc.
+        let since = state.last_fired(&workflow.name).unwrap_or(started_at_secs);
+        if !is_schedule_due(&schedule.compiled, since, now_secs) {
+            continue;
+        }
+        // `schema::parse_workflow` requires `action.channel` for every
+        // schedule trigger — there is no triggering channel to fall back to.
+        let target_channel = workflow
+            .action_channel
+            .as_deref()
+            .expect("a schedule workflow always has action_channel — enforced at parse time");
+
+        let report = reports.entry(target_channel.to_string()).or_default();
+        report.fired += 1;
+        match act(
+            client,
+            relay_url,
+            keystore,
+            target_channel,
+            workflow.reply.clone(),
+        )
+        .await
+        {
+            ActionResult::Sent { event_id } => {
+                report.sent += 1;
+                println!(
+                    "{}",
+                    json!({
+                        "event": "workflow-action-sent",
+                        "workflow": workflow.name,
+                        "trigger": "schedule",
+                        "channel": target_channel,
+                        "targetChannel": target_channel,
+                        "actionEvent": event_id,
+                    })
+                );
+            }
+            ActionResult::Dropped { reason } => {
+                report.dropped += 1;
+                eprintln!(
+                    "{}",
+                    json!({
+                        "event": "workflow-action-dropped",
+                        "workflow": workflow.name,
+                        "trigger": "schedule",
+                        "channel": target_channel,
+                        "targetChannel": target_channel,
+                        "reason": reason,
+                    })
+                );
+            }
+            ActionResult::Refused { reason } => {
+                report.refused += 1;
+                eprintln!(
+                    "{}",
+                    json!({
+                        "event": "workflow-action-refused",
+                        "workflow": workflow.name,
+                        "trigger": "schedule",
+                        "channel": target_channel,
+                        "targetChannel": target_channel,
+                        "reason": reason,
+                    })
+                );
+            }
+        }
+        // Recorded regardless of Sent/Dropped/Refused — this slot is used up
+        // either way, mirroring `mark_evaluated`'s "not queued for a later
+        // cycle" rule (see the module doc).
+        state.set_last_fired(&workflow.name, now_secs);
+    }
+    reports
+}
+
+/// Is `schedule` due to fire, given `since` (unix seconds — the last time it
+/// fired, or, if it never has, a fixed reference point the caller chooses —
+/// see [`fire_schedules`]) and the current wall-clock time `now` (also unix
+/// seconds)?
+///
+/// Due exactly when the schedule's next tick *strictly after* `since` has
+/// already passed relative to `now`. This is what makes a missed tick (the
+/// agent was down, or one slow cycle) still fire exactly once when the agent
+/// next checks, without replaying every tick that would have fired in
+/// between — there is only ever "the next one", never "the backlog".
+///
+/// `since` deliberately is **not** "now at this call" for the
+/// never-fired case — that would make firing impossible: a schedule strictly
+/// after its own instant is never due *at* that instant, and if every
+/// subsequent check re-anchors to its own new "now", it stays permanently
+/// one tick away from due, forever. The anchor has to be a fixed point that
+/// does not move just because the check ran again — [`fire_schedules`]
+/// supplies the process's start time for that case, chosen once and reused
+/// across every cycle until the schedule fires for the first time.
+///
+/// Pure and independent of wall-clock reality, which is what makes cron
+/// testable without waiting on it: every case in this module's tests drives
+/// `since` and `now` directly.
+pub fn is_schedule_due(schedule: &cron::Schedule, since: u64, now: u64) -> bool {
+    let Some(now_dt) = Utc.timestamp_opt(now as i64, 0).single() else {
+        return false;
+    };
+    let Some(since_dt) = Utc.timestamp_opt(since as i64, 0).single() else {
+        return false;
+    };
+    schedule
+        .after(&since_dt)
+        .next()
+        .is_some_and(|next| next <= now_dt)
 }
 
 /// The tail walk for one channel: fetch, evaluate, act, and (only once the
@@ -534,13 +802,25 @@ async fn walk_channel(
                 continue;
             }
 
-            let opened = open_message(&tags_as_strings(event), &event.content, ring);
+            let tags = tags_as_strings(event);
+            if is_workflow_action_event(&tags) {
+                report.skip(SkipReason::WorkflowAction);
+                state.mark_evaluated(&event_id);
+                continue;
+            }
+
+            let opened = open_message(&tags, &event.content, ring);
             let outcome = plan_trigger(!ring.is_empty(), &opened, workflows, channel_id);
             match outcome {
                 TriggerOutcome::Skip(reason) => report.skip(reason),
-                TriggerOutcome::Fire { workflow, reply } => {
+                TriggerOutcome::Fire {
+                    workflow,
+                    reply,
+                    channel_override,
+                } => {
                     report.fired += 1;
-                    match act(client, opts.relay_url, keystore, channel_id, reply).await {
+                    let target_channel = channel_override.as_deref().unwrap_or(channel_id);
+                    match act(client, opts.relay_url, keystore, target_channel, reply).await {
                         ActionResult::Sent {
                             event_id: action_id,
                         } => {
@@ -551,6 +831,7 @@ async fn walk_channel(
                                     "event": "workflow-action-sent",
                                     "workflow": workflow,
                                     "channel": channel_id,
+                                    "targetChannel": target_channel,
                                     "triggerEvent": event_id,
                                     "actionEvent": action_id,
                                 })
@@ -564,6 +845,21 @@ async fn walk_channel(
                                     "event": "workflow-action-dropped",
                                     "workflow": workflow,
                                     "channel": channel_id,
+                                    "targetChannel": target_channel,
+                                    "triggerEvent": event_id,
+                                    "reason": reason,
+                                })
+                            );
+                        }
+                        ActionResult::Refused { reason } => {
+                            report.refused += 1;
+                            eprintln!(
+                                "{}",
+                                json!({
+                                    "event": "workflow-action-refused",
+                                    "workflow": workflow,
+                                    "channel": channel_id,
+                                    "targetChannel": target_channel,
                                     "triggerEvent": event_id,
                                     "reason": reason,
                                 })
@@ -674,6 +970,7 @@ mod tests {
             TriggerOutcome::Fire {
                 workflow: "greeter".to_string(),
                 reply: "hi there".to_string(),
+                channel_override: None,
             }
         );
     }
@@ -756,6 +1053,7 @@ this is exactly why is_own_event must run first, unconditionally"
             SkipReason::Locked,
             SkipReason::Empty,
             SkipReason::NoMatch,
+            SkipReason::WorkflowAction,
         ];
         let mut codes: Vec<&str> = all.iter().map(|r| r.code()).collect();
         codes.sort_unstable();
@@ -788,5 +1086,165 @@ this is exactly why is_own_event must run first, unconditionally"
         assert_eq!(json["fired"], 3);
         assert_eq!(json["sent"], 2);
         assert_eq!(json["dropped"], 1);
+    }
+
+    #[test]
+    fn cycle_report_json_sums_refused() {
+        let mut report = CycleReport::default();
+        report.channels.insert(
+            "a".to_string(),
+            ChannelReport {
+                refused: 2,
+                ..Default::default()
+            },
+        );
+        report.channels.insert(
+            "b".to_string(),
+            ChannelReport {
+                refused: 1,
+                ..Default::default()
+            },
+        );
+        assert_eq!(report.refused(), 3);
+        assert_eq!(report.to_json()["refused"], 3);
+    }
+
+    // ─── buzz#22: the multi-runner leg of loop prevention ───────────────────
+
+    #[test]
+    fn a_workflow_action_event_is_recognised_by_its_marker_tag() {
+        let tags = vec![
+            vec!["h".to_string(), "eng".to_string()],
+            vec!["client".to_string(), CLIENT_MARKER.to_string()],
+        ];
+        assert!(is_workflow_action_event(&tags));
+    }
+
+    #[test]
+    fn an_ordinary_message_is_not_a_workflow_action_event() {
+        let tags = vec![vec!["h".to_string(), "eng".to_string()]];
+        assert!(!is_workflow_action_event(&tags));
+    }
+
+    #[test]
+    fn a_different_client_tag_is_not_a_workflow_action_event() {
+        let tags = vec![vec!["client".to_string(), "some-other-client".to_string()]];
+        assert!(!is_workflow_action_event(&tags));
+    }
+
+    /// The property buzz#22 adds: a foreign identity's action (someone else's
+    /// workflow runner) is skipped just as surely as this identity's own —
+    /// the marker is checked independently of authorship. This is what makes
+    /// a cross-runner triggering pair terminate; the same-runner case is
+    /// already covered by `is_own_event` (`a_self_matching_reply_would_fire_again_on_content_alone`
+    /// exercises what would happen *without* that check).
+    #[test]
+    fn a_foreign_marked_event_never_reaches_plan_trigger() {
+        let identity = "ab".repeat(32);
+        let foreign_author = "cd".repeat(32);
+        assert!(!is_own_event(&identity, &foreign_author));
+
+        let tags = vec![
+            vec!["h".to_string(), "eng".to_string()],
+            vec!["client".to_string(), CLIENT_MARKER.to_string()],
+        ];
+        // walk_channel's real order: is_own_event, then is_workflow_action_event,
+        // and only past both does plan_trigger ever get called.
+        assert!(is_workflow_action_event(&tags));
+    }
+
+    // ─── buzz#22: schedule due-ness (fake clock, no wall-clock wait) ────────
+
+    fn cron(expr: &str) -> cron::Schedule {
+        expr.parse().unwrap()
+    }
+
+    #[test]
+    fn a_schedule_is_not_due_the_instant_its_anchor_would_match() {
+        // "every second" — if `since` counted as a possible fire itself
+        // (inclusive rather than strictly-after), this would be due at the
+        // same instant.
+        let schedule = cron("* * * * * * *");
+        assert!(!is_schedule_due(&schedule, 1_700_000_000, 1_700_000_000));
+    }
+
+    #[test]
+    fn a_schedule_becomes_due_once_its_first_tick_after_the_anchor_passes() {
+        let schedule = cron("* * * * * * *");
+        // One second later, the tick strictly after the anchor
+        // (1_700_000_000) has passed.
+        assert!(is_schedule_due(&schedule, 1_700_000_000, 1_700_000_001));
+    }
+
+    #[test]
+    fn a_schedule_is_not_due_again_immediately_after_firing() {
+        let schedule = cron("* * * * * * *");
+        assert!(!is_schedule_due(&schedule, 1_700_000_001, 1_700_000_001));
+    }
+
+    #[test]
+    fn a_schedule_becomes_due_again_at_its_next_tick() {
+        let schedule = cron("* * * * * * *");
+        assert!(is_schedule_due(&schedule, 1_700_000_001, 1_700_000_002));
+    }
+
+    #[test]
+    fn a_five_minute_schedule_is_not_due_one_minute_after_firing() {
+        // "*/5 * * * *" normalized: every 5th minute, 0 seconds.
+        let schedule = cron("0 */5 * * * * *");
+        let fired_at = 1_700_000_000u64; // arbitrary anchor
+        assert!(!is_schedule_due(&schedule, fired_at, fired_at + 60));
+    }
+
+    #[test]
+    fn a_daily_schedule_is_due_the_day_after_it_last_fired() {
+        let schedule = cron("0 0 9 * * * *"); // 09:00:00 UTC daily
+        let fired_at = Utc
+            .with_ymd_and_hms(2023, 11, 15, 9, 0, 0)
+            .unwrap()
+            .timestamp() as u64;
+        let next_day_9am = fired_at + 24 * 3600;
+        assert!(is_schedule_due(&schedule, fired_at, next_day_9am));
+        assert!(!is_schedule_due(&schedule, fired_at, next_day_9am - 1));
+    }
+
+    /// The bug buzz#22 had to design around: anchoring the never-fired case
+    /// to "now at this call" instead of a fixed point makes a schedule
+    /// permanently un-fireable, because every check re-bases its own
+    /// reference point to itself and "strictly after myself" is never true
+    /// of the present instant. `fire_schedules` avoids this by anchoring to
+    /// the process's start time, not to each call's own `now` — this test
+    /// pins the property `is_schedule_due` itself must have for that to
+    /// work: the same fixed `since` must eventually become due as `now`
+    /// advances past it, not just at the moment it was chosen.
+    #[test]
+    fn a_fixed_anchor_eventually_becomes_due_as_now_advances() {
+        let schedule = cron("* * * * * * *"); // every second
+        let anchor = 1_700_000_000u64;
+        assert!(!is_schedule_due(&schedule, anchor, anchor));
+        assert!(is_schedule_due(&schedule, anchor, anchor + 1));
+        assert!(is_schedule_due(&schedule, anchor, anchor + 5));
+    }
+
+    // ─── buzz#22: cross-channel action refuses without a held key ──────────
+
+    #[tokio::test]
+    async fn act_refuses_a_target_channel_the_runner_holds_no_key_for() {
+        // A bogus sidecar URL is safe here: the refusal happens before any
+        // network call, because `act` checks `keystore.sending_key` first.
+        let client = SidecarClient::new("http://127.0.0.1:1".to_string()).unwrap();
+        let keystore = AgentKeystore::open(std::path::PathBuf::from(
+            "/nonexistent/agent-channel-keys.json",
+        ))
+        .unwrap();
+        let result = act(
+            &client,
+            "ws://127.0.0.1:1",
+            &keystore,
+            "0c3b7e41-5d2f-4b18-9a06-2e7f5c4d3b1a",
+            "hi".to_string(),
+        )
+        .await;
+        assert!(matches!(result, ActionResult::Refused { .. }));
     }
 }
