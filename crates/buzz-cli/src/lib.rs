@@ -5,6 +5,8 @@ mod channel_key_grant;
 mod client;
 mod commands;
 mod error;
+mod search_agent;
+mod search_index;
 mod sidecar;
 mod toon_relay;
 mod validate;
@@ -367,6 +369,51 @@ first, then the older epochs kept so history still opens. Key bytes are never \
 printed.\n\nExamples:\n  buzz toon keys"
     )]
     Keys,
+    /// Run the search indexer agent-member: index the channels this agent is in
+    #[command(
+        after_help = "A long-running agent-member (buzz#20). Every cycle it collects \
+gift-wrapped channel keys exactly as 'buzz toon inbox' does, then — for each \
+channel it holds a key for, and ONLY those — backfills history and tails new \
+messages from the relay, opens what its key ring opens, and indexes the \
+plaintext.\n\n\
+Membership is the access control: content from a channel this agent was never \
+admitted to is never indexed, and a message sealed under an epoch it does not \
+hold is skipped entirely (its ciphertext is not indexed either). A rotation \
+that excludes this agent stops the index at the epoch boundary while leaving \
+everything it could already read searchable.\n\n\
+Queries are answered over a LOOPBACK-ONLY HTTP endpoint with no \
+authentication: GET/POST /search?q=<text>&channels=<id,id>&limit=<n> and \
+GET /health. The channel scope is required and fail-closed — an empty scope \
+returns nothing. The agent cannot verify the caller's membership, so this is a \
+local-trusted-agent surface only; do not expose it.\n\n\
+State: the index and its per-channel resume cursors are one file (--index), \
+written atomically, so a restart resumes where it left off and deleting the \
+file rebuilds from relay history with no manual steps.\n\n\
+Examples:\n  buzz toon search-agent\n  \
+buzz toon search-agent --port 9000 --poll-interval 15\n  \
+buzz toon search-agent --once   # one cycle, print the report, exit\n  \
+curl 'http://127.0.0.1:8788/search?q=deploy&channels=<UUID>'"
+    )]
+    SearchAgent {
+        /// Loopback port for the query endpoint. 0 picks a free one.
+        #[arg(long, default_value_t = search_agent::DEFAULT_SEARCH_AGENT_PORT)]
+        port: u16,
+        /// Path to the search index; defaults to <data-dir>/buzz/search-index.json
+        #[arg(long = "index", env = "BUZZ_SEARCH_INDEX", hide_env_values = true)]
+        index: Option<String>,
+        /// Seconds between ingest cycles
+        #[arg(long, default_value = "30")]
+        poll_interval: u64,
+        /// Events per relay page for the history and tail walks
+        #[arg(long, default_value = "200")]
+        page_size: u32,
+        /// Maximum gift wraps to fetch per cycle
+        #[arg(long, default_value = "200")]
+        inbox_limit: u32,
+        /// Run one ingest cycle, print the report, and exit
+        #[arg(long)]
+        once: bool,
+    },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -2207,7 +2254,7 @@ mod tests {
         );
         assert_eq!(
             names(&cmd, "toon"),
-            vec!["inbox", "keys", "read", "send", "status"]
+            vec!["inbox", "keys", "read", "search-agent", "send", "status"]
         );
     }
 
@@ -2229,7 +2276,7 @@ mod tests {
             ("reactions", 3),
             ("repos", 5),
             ("social", 7),
-            ("toon", 5),
+            ("toon", 6),
             ("upload", 1),
             ("users", 5),
             ("workflows", 8),
