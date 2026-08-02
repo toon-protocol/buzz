@@ -125,6 +125,27 @@ pub async fn dispatch(cmd: &ToonCmd, ctx: &ToonContext<'_>) -> Result<(), CliErr
             })
             .await
         }
+        ToonCmd::WorkflowAgent {
+            workflows,
+            state,
+            poll_interval,
+            page_size,
+            inbox_limit,
+            once,
+        } => {
+            crate::workflow_agent::run(crate::workflow_agent::WorkflowAgentOptions {
+                sidecar_url: ctx.sidecar_url,
+                relay_url: ctx.relay_url,
+                keystore_path: ctx.keystore_path,
+                state_path: state.as_deref(),
+                workflows_path: std::path::Path::new(workflows),
+                poll_interval: std::time::Duration::from_secs(*poll_interval),
+                page_size: *page_size,
+                inbox_limit: *inbox_limit,
+                once: *once,
+            })
+            .await
+        }
     }
 }
 
@@ -612,14 +633,61 @@ async fn cmd_send(
     channel: &str,
     content: &str,
 ) -> Result<(), CliError> {
-    validate_uuid(channel)?;
     let content = read_or_stdin(content)?;
+    let keystore = open_keystore(ctx)?;
+    let outcome = send_message(client, ctx.relay_url, &keystore, channel, content, &[]).await?;
+
+    let mut out =
+        serde_json::to_value(&outcome.receipt).map_err(|e| CliError::Other(e.to_string()))?;
+    if let Some(obj) = out.as_object_mut() {
+        obj.insert("encrypted".to_string(), json!(outcome.encrypted));
+    }
+    print_json(&out)
+}
+
+/// What one [`send_message`] call did, beyond the sidecar's own receipt.
+pub struct SendOutcome {
+    pub receipt: crate::sidecar::PublishReceipt,
+    pub encrypted: bool,
+}
+
+/// Seal (if the channel is keyed) and publish one channel message through the
+/// sidecar — the exact decision [`plan_send`] makes and `buzz toon send`
+/// exercises above.
+///
+/// Shared by that command and the workflow agent's reply action (buzz#21): a
+/// second implementation of "when may this content be posted, and under what
+/// key" is precisely the kind of drift that would let an automated actor leak
+/// plaintext into a channel a human's `buzz toon send` would have refused.
+///
+/// `extra_tags` is appended after the channel/encryption tags this function
+/// always adds — e.g. the workflow agent's `["client", "buzz-workflow"]`
+/// idempotency/provenance marker (the same `["client", ...]` idiom desktop
+/// uses, see `desktop/src-tauri/src/events.rs`). Every entry must start with
+/// `"client"`, mirroring desktop's `append_client_tags` guard: a caller gets
+/// to add a marker, not forge channel or encryption metadata.
+pub async fn send_message(
+    client: &SidecarClient,
+    relay_url: &str,
+    keystore: &AgentKeystore,
+    channel: &str,
+    content: String,
+    extra_tags: &[Vec<String>],
+) -> Result<SendOutcome, CliError> {
+    validate_uuid(channel)?;
     validate_content_size(&content)?;
     if content.trim().is_empty() {
         return Err(CliError::Usage("content must not be empty".into()));
     }
+    for tag in extra_tags {
+        if tag.first().map(String::as_str) != Some("client") {
+            return Err(CliError::Other(format!(
+                "extra_tags must use the 'client' prefix (got {:?})",
+                tag.first()
+            )));
+        }
+    }
 
-    let keystore = open_keystore(ctx)?;
     let held_key = keystore.sending_key(channel);
 
     // The admin-list read is skipped entirely when a key is held: the answer
@@ -627,7 +695,7 @@ async fn cmd_send(
     let encryption = if held_key.is_some() {
         ChannelEncryption::Keyed
     } else {
-        match fetch_admin_events(ctx.relay_url).await {
+        match fetch_admin_events(relay_url).await {
             Ok(events) => {
                 match resolve_admins(&events, channel, keystore.pinned_creator(channel)) {
                     Some(list) if list.key_id.is_some() => ChannelEncryption::Keyed,
@@ -644,7 +712,7 @@ async fn cmd_send(
     };
 
     let assume_public = std::env::var(ASSUME_PUBLIC_ENV).is_ok_and(|v| !v.is_empty() && v != "0");
-    let (content, tags, encrypted) = match plan_send(held_key, encryption, assume_public) {
+    let (content, mut tags, encrypted) = match plan_send(held_key, encryption, assume_public) {
         SendPlan::Refuse(reason) => return Err(CliError::Usage(reason.to_string())),
         SendPlan::Plaintext => (
             content,
@@ -660,16 +728,13 @@ async fn cmd_send(
             true,
         ),
     };
+    tags.extend(extra_tags.iter().cloned());
 
     let receipt = client
         .publish_unsigned(KIND_CHANNEL_MESSAGE, content, tags)
         .await?;
 
-    let mut out = serde_json::to_value(&receipt).map_err(|e| CliError::Other(e.to_string()))?;
-    if let Some(obj) = out.as_object_mut() {
-        obj.insert("encrypted".to_string(), json!(encrypted));
-    }
-    print_json(&out)
+    Ok(SendOutcome { receipt, encrypted })
 }
 
 #[cfg(test)]

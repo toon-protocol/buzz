@@ -1,0 +1,712 @@
+//! buzz#21 end-to-end: the workflow-runner agent-member.
+//!
+//! Same harness idiom as `tests/search_agent.rs` (buzz#20): drives the real
+//! `buzz toon workflow-agent` binary as a child process against a stub TOON
+//! relay (NIP-01 over WebSocket, honouring `since`/`until`/`limit`) and a stub
+//! `toon-clientd` sidecar. Unlike the search agent's stub, this one also
+//! answers `POST /publish-unsigned` — the workflow agent's whole point is a
+//! *paid write* — signing with the agent's real key and feeding the result
+//! back into the stub relay, so the loop-prevention tests can observe the
+//! agent's own action event exactly as a real relay round trip would produce
+//! it.
+
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::State;
+use axum::response::IntoResponse;
+use axum::routing::{any, get, post};
+use axum::{Json, Router};
+use buzz_channel_crypto::{channel_key_id, encryption_tag, seal, ChannelKey};
+use futures_util::{SinkExt as _, StreamExt as _};
+use nostr::{Event, EventBuilder, JsonUtil as _, Keys, Kind, Tag, Timestamp, UnsignedEvent};
+use serde_json::{json, Value};
+use tokio::io::AsyncBufReadExt as _;
+use tokio::net::TcpListener;
+
+/// The channel the agent is admitted to.
+const MEMBER: &str = "6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b";
+/// The channel it is not. Same admin, same relay, no wrap ever addressed to
+/// this agent for it.
+const CONTROL: &str = "0c3b7e41-5d2f-4b18-9a06-2e7f5c4d3b1a";
+
+const KIND_CHANNEL_MESSAGE: u16 = 9;
+const KIND_ADMIN_LIST: u16 = 39100;
+const KIND_KEY_RUMOR: u16 = 44300;
+
+const EPOCH0: ChannelKey = [0x11; 32];
+const CONTROL_KEY: ChannelKey = [0x33; 32];
+
+// ─── stub relay ──────────────────────────────────────────────────────────────
+
+#[derive(Clone, Default)]
+struct RelayState {
+    events: Arc<Mutex<Vec<Event>>>,
+}
+
+impl RelayState {
+    fn publish(&self, event: Event) {
+        self.events.lock().unwrap().push(event);
+    }
+
+    fn all(&self) -> Vec<Event> {
+        self.events.lock().unwrap().clone()
+    }
+
+    /// `kinds`, `#p`, `#h`, `since`, `until`, `limit` — same semantics as
+    /// `tests/search_agent.rs`'s stub: `since`/`until` inclusive, `limit`
+    /// returns the newest N, exactly NIP-01.
+    fn matching(&self, filter: &Value) -> Vec<Event> {
+        let kinds: Option<Vec<u16>> = filter.get("kinds").and_then(Value::as_array).map(|k| {
+            k.iter()
+                .filter_map(|v| v.as_u64().map(|n| n as u16))
+                .collect()
+        });
+        let tag_filter = |name: &str| -> Option<Vec<String>> {
+            filter
+                .get(format!("#{name}"))
+                .and_then(Value::as_array)
+                .map(|v| {
+                    v.iter()
+                        .filter_map(|x| x.as_str().map(str::to_string))
+                        .collect()
+                })
+        };
+        let p_values = tag_filter("p");
+        let h_values = tag_filter("h");
+        let since = filter.get("since").and_then(Value::as_u64);
+        let until = filter.get("until").and_then(Value::as_u64);
+        let limit = filter.get("limit").and_then(Value::as_u64).unwrap_or(500) as usize;
+
+        let mut matches: Vec<Event> = self
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| {
+                if let Some(kinds) = &kinds {
+                    if !kinds.contains(&event.kind.as_u16()) {
+                        return false;
+                    }
+                }
+                let at = event.created_at.as_secs();
+                if since.is_some_and(|floor| at < floor) || until.is_some_and(|cap| at > cap) {
+                    return false;
+                }
+                for (name, wanted) in [("p", &p_values), ("h", &h_values)] {
+                    let Some(wanted) = wanted else { continue };
+                    let has = event.tags.iter().any(|tag| {
+                        let row = tag.clone().to_vec();
+                        row.first().map(String::as_str) == Some(name)
+                            && row.get(1).is_some_and(|v| wanted.contains(v))
+                    });
+                    if !has {
+                        return false;
+                    }
+                }
+                true
+            })
+            .cloned()
+            .collect();
+
+        matches.sort_by_key(|event| std::cmp::Reverse(event.created_at));
+        matches.truncate(limit);
+        matches
+    }
+}
+
+async fn relay_socket(ws: WebSocketUpgrade, State(state): State<RelayState>) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| relay_session(socket, state))
+}
+
+async fn relay_session(socket: WebSocket, state: RelayState) {
+    let (mut tx, mut rx) = socket.split();
+    while let Some(Ok(message)) = rx.next().await {
+        let Message::Text(text) = message else {
+            continue;
+        };
+        let Ok(frame) = serde_json::from_str::<Vec<Value>>(&text) else {
+            continue;
+        };
+        if frame.first().and_then(Value::as_str) != Some("REQ") {
+            continue;
+        }
+        let subscription_id = frame
+            .get(1)
+            .and_then(Value::as_str)
+            .unwrap_or("sub")
+            .to_string();
+        let filter = frame.get(2).cloned().unwrap_or_else(|| json!({}));
+
+        for event in state.matching(&filter) {
+            // Devnet shape on purpose (buzz#19): the payload is a JSON string.
+            let payload = serde_json::to_string(&event).unwrap();
+            let out = json!(["EVENT", subscription_id, payload]).to_string();
+            if tx.send(Message::Text(out.into())).await.is_err() {
+                return;
+            }
+        }
+        let eose = json!(["EOSE", subscription_id]).to_string();
+        if tx.send(Message::Text(eose.into())).await.is_err() {
+            return;
+        }
+    }
+}
+
+async fn spawn_relay(state: RelayState) -> String {
+    let app = Router::new()
+        .route("/", any(relay_socket))
+        .with_state(state);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr: SocketAddr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("ws://{addr}")
+}
+
+// ─── stub sidecar ────────────────────────────────────────────────────────────
+
+/// Unlike the search agent's stub (read-only), this one also signs and
+/// "delivers" `/publish-unsigned` writes into the shared `RelayState` — the
+/// workflow agent's action is a paid write, and the loop-prevention tests
+/// need to see the agent's own event come back through a real read.
+#[derive(Clone)]
+struct SidecarState {
+    keys: Keys,
+    relay: RelayState,
+    /// Monotonic clock for published events, so a burst of actions in one
+    /// process tick still gets distinct, strictly increasing timestamps.
+    clock: Arc<AtomicI64>,
+    nonce: Arc<AtomicI64>,
+}
+
+async fn sidecar_status(State(state): State<SidecarState>) -> Json<Value> {
+    Json(json!({
+        "ready": true,
+        "bootstrapping": false,
+        "feePerEvent": "2000",
+        "asset": "USDC",
+        "identity": { "nostrPubkey": state.keys.public_key().to_hex() },
+    }))
+}
+
+async fn sidecar_unwrap(
+    State(state): State<SidecarState>,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    let Some(wrap) = body
+        .get("wrap")
+        .and_then(|w| serde_json::from_value::<Event>(w.clone()).ok())
+    else {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"error": "malformed", "detail": "not an event"})),
+        )
+            .into_response();
+    };
+    match nostr::nips::nip59::extract_rumor(&state.keys, &wrap).await {
+        Ok(gift) => Json(json!({
+            "rumor": serde_json::from_str::<Value>(&gift.rumor.as_json()).unwrap(),
+            "sealPubkey": gift.sender.to_hex(),
+        }))
+        .into_response(),
+        Err(e) => (
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"error": "decrypt-failed", "detail": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn sidecar_publish_unsigned(
+    State(state): State<SidecarState>,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    let kind = body.get("kind").and_then(Value::as_u64).unwrap_or(9) as u16;
+    let content = body
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let tags: Vec<Vec<String>> = body
+        .get("tags")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    row.as_array().map(|r| {
+                        r.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let channel_id = tags
+        .iter()
+        .find(|t| t.first().map(String::as_str) == Some("h"))
+        .and_then(|t| t.get(1).cloned())
+        .unwrap_or_default();
+
+    let at = state.clock.fetch_add(1, Ordering::SeqCst);
+    let nostr_tags: Vec<Tag> = tags.iter().map(|t| Tag::parse(t).unwrap()).collect();
+    let event = EventBuilder::new(Kind::Custom(kind), content)
+        .tags(nostr_tags)
+        .custom_created_at(Timestamp::from_secs(at as u64))
+        .sign_with_keys(&state.keys)
+        .unwrap();
+
+    let event_id = event.id.to_hex();
+    state.relay.publish(event);
+
+    let nonce = state.nonce.fetch_add(1, Ordering::SeqCst);
+    Json(json!({
+        "eventId": event_id,
+        "channelId": channel_id,
+        "nonce": nonce,
+        "feePaid": "2000",
+        "channelBalanceAfter": "999998000",
+    }))
+    .into_response()
+}
+
+async fn spawn_sidecar(state: SidecarState) -> String {
+    let app = Router::new()
+        .route("/status", get(sidecar_status))
+        .route("/nip59-unwrap", post(sidecar_unwrap))
+        .route("/publish-unsigned", post(sidecar_publish_unsigned))
+        .with_state(state);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr: SocketAddr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}")
+}
+
+// ─── the community, as an admin's client would publish it ────────────────────
+
+fn admin_list(signer: &Keys, channel: &str, key: &ChannelKey, epoch: u64, at: u64) -> Event {
+    let creator = signer.public_key().to_hex();
+    EventBuilder::new(Kind::Custom(KIND_ADMIN_LIST), "")
+        .tags(vec![
+            Tag::parse(["d", channel]).unwrap(),
+            Tag::parse(["creator", &creator]).unwrap(),
+            Tag::parse(["p", &creator, "admin"]).unwrap(),
+            Tag::parse(["key", &channel_key_id(key), &epoch.to_string()]).unwrap(),
+        ])
+        .allow_self_tagging()
+        .custom_created_at(Timestamp::from_secs(at))
+        .sign_with_keys(signer)
+        .unwrap()
+}
+
+fn sealed_message(signer: &Keys, channel: &str, key: &ChannelKey, body: &str, at: u64) -> Event {
+    EventBuilder::new(Kind::Custom(KIND_CHANNEL_MESSAGE), seal(body, key))
+        .tags(vec![
+            Tag::parse(["h", channel]).unwrap(),
+            Tag::parse(encryption_tag(key)).unwrap(),
+        ])
+        .custom_created_at(Timestamp::from_secs(at))
+        .sign_with_keys(signer)
+        .unwrap()
+}
+
+async fn wrap_key_to(
+    sender: &Keys,
+    recipient: &Keys,
+    channel: &str,
+    key: &ChannelKey,
+    epoch: u64,
+) -> Event {
+    let rumor = UnsignedEvent::new(
+        sender.public_key(),
+        Timestamp::now(),
+        Kind::Custom(KIND_KEY_RUMOR),
+        vec![
+            Tag::parse(["h", channel]).unwrap(),
+            Tag::parse(["key", &channel_key_id(key), &epoch.to_string()]).unwrap(),
+            Tag::parse(["p", &recipient.public_key().to_hex()]).unwrap(),
+        ],
+        hex::encode(key),
+    );
+    EventBuilder::gift_wrap(sender, &recipient.public_key(), rumor, [])
+        .await
+        .unwrap()
+}
+
+// ─── driving the real binary ─────────────────────────────────────────────────
+
+struct Agent {
+    child: tokio::process::Child,
+    log: Arc<Mutex<Vec<Value>>>,
+}
+
+struct Fixture {
+    relay_url: String,
+    sidecar_url: String,
+    scratch: tempfile::TempDir,
+}
+
+impl Fixture {
+    fn keystore(&self) -> std::path::PathBuf {
+        self.scratch.path().join("agent-channel-keys.json")
+    }
+
+    fn state(&self) -> std::path::PathBuf {
+        self.scratch.path().join("workflow-agent-state.json")
+    }
+
+    fn workflows_dir(&self) -> std::path::PathBuf {
+        let dir = self.scratch.path().join("workflows");
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_workflow(&self, name: &str, yaml: &str) -> std::path::PathBuf {
+        let path = self.workflows_dir().join(name);
+        std::fs::write(&path, yaml).unwrap();
+        path
+    }
+
+    async fn start_agent(&self, workflows: &std::path::Path, page_size: u32, once: bool) -> Agent {
+        let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_buzz"));
+        cmd.arg("--toon-relay")
+            .arg(&self.relay_url)
+            .arg("--sidecar-url")
+            .arg(&self.sidecar_url)
+            .arg("--keystore")
+            .arg(self.keystore())
+            .args(["toon", "workflow-agent"])
+            .arg("--workflows")
+            .arg(workflows)
+            .arg("--state")
+            .arg(self.state())
+            .args([
+                "--poll-interval",
+                "1",
+                "--page-size",
+                &page_size.to_string(),
+            ])
+            .env_remove("BUZZ_TOON_RELAY_URL")
+            .env_remove("BUZZ_AGENT_KEYSTORE")
+            .env_remove("BUZZ_WORKFLOW_STATE")
+            .env_remove("TOON_DAEMON_URL")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if once {
+            cmd.arg("--once");
+        }
+
+        let mut child = cmd.spawn().expect("the buzz binary should run");
+        let stdout = child.stdout.take().expect("piped stdout");
+        let stderr = child.stderr.take().expect("piped stderr");
+        let log: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let sink = Arc::clone(&log);
+        tokio::spawn(async move {
+            let mut lines = tokio::io::BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Ok(value) = serde_json::from_str::<Value>(&line) {
+                    sink.lock().unwrap().push(value);
+                }
+            }
+        });
+        let sink = Arc::clone(&log);
+        tokio::spawn(async move {
+            let mut lines = tokio::io::BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Ok(value) = serde_json::from_str::<Value>(&line) {
+                    sink.lock().unwrap().push(value);
+                }
+            }
+        });
+
+        Agent { child, log }
+    }
+}
+
+impl Agent {
+    async fn wait_for_exit(&mut self, timeout: Duration) -> std::process::ExitStatus {
+        tokio::time::timeout(timeout, self.child.wait())
+            .await
+            .expect("the agent should exit within the timeout")
+            .expect("waiting on the child should succeed")
+    }
+
+    async fn wait_for_cycles(&self, n: usize) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let cycles = self.cycles().len();
+            if cycles >= n {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the agent completed {cycles} of {n} cycles; log: {:?}",
+                self.log.lock().unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    fn cycles(&self) -> Vec<Value> {
+        self.log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|line| line["event"] == "workflow-agent-cycle")
+            .cloned()
+            .collect()
+    }
+
+    fn sent_actions(&self) -> Vec<Value> {
+        self.log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|line| line["event"] == "workflow-action-sent")
+            .cloned()
+            .collect()
+    }
+
+    async fn wait_for_sent(&self, n: usize) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let sent = self.sent_actions().len();
+            if sent >= n {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the agent sent {sent} of {n} actions; log: {:?}",
+                self.log.lock().unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn stop(mut self) {
+        let _ = self.child.kill().await;
+    }
+}
+
+/// The world every test starts from: two encrypted channels provisioned by
+/// the same admin, a key wrapped to the agent for exactly one of them, and a
+/// shared `RelayState` the stub sidecar also publishes into.
+async fn fixture(agent: &Keys) -> (Fixture, RelayState, Keys) {
+    let admin = Keys::generate();
+    let relay = RelayState::default();
+    let relay_url = spawn_relay(relay.clone()).await;
+    let sidecar_url = spawn_sidecar(SidecarState {
+        keys: agent.clone(),
+        relay: relay.clone(),
+        clock: Arc::new(AtomicI64::new(1_700_001_000)),
+        nonce: Arc::new(AtomicI64::new(1)),
+    })
+    .await;
+
+    relay.publish(admin_list(&admin, MEMBER, &EPOCH0, 0, 1_700_000_000));
+    relay.publish(admin_list(&admin, CONTROL, &CONTROL_KEY, 0, 1_700_000_000));
+    relay.publish(wrap_key_to(&admin, agent, MEMBER, &EPOCH0, 0).await);
+
+    (
+        Fixture {
+            relay_url,
+            sidecar_url,
+            scratch: tempfile::tempdir().unwrap(),
+        },
+        relay,
+        admin,
+    )
+}
+
+const GREETER_YAML: &str =
+    "version: 1\nname: greeter\ntrigger:\n  contains: hello\naction:\n  reply: hello back\n";
+
+// ─── the acceptance criteria ─────────────────────────────────────────────────
+
+/// A matching message in a held channel fires the workflow, and the reply
+/// lands sealed under the channel's key.
+#[tokio::test]
+async fn a_matching_message_fires_and_the_reply_lands_sealed() {
+    let agent_keys = Keys::generate();
+    let (fixture, relay, admin) = fixture(&agent_keys).await;
+    let workflow = fixture.write_workflow("greeter.yaml", GREETER_YAML);
+
+    relay.publish(sealed_message(
+        &admin,
+        MEMBER,
+        &EPOCH0,
+        "well hello there",
+        1_700_000_100,
+    ));
+
+    let agent = fixture.start_agent(&workflow, 50, false).await;
+    agent.wait_for_sent(1).await;
+
+    let sent = &agent.sent_actions()[0];
+    assert_eq!(sent["workflow"], "greeter");
+    assert_eq!(sent["channel"], MEMBER);
+
+    let action_id = sent["actionEvent"].as_str().unwrap();
+    let published = relay
+        .all()
+        .into_iter()
+        .find(|e| e.id.to_hex() == action_id)
+        .expect("the action event should have reached the relay");
+    assert_eq!(published.pubkey, agent_keys.public_key());
+
+    // Sealed, not plaintext: the wire content must not contain the reply text.
+    assert!(!published.content.contains("hello back"));
+    let opened = buzz_channel_crypto::open(&published.content, &EPOCH0)
+        .expect("the reply must open under the channel's key");
+    assert_eq!(opened, "hello back");
+
+    let has_marker = published.tags.iter().any(|t| {
+        let row = t.clone().to_vec();
+        row.first().map(String::as_str) == Some("client")
+            && row.get(1).map(String::as_str) == Some("buzz-workflow")
+    });
+    assert!(has_marker, "action event must carry the client marker tag");
+
+    agent.stop().await;
+}
+
+/// A workflow whose reply matches its own trigger does not loop: the agent's
+/// own action event is never evaluated, so "hello back" containing "hello"
+/// never causes a second reply.
+#[tokio::test]
+async fn a_self_matching_reply_does_not_loop() {
+    let agent_keys = Keys::generate();
+    let (fixture, relay, admin) = fixture(&agent_keys).await;
+    let workflow = fixture.write_workflow("greeter.yaml", GREETER_YAML);
+
+    relay.publish(sealed_message(
+        &admin,
+        MEMBER,
+        &EPOCH0,
+        "hello team",
+        1_700_000_100,
+    ));
+
+    let agent = fixture.start_agent(&workflow, 50, false).await;
+    agent.wait_for_sent(1).await;
+
+    // Run several more cycles. If the agent's own reply re-triggered the
+    // workflow, `sent` would keep growing without bound.
+    agent.wait_for_cycles(4).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        agent.sent_actions().len(),
+        1,
+        "the agent's own reply must not re-trigger the workflow: {:?}",
+        agent.log.lock().unwrap()
+    );
+
+    agent.stop().await;
+}
+
+/// A message in a channel this agent was never admitted to is never
+/// evaluated — membership by construction, identical to buzz#20.
+#[tokio::test]
+async fn a_message_in_a_non_member_channel_never_fires() {
+    let agent_keys = Keys::generate();
+    let (fixture, relay, admin) = fixture(&agent_keys).await;
+    let workflow = fixture.write_workflow("greeter.yaml", GREETER_YAML);
+
+    relay.publish(sealed_message(
+        &admin,
+        CONTROL,
+        &CONTROL_KEY,
+        "hello from a channel this agent cannot read",
+        1_700_000_100,
+    ));
+
+    let agent = fixture.start_agent(&workflow, 50, false).await;
+    agent.wait_for_cycles(3).await;
+
+    assert!(
+        agent.sent_actions().is_empty(),
+        "a channel with no held key must never fire, even when its plaintext (were it \
+readable) would match: {:?}",
+        agent.log.lock().unwrap()
+    );
+
+    agent.stop().await;
+}
+
+/// Restart semantics: an event is evaluated at most once. A second `--once`
+/// run over the same state file must not re-fire on a message the first run
+/// already evaluated.
+#[tokio::test]
+async fn a_restart_does_not_re_fire_on_an_already_evaluated_event() {
+    let agent_keys = Keys::generate();
+    let (fixture, relay, admin) = fixture(&agent_keys).await;
+    let workflow = fixture.write_workflow("greeter.yaml", GREETER_YAML);
+
+    relay.publish(sealed_message(
+        &admin,
+        MEMBER,
+        &EPOCH0,
+        "hello once",
+        1_700_000_100,
+    ));
+
+    let mut first = fixture.start_agent(&workflow, 50, true).await;
+    let status = first.wait_for_exit(Duration::from_secs(20)).await;
+    assert!(status.success(), "first --once run should exit cleanly");
+    assert_eq!(
+        first.sent_actions().len(),
+        1,
+        "log: {:?}",
+        first.log.lock().unwrap()
+    );
+
+    let mut second = fixture.start_agent(&workflow, 50, true).await;
+    let status = second.wait_for_exit(Duration::from_secs(20)).await;
+    assert!(status.success(), "second --once run should exit cleanly");
+    assert!(
+        second.sent_actions().is_empty(),
+        "a restart must not re-fire on an event the state file already recorded as \
+evaluated: {:?}",
+        second.log.lock().unwrap()
+    );
+
+    // The trigger message is still the only channel history — a sanity check
+    // that the test did not accidentally pass because nothing was evaluated
+    // at all.
+    let cycle = &second.cycles()[0];
+    let channel_report = cycle["report"]["channels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["channel"] == MEMBER)
+        .expect("the member channel should still be walked");
+    assert!(
+        channel_report["seen"].as_u64().unwrap() >= 1,
+        "the walk must still see the trigger event, just not re-fire on it: {channel_report}"
+    );
+}
+
+/// A malformed workflow definition fails loud: the process refuses to start
+/// rather than running with zero (or partial) workflows loaded.
+#[tokio::test]
+async fn a_malformed_workflow_file_fails_loud_at_startup() {
+    let agent_keys = Keys::generate();
+    let (fixture, _relay, _admin) = fixture(&agent_keys).await;
+    // Missing the required `version` field.
+    let workflow = fixture.write_workflow(
+        "bad.yaml",
+        "trigger:\n  contains: hello\naction:\n  reply: hi\n",
+    );
+
+    let mut agent = fixture.start_agent(&workflow, 50, true).await;
+    let status = agent.wait_for_exit(Duration::from_secs(10)).await;
+    assert!(
+        !status.success(),
+        "a malformed workflow file must not let the agent start"
+    );
+}

@@ -103,7 +103,16 @@ axum = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
 # Random number generation — full jitter for exponential backoff in with_retry
+# and in the workflow agent's sidecar-down publish retry.
 rand = { workspace = true }
+
+# YAML workflow definitions for `buzz toon workflow-agent` (buzz#21) — the
+# same crate `buzz-workflow` uses, so a v1 definition's error messages come
+# from one parser the whole workspace already trusts.
+serde_yaml = { workspace = true }
+
+# `matches:` trigger conditions in a workflow definition.
+regex = "1"
 
 [dev-dependencies]
 # Scratch files for channel-templates.json fixtures in tests

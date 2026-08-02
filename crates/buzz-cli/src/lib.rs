@@ -10,6 +10,7 @@ mod search_index;
 mod sidecar;
 mod toon_relay;
 mod validate;
+mod workflow_agent;
 
 use clap::{Parser, Subcommand};
 use client::BuzzClient;
@@ -405,6 +406,62 @@ curl 'http://127.0.0.1:8788/search?q=deploy&channels=<UUID>'"
         #[arg(long, default_value = "30")]
         poll_interval: u64,
         /// Events per relay page for the history and tail walks
+        #[arg(long, default_value = "200")]
+        page_size: u32,
+        /// Maximum gift wraps to fetch per cycle
+        #[arg(long, default_value = "200")]
+        inbox_limit: u32,
+        /// Run one ingest cycle, print the report, and exit
+        #[arg(long)]
+        once: bool,
+    },
+    /// Run the workflow-runner agent-member: reply automatically to matching messages (buzz#21)
+    #[command(
+        after_help = "A long-running agent-member (buzz#21), structured exactly like \
+'search-agent' (buzz#20): every cycle it collects gift-wrapped channel keys \
+exactly as 'buzz toon inbox' does, then — for each channel it holds a key \
+for, and ONLY those — tails new messages, opens what its key ring opens, and \
+evaluates them against every loaded workflow definition. A match posts the \
+workflow's reply back into the same channel as a paid write through this \
+identity's own sidecar, sealed under the channel's key exactly like \
+'buzz toon send'.\n\n\
+Membership is the access control, identical to search-agent: a workflow \
+scoped to (or matching in) a channel this agent was never admitted to simply \
+never sees an event to evaluate.\n\n\
+Loop prevention: an event authored by this identity is never evaluated, full \
+stop — so a workflow whose reply matches its own trigger cannot loop. Every \
+action event also carries a [\"client\", \"buzz-workflow\"] tag for future \
+multi-runner filtering.\n\n\
+YAML v1 shape (unknown fields are a load error):\n  \
+version: 1                      # required, only 1 is understood\n  \
+name: greeter                   # optional, defaults to the file name\n  \
+trigger:\n    \
+channel: <uuid>                # optional; omit = any held channel\n    \
+contains: hello                # exactly one of contains/matches\n  \
+action:\n    \
+reply: hi there\n\n\
+State: per-channel walk cursors and the set of already-evaluated event ids \
+live in one file (--state), written atomically, so a restart never re-fires \
+on an event this file already recorded as evaluated. A dropped action \
+(sidecar unreachable through retry) is not queued for later — see the module \
+documentation for that v1 semantics.\n\n\
+Examples:\n  \
+buzz toon workflow-agent --workflows ./workflows/greeter.yaml\n  \
+buzz toon workflow-agent --workflows ./workflows --poll-interval 15\n  \
+buzz toon workflow-agent --workflows ./workflows --once   # one cycle, print the report, exit"
+    )]
+    WorkflowAgent {
+        /// Path to a single workflow YAML file, or a directory of them
+        #[arg(long)]
+        workflows: String,
+        /// Path to the resume state file (per-channel cursors + evaluated
+        /// event ids); defaults to <data-dir>/buzz/workflow-agent-state.json
+        #[arg(long = "state", env = "BUZZ_WORKFLOW_STATE", hide_env_values = true)]
+        state: Option<String>,
+        /// Seconds between ingest cycles
+        #[arg(long, default_value = "30")]
+        poll_interval: u64,
+        /// Events per relay page for the tail walk
         #[arg(long, default_value = "200")]
         page_size: u32,
         /// Maximum gift wraps to fetch per cycle
@@ -2254,7 +2311,15 @@ mod tests {
         );
         assert_eq!(
             names(&cmd, "toon"),
-            vec!["inbox", "keys", "read", "search-agent", "send", "status"]
+            vec![
+                "inbox",
+                "keys",
+                "read",
+                "search-agent",
+                "send",
+                "status",
+                "workflow-agent"
+            ]
         );
     }
 
@@ -2276,7 +2341,7 @@ mod tests {
             ("reactions", 3),
             ("repos", 5),
             ("social", 7),
-            ("toon", 6),
+            ("toon", 7),
             ("upload", 1),
             ("users", 5),
             ("workflows", 8),
