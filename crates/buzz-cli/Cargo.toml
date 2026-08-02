@@ -114,6 +114,11 @@ serde_yaml = { workspace = true }
 # `matches:` trigger conditions in a workflow definition.
 regex = "1"
 
+# `schedule:` cron triggers in a workflow definition (buzz#22 parity port) —
+# the same crate `buzz-workflow` validates cron expressions with, so a
+# `schedule.cron` string means the same thing in both engines.
+cron = { workspace = true }
+
 [dev-dependencies]
 # Scratch files for channel-templates.json fixtures in tests
 tempfile = "3"

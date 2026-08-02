@@ -472,6 +472,18 @@ impl Agent {
             .collect()
     }
 
+    /// Actions refused before a publish was even attempted — no held key for
+    /// the destination channel (buzz#22).
+    fn refused_actions(&self) -> Vec<Value> {
+        self.log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|line| line["event"] == "workflow-action-refused")
+            .cloned()
+            .collect()
+    }
+
     async fn wait_for_sent(&self, n: usize) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
@@ -482,6 +494,22 @@ impl Agent {
             assert!(
                 tokio::time::Instant::now() < deadline,
                 "the agent sent {sent} of {n} actions; log: {:?}",
+                self.log.lock().unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn wait_for_refused(&self, n: usize) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let refused = self.refused_actions().len();
+            if refused >= n {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the agent refused {refused} of {n} actions; log: {:?}",
                 self.log.lock().unwrap()
             );
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -709,4 +737,160 @@ async fn a_malformed_workflow_file_fails_loud_at_startup() {
         !status.success(),
         "a malformed workflow file must not let the agent start"
     );
+}
+
+// ─── buzz#22: the parity port ────────────────────────────────────────────────
+
+const PING_YAML: &str =
+    "version: 1\nname: ping\ntrigger:\n  contains: ping\naction:\n  reply: pong\n";
+const PONG_YAML: &str =
+    "version: 1\nname: pong\ntrigger:\n  contains: pong\naction:\n  reply: ping\n";
+
+/// The acceptance criterion issue #22 calls out by name: a deliberately
+/// self-triggering *pair* of workflows (A's action matches B's trigger, and
+/// vice versa) must demonstrably terminate rather than ping-pong forever.
+/// Both are loaded into one runner here, so `is_own_event` is what actually
+/// stops it (the single-runner leg of loop prevention) — the multi-runner leg
+/// the marker tag buys is exercised separately by
+/// `a_foreign_marked_workflow_action_never_fires` below.
+#[tokio::test]
+async fn a_cross_triggering_pair_of_workflows_terminates() {
+    let agent_keys = Keys::generate();
+    let (fixture, relay, admin) = fixture(&agent_keys).await;
+    fixture.write_workflow("ping.yaml", PING_YAML);
+    fixture.write_workflow("pong.yaml", PONG_YAML);
+
+    relay.publish(sealed_message(
+        &admin,
+        MEMBER,
+        &EPOCH0,
+        "ping",
+        1_700_000_100,
+    ));
+
+    let agent = fixture
+        .start_agent(&fixture.workflows_dir(), 50, false)
+        .await;
+    agent.wait_for_sent(1).await;
+
+    // Several more cycles: if the pair kept re-triggering each other, `sent`
+    // would keep growing without bound instead of stopping at one.
+    agent.wait_for_cycles(4).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        agent.sent_actions().len(),
+        1,
+        "a cross-triggering pair of workflows must terminate after one hop: {:?}",
+        agent.log.lock().unwrap()
+    );
+
+    agent.stop().await;
+}
+
+/// The multi-runner leg: an event carrying the `["client", "buzz-workflow"]`
+/// marker tag, authored by a *different* identity than this agent's own,
+/// must never fire — `is_own_event` alone would let it through (it is not
+/// this identity's event), so this exercises `is_workflow_action_event`
+/// specifically.
+#[tokio::test]
+async fn a_foreign_marked_workflow_action_never_fires() {
+    let agent_keys = Keys::generate();
+    let (fixture, relay, _admin) = fixture(&agent_keys).await;
+    let workflow = fixture.write_workflow("greeter.yaml", GREETER_YAML);
+
+    // A third identity's own workflow action: content that would otherwise
+    // match `GREETER_YAML`'s trigger, tagged exactly as this codebase's own
+    // `send_message` tags its actions.
+    let other_runner = Keys::generate();
+    let marked = EventBuilder::new(
+        Kind::Custom(KIND_CHANNEL_MESSAGE),
+        seal("well hello there", &EPOCH0),
+    )
+    .tags(vec![
+        Tag::parse(["h", MEMBER]).unwrap(),
+        Tag::parse(encryption_tag(&EPOCH0)).unwrap(),
+        Tag::parse(["client", "buzz-workflow"]).unwrap(),
+    ])
+    .custom_created_at(Timestamp::from_secs(1_700_000_100))
+    .sign_with_keys(&other_runner)
+    .unwrap();
+    relay.publish(marked);
+
+    let agent = fixture.start_agent(&workflow, 50, false).await;
+    agent.wait_for_cycles(3).await;
+
+    assert!(
+        agent.sent_actions().is_empty(),
+        "a foreign workflow-action-marked event must never fire, regardless of who signed it: \
+{:?}",
+        agent.log.lock().unwrap()
+    );
+
+    agent.stop().await;
+}
+
+/// A `schedule:` trigger fires on the wall clock against a live relay, with
+/// no incoming message at all.
+#[tokio::test]
+async fn a_schedule_workflow_fires_on_time() {
+    let agent_keys = Keys::generate();
+    let (fixture, relay, _admin) = fixture(&agent_keys).await;
+    let yaml = format!(
+        "version: 1\nname: heartbeat\ntrigger:\n  schedule: '* * * * * * *'\n\
+action:\n  reply: heartbeat\n  channel: {MEMBER}\n"
+    );
+    let workflow = fixture.write_workflow("heartbeat.yaml", &yaml);
+
+    let agent = fixture.start_agent(&workflow, 50, false).await;
+    agent.wait_for_sent(1).await;
+
+    let sent = &agent.sent_actions()[0];
+    assert_eq!(sent["workflow"], "heartbeat");
+    assert_eq!(sent["targetChannel"], MEMBER);
+
+    let action_id = sent["actionEvent"].as_str().unwrap();
+    let published = relay
+        .all()
+        .into_iter()
+        .find(|e| e.id.to_hex() == action_id)
+        .expect("the scheduled action should have reached the relay");
+    assert_eq!(published.pubkey, agent_keys.public_key());
+
+    agent.stop().await;
+}
+
+/// `action.channel` naming a channel this identity holds no key for is
+/// refused loudly — never silently dropped, never sent plaintext, and never
+/// retried into a queue.
+#[tokio::test]
+async fn a_cross_channel_action_the_runner_holds_no_key_for_is_refused() {
+    let agent_keys = Keys::generate();
+    let (fixture, relay, admin) = fixture(&agent_keys).await;
+    let yaml = format!(
+        "version: 1\nname: escalate\ntrigger:\n  contains: escalate\n\
+action:\n  reply: escalated\n  channel: {CONTROL}\n"
+    );
+    let workflow = fixture.write_workflow("escalate.yaml", &yaml);
+
+    relay.publish(sealed_message(
+        &admin,
+        MEMBER,
+        &EPOCH0,
+        "please escalate this",
+        1_700_000_100,
+    ));
+
+    let agent = fixture.start_agent(&workflow, 50, false).await;
+    agent.wait_for_refused(1).await;
+
+    assert!(
+        agent.sent_actions().is_empty(),
+        "a refused cross-channel action must never be sent: {:?}",
+        agent.log.lock().unwrap()
+    );
+    let refused = &agent.refused_actions()[0];
+    assert_eq!(refused["workflow"], "escalate");
+    assert_eq!(refused["targetChannel"], CONTROL);
+
+    agent.stop().await;
 }
