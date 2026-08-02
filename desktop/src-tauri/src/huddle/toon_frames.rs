@@ -127,10 +127,8 @@ pub fn parse_frame_event(
     for tag in event.tags.iter() {
         let slice = tag.as_slice();
         match slice.first().map(String::as_str) {
-            Some("h") => {
-                if slice.get(1).map(String::as_str) == Some(channel_id) {
-                    h_matches = true;
-                }
+            Some("h") if slice.get(1).map(String::as_str) == Some(channel_id) => {
+                h_matches = true;
             }
             Some(channel_keys::ENCRYPTION_TAG) => {
                 sealed_scheme = slice.get(1).map(String::as_str);
