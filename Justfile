@@ -276,7 +276,11 @@ test-unit:
     #!/usr/bin/env bash
     if command -v cargo-nextest &>/dev/null; then
         cargo nextest run -p buzz-core -p buzz-auth --lib
-        cargo nextest run -p buzz-cli
+        # buzz-cli covers the agent-member CLI; buzz-channel-crypto is the
+        # channel-key core it and desktop-tauri both seal with, and it carries
+        # the cross-implementation key-id vector — a change that breaks
+        # byte-compatibility with the TS clients has to fail here.
+        cargo nextest run -p buzz-cli -p buzz-channel-crypto
         # buzz-db migrator/lint tests: pure SQL-parsing unit tests (no infra).
         # They guard the embedded-migrator invariant (exactly the consolidated
         # 0001; cutover/backfill stays an operator script, not startup state)

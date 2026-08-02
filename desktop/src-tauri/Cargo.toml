@@ -96,6 +96,10 @@ reqwest = { version = "0.13", features = ["json", "query", "stream", "blocking"]
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
 url = "2"
 buzz_core_pkg = { package = "buzz-core", path = "../../crates/buzz-core" }
+# Channel-key primitives (key ids, NIP-44 seal/open), shared with buzz-cli so
+# the agent-member and the desktop app seal byte-identical events. See
+# crates/buzz-channel-crypto and src/channel_keys.rs.
+buzz_channel_crypto_pkg = { package = "buzz-channel-crypto", path = "../../crates/buzz-channel-crypto" }
 buzz_persona_pkg = { package = "buzz-persona", path = "../../crates/buzz-persona" }
 buzz_sdk_pkg = { package = "buzz-sdk", path = "../../crates/buzz-sdk" }
 buzz_agent_pkg = { package = "buzz-agent", path = "../../crates/buzz-agent" }

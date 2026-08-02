@@ -87,6 +87,12 @@ run_unit_tests() {
   run_test_step "buzz-cli tests" \
     cargo test -p buzz-cli -- --nocapture
 
+  # The channel-key core the CLI and desktop-tauri both seal with. Carries the
+  # cross-implementation key-id vector, so a change that breaks
+  # byte-compatibility with the TS clients fails here.
+  run_test_step "buzz-channel-crypto tests" \
+    cargo test -p buzz-channel-crypto -- --nocapture
+
   # buzz-db migrator/lint unit tests (no infra): guard the embedded-migrator
   # invariant (exactly the consolidated 0001; cutover/backfill stays an operator
   # script, not startup state) and the tenant-scoping lints. The Postgres-backed

@@ -2,6 +2,7 @@
 members = [
     "crates/buzz-relay",
     "crates/buzz-core",
+    "crates/buzz-channel-crypto",
     "crates/buzz-conformance",
     "crates/buzz-push-gateway",
     "crates/buzz-db",
@@ -123,6 +124,7 @@ schemars = { version = "1", default-features = false }
 
 # Internal crates
 buzz-core = { path = "crates/buzz-core" }
+buzz-channel-crypto = { path = "crates/buzz-channel-crypto" }
 buzz-conformance = { path = "crates/buzz-conformance" }
 buzz-db = { path = "crates/buzz-db" }
 buzz-auth = { path = "crates/buzz-auth" }
