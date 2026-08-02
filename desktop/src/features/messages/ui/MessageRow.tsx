@@ -751,7 +751,16 @@ export const MessageRow = React.memo(
                 aria-label={
                   collapseDescendantsLabel ?? "Collapse replies to this message"
                 }
-                className="absolute bottom-0 z-20 w-5 -translate-x-1/2 cursor-pointer rounded-full p-0 focus-visible:outline-hidden"
+                // z-30: outranks the sibling "thread-collapse-guide" (z-20)
+                // rendered by this row's first child for the ancestor's own
+                // continuation line. That guide's hit area starts a few px
+                // above its own row to keep the vertical line visually
+                // unbroken across the row boundary, which can eat into this
+                // rail's already-small hit area (as little as a few px tall
+                // for compact single-line replies) and make the collapse
+                // control effectively unclickable — for real users, not just
+                // in tests (buzz#36).
+                className="absolute bottom-0 z-30 w-5 -translate-x-1/2 cursor-pointer rounded-full p-0 focus-visible:outline-hidden"
                 data-thread-head-id={message.id}
                 data-testid="thread-collapse-rail"
                 onBlur={() => handleCollapseDescendantsHoverChange(false)}

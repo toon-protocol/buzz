@@ -11436,6 +11436,10 @@ export function maybeInstallE2eTauriMocks() {
       case "plugin:window|set_badge_count":
       case "plugin:window|set_badge_label":
         return null;
+      case "plugin:app|version":
+        // Matches the mocked updater's currentVersion so e2e specs see one
+        // consistent app version everywhere.
+        return "0.3.17";
       case "plugin:updater|check":
         return handleUpdaterCheck(activeConfig);
       case "plugin:updater|download":
