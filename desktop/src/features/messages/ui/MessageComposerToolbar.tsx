@@ -3,6 +3,8 @@ import type { Editor } from "@tiptap/react";
 import { AnimatePresence, motion } from "motion/react";
 import { ALargeSmall, ArrowUp, AtSign, Paperclip, X } from "lucide-react";
 
+import { composerFeeCaption } from "@/features/messages/lib/composerFeeCaption";
+import { useComposerFeeQuote } from "@/features/messages/lib/useComposerFeeQuote";
 import { Button } from "@/shared/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { ComposerEmojiPicker } from "./ComposerEmojiPicker";
@@ -52,6 +54,15 @@ export const MessageComposerToolbar = React.memo(
     onPaperclip: () => void;
     sendDisabled: boolean;
   }) {
+    // buzz#30: the per-message fee, shown next to the send button whenever
+    // BUZZ_TRANSPORT=toon. This toolbar is the one place every composer
+    // (channel, thread, forum) renders its send button, so quoting here
+    // covers all of them without each composer wiring its own fee state.
+    // `composerFeeCaption` collapses "relay mode" and "quote failed" into
+    // the same null — this toolbar never distinguishes the two, it just
+    // shows nothing.
+    const feeCaption = composerFeeCaption(useComposerFeeQuote());
+
     return (
       <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
         <SelectionFormattingTray
@@ -231,6 +242,14 @@ export const MessageComposerToolbar = React.memo(
 
         <div className="flex items-center gap-2">
           {extraActions}
+          {feeCaption ? (
+            <span
+              className="hidden shrink-0 whitespace-nowrap text-2xs text-muted-foreground/70 sm:inline"
+              data-testid="composer-fee-caption"
+            >
+              {feeCaption}
+            </span>
+          ) : null}
           <Button
             aria-label={isSending ? "Sending" : "Send message"}
             className="rounded-full"
