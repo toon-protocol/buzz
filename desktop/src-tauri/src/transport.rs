@@ -38,6 +38,11 @@ const TRANSPORT_ENV_KEYS: &[&str] = &[
     // other TOON_* endpoint above is: the devnet redeploys independently of
     // an app release.
     "BUZZ_TOON_FAUCET_URL",
+    // The search indexer agent-member's loopback query endpoint (buzz#20).
+    // Not TOON-specific in name because the agent is a process the operator
+    // runs, not a devnet address: absent means "no agent configured", and
+    // search stays on the relay path.
+    "BUZZ_SEARCH_AGENT_URL",
 ];
 
 /// The transport environment, with unset and blank keys omitted.

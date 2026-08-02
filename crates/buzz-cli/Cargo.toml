@@ -22,8 +22,10 @@ clap = { version = "4", features = ["derive", "env"] }
 # HTTP client — async REST calls to the relay
 reqwest = { workspace = true, features = ["json"] }
 
-# Async runtime — tokio macros + multi-thread for reqwest
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# Async runtime — tokio macros + multi-thread for reqwest. `sync` and `time`
+# are the search agent's: it shares one index between its ingest loop and its
+# query endpoint (RwLock) and sleeps between cycles.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 # Serialization — JSON body building and response passthrough
 serde = { workspace = true }
@@ -86,6 +88,12 @@ dirs = "6"
 
 # WebSocket client — ephemeral event publish (kind:20001 is WS-only on the relay)
 buzz-ws-client = { path = "../buzz-ws-client" }
+
+# HTTP server — the search agent's loopback query endpoint (`buzz toon
+# search-agent`). Already in the tree as a dev-dependency for the stub relay
+# and stub sidecar the agent e2e tests drive; the search agent is the first
+# `buzz` subcommand that is itself a server, so it moves to a real dependency.
+axum = { workspace = true }
 
 # Explicit rustls dep with ring provider — required to install the process-level
 # CryptoProvider at startup. Without this the standalone `buzz` binary panics when

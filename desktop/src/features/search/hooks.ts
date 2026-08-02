@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { searchMessages } from "@/shared/api/tauri";
+import { searchMessagesForTransport } from "./lib/searchTransport";
 
 export function useSearchMessagesQuery(
   query: string,
@@ -35,7 +35,7 @@ export function useSearchMessagesQuery(
       unresolvedOperator,
     ],
     queryFn: () =>
-      searchMessages({
+      searchMessagesForTransport({
         q: trimmedQuery,
         limit,
         channelId,

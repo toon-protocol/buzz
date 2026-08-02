@@ -132,6 +132,27 @@ pub fn channel_message_filter(channel_id: &str, limit: u32, since: Option<u64>) 
     filter
 }
 
+/// A NIP-01 filter for one page of a channel's history (buzz#20).
+///
+/// The two-sided form [`channel_message_filter`] cannot express: the search
+/// agent's backfill walks *backwards* with `until`, and its tail walk needs
+/// both bounds at once — `since` floors it at the last indexed event while
+/// `until` steps down through a burst too large for one page. Both bounds are
+/// inclusive in NIP-01, which is why the caller re-filters with
+/// [`crate::search_index::is_strictly_older`].
+pub fn channel_history_filter(
+    channel_id: &str,
+    limit: u32,
+    since: Option<u64>,
+    until: Option<u64>,
+) -> Value {
+    let mut filter = channel_message_filter(channel_id, limit, since);
+    if let Some(until) = until {
+        filter["until"] = serde_json::json!(until);
+    }
+    filter
+}
+
 /// A NIP-01 filter for the gift wraps addressed to `pubkey`. Mirrors
 /// `channelKeyWrapFilter`; the wrap's outer pubkey is ephemeral, so the `#p`
 /// tag is the only thing that routes one to its recipient.
@@ -311,5 +332,24 @@ mod tests {
         let wraps = gift_wrap_filter("ab", 200);
         assert_eq!(wraps["kinds"], serde_json::json!([1059]));
         assert_eq!(wraps["#p"], serde_json::json!(["ab"]));
+    }
+
+    #[test]
+    fn a_history_filter_carries_whichever_bounds_it_was_given() {
+        let head = channel_history_filter("engineering", 50, None, None);
+        assert_eq!(head["kinds"], serde_json::json!([9]));
+        assert_eq!(head["#h"], serde_json::json!(["engineering"]));
+        assert!(head.get("since").is_none());
+        assert!(head.get("until").is_none());
+
+        let backfill = channel_history_filter("engineering", 50, None, Some(1_700_000_100));
+        assert_eq!(backfill["until"], 1_700_000_100u64);
+        assert!(backfill.get("since").is_none());
+
+        // The tail walk's shape: floored below, stepping down from the head.
+        let tail =
+            channel_history_filter("engineering", 50, Some(1_700_000_000), Some(1_700_000_100));
+        assert_eq!(tail["since"], 1_700_000_000u64);
+        assert_eq!(tail["until"], 1_700_000_100u64);
     }
 }

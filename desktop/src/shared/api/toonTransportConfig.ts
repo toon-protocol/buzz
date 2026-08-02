@@ -67,6 +67,16 @@ export type ToonTransportConfig = {
    * plus best-effort native gas, one request.
    */
   faucetUrl: string;
+  /**
+   * Base URL of the search indexer agent-member's loopback query endpoint
+   * (buzz#20), or `null` when no agent is configured.
+   *
+   * Deliberately without a default: unlike every other field here, this does
+   * not name a devnet address that exists whether or not the user asked for
+   * it. The search agent is a process the operator chooses to run, so absent
+   * has to mean "there is no agent", and search stays on the relay path.
+   */
+  searchAgentUrl: string | null;
 };
 
 /**
@@ -114,6 +124,7 @@ export const TOON_TRANSPORT_ENV_KEYS = [
   "BUZZ_TOON_TOKEN_NETWORK",
   "BUZZ_TOON_PREFERRED_TOKEN",
   "BUZZ_TOON_FAUCET_URL",
+  "BUZZ_SEARCH_AGENT_URL",
 ] as const;
 
 /** One value from the environment, with blanks treated as absent. */
@@ -188,6 +199,7 @@ export function resolveToonTransportConfig(
       text(env.BUZZ_TOON_PREFERRED_TOKEN) ??
       TOON_DEVNET_DEFAULTS.preferredToken,
     faucetUrl: text(env.BUZZ_TOON_FAUCET_URL) ?? TOON_DEVNET_DEFAULTS.faucetUrl,
+    searchAgentUrl: text(env.BUZZ_SEARCH_AGENT_URL),
   };
 }
 

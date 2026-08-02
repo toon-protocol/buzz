@@ -101,6 +101,30 @@ pub async fn dispatch(cmd: &ToonCmd, ctx: &ToonContext<'_>) -> Result<(), CliErr
             since,
         } => cmd_read(ctx, channel, *limit, *since).await,
         ToonCmd::Keys => cmd_keys(ctx),
+        ToonCmd::SearchAgent {
+            port,
+            index,
+            poll_interval,
+            page_size,
+            inbox_limit,
+            once,
+        } => {
+            crate::search_agent::run(crate::search_agent::SearchAgentOptions {
+                sidecar_url: ctx.sidecar_url,
+                relay_url: ctx.relay_url,
+                keystore_path: ctx.keystore_path,
+                index_path: index.as_deref(),
+                // Loopback is not a default the caller may override: the
+                // endpoint has no authentication and serves decrypted private
+                // text. Only the port is configurable.
+                bind: std::net::SocketAddr::from(([127, 0, 0, 1], *port)),
+                poll_interval: std::time::Duration::from_secs(*poll_interval),
+                page_size: *page_size,
+                inbox_limit: *inbox_limit,
+                once: *once,
+            })
+            .await
+        }
     }
 }
 
@@ -164,6 +188,43 @@ fn resolve_admins(
     resolve_channel_admin_list(events, channel_id, pinned_creator)
 }
 
+/// What one inbox sweep did, as the JSON rows `buzz toon inbox` prints.
+///
+/// Returned rather than printed because the sweep has two callers now: the
+/// one-shot command below, and the search agent's ingest loop (buzz#20), which
+/// runs the identical admission logic on a timer and logs a summary instead.
+/// A second implementation of "which keys may this agent adopt" is precisely
+/// the thing that would grow an agent-specific backdoor by accident.
+#[derive(Debug, Default)]
+pub struct InboxSweep {
+    pub wraps_seen: usize,
+    pub accepted: Vec<Value>,
+    pub skipped: Vec<Value>,
+    pub promoted: Vec<Value>,
+}
+
+/// Fold every gift wrap addressed to `identity` into `keystore`, then
+/// reconcile each held channel's sending epoch against its validated admin
+/// list.
+///
+/// Mutates `keystore` in memory; saving is the caller's call, so a caller that
+/// must commit other state in the same breath (the search agent commits its
+/// index) controls the ordering.
+pub async fn sweep_inbox(
+    client: &SidecarClient,
+    relay_url: &str,
+    identity: &str,
+    keystore: &mut AgentKeystore,
+    limit: u32,
+) -> Result<InboxSweep, CliError> {
+    let ctx = ToonContext {
+        sidecar_url: "",
+        relay_url,
+        keystore_path: None,
+    };
+    sweep_inbox_inner(client, &ctx, identity, keystore, limit).await
+}
+
 async fn cmd_inbox(
     client: &SidecarClient,
     ctx: &ToonContext<'_>,
@@ -175,7 +236,38 @@ async fn cmd_inbox(
     let mut keystore = open_keystore(ctx)?;
     keystore.assert_identity(&identity)?;
 
-    let wraps = toon_relay::fetch(ctx.relay_url, gift_wrap_filter(&identity, limit)).await?;
+    let sweep = sweep_inbox_inner(client, ctx, &identity, &mut keystore, limit).await?;
+    keystore.save()?;
+
+    let sending: Vec<Value> = keystore
+        .channels()
+        .map(|channel| {
+            json!({
+                "channel": channel,
+                "sendingKeyId": keystore.sending_key(channel).as_ref().map(channel_key_id),
+            })
+        })
+        .collect();
+
+    print_json(&json!({
+        "identity": identity,
+        "keystore": keystore.path().display().to_string(),
+        "wrapsSeen": sweep.wraps_seen,
+        "accepted": sweep.accepted,
+        "skipped": sweep.skipped,
+        "promoted": sweep.promoted,
+        "membership": sending,
+    }))
+}
+
+async fn sweep_inbox_inner(
+    client: &SidecarClient,
+    ctx: &ToonContext<'_>,
+    identity: &str,
+    keystore: &mut AgentKeystore,
+    limit: u32,
+) -> Result<InboxSweep, CliError> {
+    let wraps = toon_relay::fetch(ctx.relay_url, gift_wrap_filter(identity, limit)).await?;
 
     // One admin-list read for the whole sweep, folded per channel and cached:
     // an admin re-wrapping to twenty members produces twenty wraps naming one
@@ -298,27 +390,12 @@ async fn cmd_inbox(
         }
     }
 
-    keystore.save()?;
-
-    let sending: Vec<Value> = keystore
-        .channels()
-        .map(|channel| {
-            json!({
-                "channel": channel,
-                "sendingKeyId": keystore.sending_key(channel).as_ref().map(channel_key_id),
-            })
-        })
-        .collect();
-
-    print_json(&json!({
-        "identity": identity,
-        "keystore": keystore.path().display().to_string(),
-        "wrapsSeen": wraps.len(),
-        "accepted": accepted,
-        "skipped": skipped,
-        "promoted": promoted,
-        "membership": sending,
-    }))
+    Ok(InboxSweep {
+        wraps_seen: wraps.len(),
+        accepted,
+        skipped,
+        promoted,
+    })
 }
 
 fn rejection_json(wrap_id: &str, rejection: &GrantRejection, channel: Option<&str>) -> Value {
