@@ -544,7 +544,7 @@ async fn toon_recv_loop(args: RecvLoopArgs) {
                         .iter()
                         .filter(|(slot, _)| {
                             peers
-                                .get(slot)
+                                .get(*slot)
                                 .is_some_and(|p| p.last_packet_at.elapsed() >= SPEAKER_EVICT_AFTER)
                         })
                         .map(|(slot, pubkey)| (*slot, pubkey.clone()))
