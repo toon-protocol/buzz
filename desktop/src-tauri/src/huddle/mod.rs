@@ -37,6 +37,7 @@ pub mod speaker_slots;
 pub mod state;
 pub mod stt;
 pub mod toon_frames;
+pub mod toon_pipeline;
 pub mod transcription;
 pub mod tts;
 pub mod vad;

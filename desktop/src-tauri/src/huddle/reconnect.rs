@@ -6,7 +6,7 @@ use tauri::State;
 
 use crate::app_state::AppState;
 
-use super::{relay_api, HuddlePhase};
+use super::{pipeline, HuddlePhase};
 
 /// Re-establish only the audio relay WebSocket after an unexpected owner/pod
 /// disconnect. Huddle membership, mic capture, STT/TTS, and frontend state stay
@@ -31,9 +31,12 @@ pub async fn reconnect_huddle_audio(state: State<'_, AppState>) -> Result<(), St
         )
     };
 
-    let (cancel, pcm_tx) =
-        relay_api::connect_audio_relay(&ephemeral_channel_id, parent_channel_id.as_deref(), &state)
-            .await?;
+    let (cancel, pcm_tx) = pipeline::connect_transport_audio(
+        &ephemeral_channel_id,
+        parent_channel_id.as_deref(),
+        &state,
+    )
+    .await?;
 
     let mut hs = state.huddle()?;
     let still_current = !matches!(hs.phase, HuddlePhase::Idle | HuddlePhase::Leaving)

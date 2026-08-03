@@ -23,10 +23,6 @@
 //! write in this crate follows (buzz#33). A non-member holding the event
 //! sees ciphertext only.
 
-// Staged for buzz#23: consumed by the TOON huddle pipeline (stage 2 wires the
-// send/receive loops through this codec). Remove the allow with that wiring.
-#![allow(dead_code)]
-
 use base64::Engine as _;
 use nostr::JsonUtil as _;
 
