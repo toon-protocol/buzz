@@ -1529,13 +1529,17 @@ async fn tokio_main() -> Result<()> {
     let event_transport = match config.transport {
         toon::TransportMode::Relay => toon::EventTransport::Relay(relay.rest_client()),
         toon::TransportMode::Toon => {
-            // Validated in `Config::from_args`: toon transport always carries a
-            // sidecar URL. The daemon owns this agent's payment identity and
+            // `Config::from_args` guarantees toon transport always carries a
+            // sidecar URL, so a missing one here means that invariant broke —
+            // fail loudly rather than silently substituting an unvalidated
+            // default. The daemon owns this agent's payment identity and
             // channel (buzz#73) — see `toon` module doc for the topology decision.
-            let sidecar_url = config
-                .toon_sidecar_url
-                .as_deref()
-                .unwrap_or(toon::DEFAULT_SIDECAR_URL);
+            let sidecar_url = config.toon_sidecar_url.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "toon transport configured without a sidecar URL \
+                     (should have been rejected by Config::from_args)"
+                )
+            })?;
             tracing::info!(
                 sidecar_url,
                 account_index = config.toon_account_index,

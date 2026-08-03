@@ -50,11 +50,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::relay::{RelayError, RestClient};
 
-/// Default `toon-clientd` control-API URL — matches `buzz-cli`'s
-/// `--sidecar-url` / `TOON_DAEMON_URL` default so an operator running both
-/// against the same daemon needs no extra configuration.
-pub const DEFAULT_SIDECAR_URL: &str = "http://127.0.0.1:8787";
-
 /// Which path a write takes: the classic signed-event relay, or the paid
 /// TOON sidecar. Selected by `BUZZ_TRANSPORT` (`relay` default, `toon` to
 /// opt in) — same env var and same two values as the desktop TS/Rust seam.

@@ -1171,7 +1171,7 @@ impl Config {
                 "transport=toon({url}) account_index={}",
                 self.toon_account_index
                     .map(|i| i.to_string())
-                    .unwrap_or_else(|| "0".to_string())
+                    .unwrap_or_else(|| "unset".to_string())
             ),
             _ => "transport=relay".to_string(),
         };
