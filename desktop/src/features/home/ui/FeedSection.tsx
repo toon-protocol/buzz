@@ -7,6 +7,9 @@ import {
 import type { FeedItem } from "@/shared/api/types";
 import {
   KIND_APPROVAL_REQUEST,
+  KIND_FACTORY_JOB_FEEDBACK,
+  KIND_FACTORY_JOB_REQUEST,
+  KIND_FACTORY_JOB_RESULT,
   KIND_FORUM_COMMENT,
   KIND_FORUM_POST,
   KIND_JOB_ACCEPTED,
@@ -73,6 +76,12 @@ function feedHeadline(item: FeedItem) {
       return "Job cancelled";
     case KIND_JOB_ERROR:
       return "Job failed";
+    case KIND_FACTORY_JOB_REQUEST:
+      return "Job requested";
+    case KIND_FACTORY_JOB_FEEDBACK:
+      return "Progress update";
+    case KIND_FACTORY_JOB_RESULT:
+      return "Job result";
     case KIND_FORUM_POST:
       return "Forum post";
     case KIND_FORUM_COMMENT:

@@ -4367,6 +4367,9 @@ const TIMELINE_KINDS = new Set([
   43004,
   43005,
   43006,
+  5097, // NIP-90 factory job request
+  7000, // NIP-90 factory job quote/increment/narration
+  6097, // NIP-90 factory job result
   KIND_HUDDLE_STARTED,
 ]);
 

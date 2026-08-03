@@ -13,6 +13,9 @@ import {
   KIND_JOB_RESULT,
   KIND_JOB_CANCEL,
   KIND_JOB_ERROR,
+  KIND_FACTORY_JOB_REQUEST,
+  KIND_FACTORY_JOB_FEEDBACK,
+  KIND_FACTORY_JOB_RESULT,
   KIND_HUDDLE_STARTED,
   KIND_HUDDLE_PARTICIPANT_JOINED,
   KIND_HUDDLE_PARTICIPANT_LEFT,
@@ -46,6 +49,18 @@ test("isConversationalUnreadKind_allJobKinds_excluded", () => {
     KIND_JOB_RESULT,
     KIND_JOB_CANCEL,
     KIND_JOB_ERROR,
+  ]) {
+    assert.equal(isConversationalUnreadKind(kind), false, `kind ${kind}`);
+  }
+});
+
+test("isConversationalUnreadKind_allFactoryJobKinds_excluded", () => {
+  // NIP-90 factory job kinds (5097/7000/6097) are the parallel allocation for
+  // 43001-43006 (toon-meta#262 decision 4) and must render the same way.
+  for (const kind of [
+    KIND_FACTORY_JOB_REQUEST,
+    KIND_FACTORY_JOB_FEEDBACK,
+    KIND_FACTORY_JOB_RESULT,
   ]) {
     assert.equal(isConversationalUnreadKind(kind), false, `kind ${kind}`);
   }

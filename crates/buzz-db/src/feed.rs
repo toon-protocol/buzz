@@ -34,6 +34,7 @@ use sqlx::{PgPool, QueryBuilder};
 use uuid::Uuid;
 
 use buzz_core::kind::{
+    KIND_FACTORY_JOB_FEEDBACK, KIND_FACTORY_JOB_REQUEST, KIND_FACTORY_JOB_RESULT,
     KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_GIT_ISSUE, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST,
     KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT, KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN,
     KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT, KIND_STREAM_MESSAGE,
@@ -263,7 +264,8 @@ fn build_activity_query(
     qb.push(" AND deleted_at IS NULL");
     qb.push(format!(
         " AND kind IN ({KIND_STREAM_MESSAGE}, {KIND_STREAM_MESSAGE_V2}, {KIND_FORUM_POST}, \
-         {KIND_JOB_REQUEST}, {KIND_JOB_PROGRESS}, {KIND_JOB_RESULT})"
+         {KIND_JOB_REQUEST}, {KIND_JOB_PROGRESS}, {KIND_JOB_RESULT}, \
+         {KIND_FACTORY_JOB_REQUEST}, {KIND_FACTORY_JOB_FEEDBACK}, {KIND_FACTORY_JOB_RESULT})"
     ));
     push_visible_channel_filter(&mut qb, "channel_id", accessible_channel_ids);
     if let Some(s) = since {
@@ -664,6 +666,7 @@ mod tests {
     #[test]
     fn activity_query_includes_agent_job_kinds() {
         use buzz_core::kind::{
+            KIND_FACTORY_JOB_FEEDBACK, KIND_FACTORY_JOB_REQUEST, KIND_FACTORY_JOB_RESULT,
             KIND_FORUM_POST, KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT,
             KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2,
         };
@@ -674,6 +677,9 @@ mod tests {
             KIND_JOB_REQUEST,
             KIND_JOB_PROGRESS,
             KIND_JOB_RESULT,
+            KIND_FACTORY_JOB_REQUEST,
+            KIND_FACTORY_JOB_FEEDBACK,
+            KIND_FACTORY_JOB_RESULT,
         ];
 
         assert!(
@@ -689,6 +695,18 @@ mod tests {
             "job result kind must be in activity"
         );
         assert!(
+            activity_kinds.contains(&KIND_FACTORY_JOB_REQUEST),
+            "NIP-90 factory job request kind must be in activity"
+        );
+        assert!(
+            activity_kinds.contains(&KIND_FACTORY_JOB_FEEDBACK),
+            "NIP-90 factory job feedback kind must be in activity"
+        );
+        assert!(
+            activity_kinds.contains(&KIND_FACTORY_JOB_RESULT),
+            "NIP-90 factory job result kind must be in activity"
+        );
+        assert!(
             activity_kinds.contains(&KIND_STREAM_MESSAGE),
             "stream message kind must be in activity"
         );
@@ -701,6 +719,7 @@ mod tests {
     #[test]
     fn activity_query_excludes_workflow_execution_kinds() {
         use buzz_core::kind::{
+            KIND_FACTORY_JOB_FEEDBACK, KIND_FACTORY_JOB_REQUEST, KIND_FACTORY_JOB_RESULT,
             KIND_FORUM_POST, KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT,
             KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2,
         };
@@ -711,6 +730,9 @@ mod tests {
             KIND_JOB_REQUEST,
             KIND_JOB_PROGRESS,
             KIND_JOB_RESULT,
+            KIND_FACTORY_JOB_REQUEST,
+            KIND_FACTORY_JOB_FEEDBACK,
+            KIND_FACTORY_JOB_RESULT,
         ];
 
         use buzz_core::kind::{KIND_WORKFLOW_APPROVAL_DENIED, KIND_WORKFLOW_TRIGGERED};
@@ -725,6 +747,7 @@ mod tests {
     #[test]
     fn needs_action_kinds_do_not_overlap_with_activity_kinds() {
         use buzz_core::kind::{
+            KIND_FACTORY_JOB_FEEDBACK, KIND_FACTORY_JOB_REQUEST, KIND_FACTORY_JOB_RESULT,
             KIND_FORUM_POST, KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT,
             KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER,
             KIND_WORKFLOW_APPROVAL_REQUESTED,
@@ -737,6 +760,9 @@ mod tests {
             KIND_JOB_REQUEST,
             KIND_JOB_PROGRESS,
             KIND_JOB_RESULT,
+            KIND_FACTORY_JOB_REQUEST,
+            KIND_FACTORY_JOB_FEEDBACK,
+            KIND_FACTORY_JOB_RESULT,
         ];
 
         for kind in needs_action_kinds {
@@ -775,6 +801,28 @@ mod tests {
         let nil_id = Uuid::nil();
         let bytes = nil_id.as_bytes().to_vec();
         assert_eq!(bytes, vec![0u8; 16]);
+    }
+
+    #[test]
+    fn activity_query_sql_includes_factory_job_kinds() {
+        let community = buzz_core::CommunityId::from_uuid(Uuid::new_v4());
+        let mut qb = build_activity_query(community, &[], None, 10);
+        let query = qb.build();
+        let sql_str = sqlx::Execute::sql(query);
+        let sql = sql_str.as_str();
+
+        assert!(
+            sql.contains(&format!("{}", buzz_core::kind::KIND_FACTORY_JOB_REQUEST)),
+            "activity query must include the NIP-90 factory job request kind: {sql}"
+        );
+        assert!(
+            sql.contains(&format!("{}", buzz_core::kind::KIND_FACTORY_JOB_FEEDBACK)),
+            "activity query must include the NIP-90 factory job feedback kind: {sql}"
+        );
+        assert!(
+            sql.contains(&format!("{}", buzz_core::kind::KIND_FACTORY_JOB_RESULT)),
+            "activity query must include the NIP-90 factory job result kind: {sql}"
+        );
     }
 
     #[test]
