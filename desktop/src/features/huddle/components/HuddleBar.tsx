@@ -28,7 +28,9 @@ import { Button } from "@/shared/ui/button";
 import { useEmojiBurst } from "@/shared/ui/EmojiBurstProvider";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
+import { getActiveTransportSelection } from "@/shared/api/transportSelection";
 import { useHuddle } from "../HuddleContext";
+import { speakerLoadHint } from "../lib/speakerLoad";
 import { AddAgentDialog, type AgentAddResult } from "./AddAgentDialog";
 import { MicControls, SpeakerControls } from "./MicControls";
 import { HuddleParticipantsControl } from "./ParticipantList";
@@ -580,6 +582,21 @@ export function HuddleBar({
               </span>
             </output>
           )}
+
+        {/* Soft concurrent-speaker guidance (buzz#23): on TOON the measured
+            envelope guarantees ≤3 concurrent speakers and degrades above —
+            a hint, never a gate, because nothing server-side enforces it. */}
+        {(() => {
+          const hint = speakerLoadHint(
+            activeSpeakers.length,
+            getActiveTransportSelection()?.mode === "toon",
+          );
+          return hint ? (
+            <output className="max-w-[260px] truncate rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
+              {hint}
+            </output>
+          ) : null;
+        })()}
 
         {agentAddError && (
           <span className="max-w-[180px] truncate rounded bg-destructive/10 px-2 py-1 text-xs text-destructive">

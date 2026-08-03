@@ -6,6 +6,11 @@ import { channelsQueryKey } from "@/features/channels/hooks";
 import { useHuddle } from "@/features/huddle";
 import { formatHuddleActionError } from "@/features/huddle/lib/huddleError";
 import {
+  huddleCostCaption,
+  joinGatedOnQuote,
+  useHuddleFeeQuote,
+} from "@/features/huddle/lib/huddleFeeQuote";
+import {
   Attachment,
   AttachmentAction,
   AttachmentActions,
@@ -30,8 +35,15 @@ export function WaveMessageAttachment({
 }: WaveMessageAttachmentProps) {
   const queryClient = useQueryClient();
   const { isStarting, startHuddle } = useHuddle();
+  // buzz#23: on TOON, speaking is paid per frame — surface the cost on this
+  // card before the huddle can be started.
+  const feeQuote = useHuddleFeeQuote();
+  const feeCaption = huddleCostCaption(feeQuote);
   const startHuddleDisabled =
-    !channelId || isStarting || huddleMemberPubkeysPending;
+    !channelId ||
+    isStarting ||
+    huddleMemberPubkeysPending ||
+    joinGatedOnQuote(feeQuote);
 
   const handleStartHuddle = React.useCallback(
     async (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -71,6 +83,12 @@ export function WaveMessageAttachment({
         <AttachmentTitle>{fallbackText}</AttachmentTitle>
         <AttachmentDescription>
           Start a huddle to talk to them.
+          {feeCaption ? (
+            <>
+              <span aria-hidden="true"> · </span>
+              {feeCaption}
+            </>
+          ) : null}
         </AttachmentDescription>
       </AttachmentContent>
       <AttachmentActions>

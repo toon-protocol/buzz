@@ -25,6 +25,11 @@ import {
 import { useHuddle } from "../HuddleContext";
 import { isHuddleStartStale } from "../lib/huddleCardState";
 import { formatHuddleActionError } from "../lib/huddleError";
+import {
+  huddleCostCaption,
+  joinGatedOnQuote,
+  useHuddleFeeQuote,
+} from "../lib/huddleFeeQuote";
 
 type HuddleAttachmentProps = {
   channelId: string | null;
@@ -125,6 +130,11 @@ export function HuddleAttachment({
     [message.body],
   );
   const { activeEphemeralChannelId, isStarting, joinHuddle } = useHuddle();
+  // buzz#23: on TOON, speaking is paid per frame — the cost must render on
+  // this card BEFORE the user can join, so the join button is gated on the
+  // quote having had its chance to resolve.
+  const feeQuote = useHuddleFeeQuote();
+  const feeCaption = huddleCostCaption(feeQuote);
   const queryClient = useQueryClient();
   const [isJoining, setIsJoining] = React.useState(false);
   const [lifecycleState, setLifecycleState] =
@@ -270,12 +280,18 @@ export function HuddleAttachment({
         </AttachmentTitle>
         <AttachmentDescription>
           {participantLabel(participantCount)}
+          {canJoin && feeCaption ? (
+            <>
+              <span aria-hidden="true"> · </span>
+              {feeCaption}
+            </>
+          ) : null}
         </AttachmentDescription>
       </AttachmentContent>
       <AttachmentActions>
         {canJoin ? (
           <AttachmentAction
-            disabled={isJoining || isStarting}
+            disabled={isJoining || isStarting || joinGatedOnQuote(feeQuote)}
             onClick={() => void handleJoin()}
             size="sm"
             type="button"
