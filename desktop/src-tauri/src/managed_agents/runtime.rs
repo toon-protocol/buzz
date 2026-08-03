@@ -860,6 +860,7 @@ pub fn spawn_agent_child(
     for (key, value) in &descriptor.env {
         command.env(key, value);
     }
+    super::apply_account_index_env(&mut command, app, record);
     configure_runtime_cli(&mut command, runtime_meta);
 
     // Buzz shared compute is stored as a native provider; derive the OpenAI-compatible

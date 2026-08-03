@@ -127,7 +127,7 @@ By default the harness writes over the classic relay path, signing every event w
 |----------|----------|---------|-------------|
 | `BUZZ_TRANSPORT` | no | `relay` | Set to `toon` to pay for writes on the agent's own TOON channel instead of the classic relay path. |
 | `TOON_DAEMON_URL` | only if `BUZZ_TRANSPORT=toon` | — | URL of this agent's `toon-clientd` sidecar (e.g. `http://127.0.0.1:8787`). Same variable name as `buzz-cli`'s `--sidecar-url`. |
-| `BUZZ_TOON_ACCOUNT_INDEX` | no | — | BIP-44 account index this agent's payment key derives at (owner's seed → per-agent key). Diagnostic/summary only — the sidecar performs the actual derivation. Same variable name as desktop's. |
+| `BUZZ_TOON_ACCOUNT_INDEX` | no | — | BIP-44 account index this agent's payment key derives at (owner's seed → per-agent key). Diagnostic/summary only — the sidecar performs the actual derivation. Same variable name as desktop's. When the desktop supervisor spawns this harness for a managed agent, it sets this from its own persisted agent → account-index registry (never reused, even after the agent is deleted) — see [`docs/adr/0006-fleet-identity-account-index-registry.md`](../../docs/adr/0006-fleet-identity-account-index-registry.md). |
 
 `toon-clientd` is the payment identity custodian — see [`docs/adr/0005-harness-agent-payment-reaches-a-per-agent-toon-clientd-sidecar.md`](../../docs/adr/0005-harness-agent-payment-reaches-a-per-agent-toon-clientd-sidecar.md) for the full "one daemon per agent" topology decision (mirrors `buzz-cli`'s `search_agent`/`workflow_agent`). The daemon must already be running and have a funded channel open (or resumable) before the harness starts; `buzz-acp` never holds a mnemonic or TOON private key.
 

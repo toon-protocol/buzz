@@ -918,6 +918,7 @@ pub async fn create_managed_agent(
         records.push(record);
 
         save_managed_agents(&app, &records)?;
+        crate::managed_agents::assign_account_index(&app, &pubkey, &name)?;
 
         let record = records
             .iter()
@@ -1333,6 +1334,7 @@ pub async fn delete_managed_agent(
             save_managed_agents(&app, &records)?;
             // Remove the agent's nsec from the keyring after the record is gone.
             crate::managed_agents::delete_agent_key(&pubkey);
+            crate::managed_agents::tombstone_account_index_best_effort(&app, &pubkey);
             // Tombstone-after-validation: only reached past the deployed-remote
             // guard above and a confirmed removal — never orphan a live remote
             // deployment's relay record. Inside the lock, before the block closes

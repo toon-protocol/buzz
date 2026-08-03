@@ -172,6 +172,17 @@ fn reserved_keys_include_code_execution_surface() {
 }
 
 #[test]
+fn reserved_keys_include_toon_account_index() {
+    // buzz#79: the account index is assigned per-agent by the desktop's
+    // fleet-identity registry. Overriding it via env_vars would let two
+    // agents collide onto the same derived TOON payment identity.
+    assert!(is_reserved_env_key("BUZZ_TOON_ACCOUNT_INDEX"));
+    let agent = map(&[("BUZZ_TOON_ACCOUNT_INDEX", "0")]);
+    let merged = merged_user_env(&BTreeMap::new(), &agent);
+    assert!(merged.is_empty());
+}
+
+#[test]
 fn reserved_keys_include_relay_url() {
     // Overriding the relay URL could redirect the agent to an
     // attacker-controlled relay.
