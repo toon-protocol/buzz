@@ -7,6 +7,9 @@ import {
 import type { FeedItem } from "@/shared/api/types";
 import {
   KIND_APPROVAL_REQUEST,
+  KIND_FACTORY_JOB_FEEDBACK,
+  KIND_FACTORY_JOB_REQUEST,
+  KIND_FACTORY_JOB_RESULT,
   KIND_FORUM_COMMENT,
   KIND_FORUM_POST,
   KIND_JOB_ACCEPTED,
@@ -15,9 +18,6 @@ import {
   KIND_JOB_PROGRESS,
   KIND_JOB_REQUEST,
   KIND_JOB_RESULT,
-  KIND_FACTORY_JOB_REQUEST,
-  KIND_FACTORY_JOB_FEEDBACK,
-  KIND_FACTORY_JOB_RESULT,
   KIND_REMINDER,
 } from "@/shared/constants/kinds";
 import { resolveMentionProps } from "@/shared/lib/resolveMentionNames";

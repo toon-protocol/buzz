@@ -1,11 +1,11 @@
 import {
   KIND_APPROVAL_REQUEST,
+  KIND_FACTORY_JOB_FEEDBACK,
+  KIND_FACTORY_JOB_RESULT,
   KIND_JOB_ACCEPTED,
   KIND_JOB_ERROR,
   KIND_JOB_PROGRESS,
   KIND_JOB_RESULT,
-  KIND_FACTORY_JOB_FEEDBACK,
-  KIND_FACTORY_JOB_RESULT,
 } from "@/shared/constants/kinds";
 import type { FeedItemCategory } from "@/shared/api/types";
 
