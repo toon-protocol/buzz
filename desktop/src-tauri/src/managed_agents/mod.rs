@@ -1,3 +1,4 @@
+mod account_index;
 mod agent_env;
 pub(crate) mod agent_events;
 pub(crate) mod agent_snapshot;
@@ -46,6 +47,9 @@ pub(crate) fn lock_path_mutex() -> std::sync::MutexGuard<'static, ()> {
     PATH_MUTEX.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+pub(crate) use account_index::{
+    apply_account_index_env, assign_account_index, tombstone_account_index_best_effort,
+};
 pub use backend::*;
 pub use discovery::*;
 pub use env_vars::*;

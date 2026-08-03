@@ -662,8 +662,7 @@ pub async fn create_managed_agent(
     let relay_mesh = normalize_relay_mesh(input.relay_mesh.as_ref(), &input.backend)?;
 
     // ── Phase 2: compute NIP-OA auth tag (sync) ──────────────────────────────
-    // Agents authenticate via the auth tag in their kind:0 profile event.
-    // No tokens are minted. Fail closed: bad auth tag → don't create agent.
+    // Agents authenticate via the auth tag in their kind:0 profile event. No tokens are minted. Fail closed: bad auth tag → don't create agent.
     let auth_tag = {
         let owner_keys = state.signing_keys()?;
         // Bridge nostr 0.37 → 0.36 (buzz-sdk) via hex round-trip.
@@ -918,6 +917,7 @@ pub async fn create_managed_agent(
         records.push(record);
 
         save_managed_agents(&app, &records)?;
+        crate::managed_agents::assign_account_index(&app, &pubkey, &name)?;
 
         let record = records
             .iter()
@@ -1307,8 +1307,7 @@ pub async fn delete_managed_agent(
             // Guard: reject deletion of deployed remote agents unless explicitly forced.
             // This turns "don't orphan remote infra" from a UI convention into a backend
             // invariant — a buggy or compromised IPC caller cannot silently orphan a live
-            // remote deployment. The frontend sends force_remote_delete: true only after
-            // the user confirms the orphan warning.
+            // remote deployment. The frontend sends force_remote_delete: true only after the user confirms the orphan warning.
             if let Some(record) = records.iter().find(|r| r.pubkey == pubkey) {
                 if record.backend != BackendKind::Local
                     && record.backend_agent_id.is_some()
@@ -1333,6 +1332,7 @@ pub async fn delete_managed_agent(
             save_managed_agents(&app, &records)?;
             // Remove the agent's nsec from the keyring after the record is gone.
             crate::managed_agents::delete_agent_key(&pubkey);
+            crate::managed_agents::tombstone_account_index_best_effort(&app, &pubkey);
             // Tombstone-after-validation: only reached past the deployed-remote
             // guard above and a confirmed removal — never orphan a live remote
             // deployment's relay record. Inside the lock, before the block closes

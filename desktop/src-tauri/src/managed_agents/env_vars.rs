@@ -63,6 +63,11 @@ pub(crate) const RESERVED_ENV_KEYS: &[&str] = &[
     "BUZZ_API_TOKEN",
     "BUZZ_ACP_PRIVATE_KEY",
     "BUZZ_ACP_API_TOKEN",
+    // Fleet identity (buzz#79): the supervisor-assigned BIP-44 index this
+    // agent's TOON payment key derives at. Overriding it would let a saved
+    // env var collide two agents onto the same derived payment identity,
+    // defeating the account-index registry's never-reuse guarantee.
+    "BUZZ_TOON_ACCOUNT_INDEX",
     // Relay URL: overriding would let a malicious config redirect the
     // agent to an attacker-controlled relay.
     "BUZZ_RELAY_URL",
