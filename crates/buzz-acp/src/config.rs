@@ -243,6 +243,27 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_PRIVATE_KEY", hide_env_values = true)]
     pub private_key: String,
 
+    /// Which path writes take: the classic signed-event relay, or the paid
+    /// TOON sidecar (buzz#73). Same env var and values as the desktop seam.
+    #[arg(long, env = "BUZZ_TRANSPORT", default_value = "relay", value_enum)]
+    pub transport: crate::toon::TransportMode,
+
+    /// `toon-clientd` control-API URL. Required when `--transport=toon`.
+    /// The daemon is the agent's payment identity custodian — see
+    /// `buzz-cli`'s `--sidecar-url` / `TOON_DAEMON_URL` (same variable name,
+    /// same default) for the pattern this mirrors.
+    #[arg(long, env = "TOON_DAEMON_URL")]
+    pub toon_sidecar_url: Option<String>,
+
+    /// BIP-44 account index the agent's TOON payment key is derived at
+    /// (owner's seed → per-agent key, decision 3 of the fleet-money epic).
+    /// The `toon-clientd` sidecar performs the actual derivation — this
+    /// harness never holds the mnemonic — so this value is recorded for
+    /// operator-facing summary/diagnostics, not used to derive anything
+    /// locally. Same variable name as desktop's `BUZZ_TOON_ACCOUNT_INDEX`.
+    #[arg(long, env = "BUZZ_TOON_ACCOUNT_INDEX")]
+    pub toon_account_index: Option<u32>,
+
     /// Agent owner pubkey (64-char hex). Used for --respond-to=owner-only gate.
     #[arg(long, env = "BUZZ_ACP_AGENT_OWNER")]
     pub agent_owner: Option<String>,
@@ -492,6 +513,14 @@ pub struct ChannelFilter {
 pub struct Config {
     pub keys: Keys,
     pub relay_url: String,
+    /// Which path writes take: relay (default) or the paid TOON sidecar.
+    pub transport: crate::toon::TransportMode,
+    /// `toon-clientd` control-API URL. `Some` iff `transport == Toon`
+    /// (validated in `from_args`).
+    pub toon_sidecar_url: Option<String>,
+    /// BIP-44 account index this agent's TOON payment key derives at.
+    /// Diagnostic/summary only — the sidecar owns derivation.
+    pub toon_account_index: Option<u32>,
     pub agent_command: String,
     pub agent_args: Vec<String>,
     pub mcp_command: String,
@@ -1053,9 +1082,24 @@ impl Config {
 
         validate_multiple_event_handling(args.multiple_event_handling, args.dedup)?;
 
+        // Toon mode needs somewhere to send unsigned event shells — a
+        // sidecar URL is not optional the way it is under the relay path.
+        if matches!(args.transport, crate::toon::TransportMode::Toon)
+            && args.toon_sidecar_url.is_none()
+        {
+            return Err(ConfigError::ConfigFile(
+                "--transport=toon requires --toon-sidecar-url / TOON_DAEMON_URL \
+                 (the toon-clientd sidecar holding this agent's payment identity)"
+                    .into(),
+            ));
+        }
+
         let config = Config {
             keys,
             relay_url: args.relay_url,
+            transport: args.transport,
+            toon_sidecar_url: args.toon_sidecar_url,
+            toon_account_index: args.toon_account_index,
             agent_command,
             agent_args,
             mcp_command: args.mcp_command,
@@ -1122,10 +1166,20 @@ impl Config {
             modes.sort();
             format!(" allowed_respond_to=[{}]", modes.join(","))
         };
+        let transport_detail = match (&self.transport, &self.toon_sidecar_url) {
+            (crate::toon::TransportMode::Toon, Some(url)) => format!(
+                "transport=toon({url}) account_index={}",
+                self.toon_account_index
+                    .map(|i| i.to_string())
+                    .unwrap_or_else(|| "unset".to_string())
+            ),
+            _ => "transport=relay".to_string(),
+        };
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}{}",
+            "relay={} pubkey={} {} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}{}",
             self.relay_url,
             self.keys.public_key().to_hex(),
+            transport_detail,
             self.agent_command,
             self.agent_args.join(" "),
             self.mcp_command,
@@ -1434,6 +1488,9 @@ mod tests {
         Config {
             keys: nostr::Keys::generate(),
             relay_url: "ws://localhost:3000".into(),
+            transport: crate::toon::TransportMode::Relay,
+            toon_sidecar_url: None,
+            toon_account_index: None,
             agent_command: "goose".into(),
             agent_args: vec!["acp".into()],
             mcp_command: "".into(),
@@ -2927,5 +2984,59 @@ channels = "ALL"
             "Found secret-bearing env args without hide_env_values=true. \
              Add `hide_env_values = true` to each: {violations:?}"
         );
+    }
+
+    #[test]
+    fn transport_defaults_to_relay_with_no_sidecar_required() {
+        let args = CliArgs::try_parse_from(["buzz-acp", "--private-key", TEST_PRIVATE_KEY])
+            .expect("clap should parse args");
+        let config = Config::from_args(args).expect("relay transport needs no sidecar url");
+        assert_eq!(config.transport, crate::toon::TransportMode::Relay);
+        assert_eq!(config.toon_sidecar_url, None);
+    }
+
+    #[test]
+    fn toon_transport_without_sidecar_url_is_rejected() {
+        let args = CliArgs::try_parse_from([
+            "buzz-acp",
+            "--private-key",
+            TEST_PRIVATE_KEY,
+            "--transport",
+            "toon",
+        ])
+        .expect("clap should parse args");
+        let result = Config::from_args(args);
+        assert!(
+            result.is_err(),
+            "--transport=toon must require --toon-sidecar-url"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("toon-sidecar-url") || msg.contains("TOON_DAEMON_URL"),
+            "error should name the missing config: {msg}"
+        );
+    }
+
+    #[test]
+    fn toon_transport_with_sidecar_url_is_accepted() {
+        let args = CliArgs::try_parse_from([
+            "buzz-acp",
+            "--private-key",
+            TEST_PRIVATE_KEY,
+            "--transport",
+            "toon",
+            "--toon-sidecar-url",
+            "http://127.0.0.1:8787",
+            "--toon-account-index",
+            "3",
+        ])
+        .expect("clap should parse args");
+        let config = Config::from_args(args).expect("toon transport with sidecar url is valid");
+        assert_eq!(config.transport, crate::toon::TransportMode::Toon);
+        assert_eq!(
+            config.toon_sidecar_url.as_deref(),
+            Some("http://127.0.0.1:8787")
+        );
+        assert_eq!(config.toon_account_index, Some(3));
     }
 }

@@ -10,6 +10,7 @@ mod pool_lifecycle;
 mod queue;
 mod relay;
 mod setup_mode;
+mod toon;
 mod usage;
 
 pub use usage::TurnUsage;
@@ -1525,6 +1526,48 @@ async fn tokio_main() -> Result<()> {
     }
 
     let base_prompt_content = config.base_prompt_content.take();
+    let event_transport = match config.transport {
+        toon::TransportMode::Relay => toon::EventTransport::Relay(relay.rest_client()),
+        toon::TransportMode::Toon => {
+            // `Config::from_args` guarantees toon transport always carries a
+            // sidecar URL, so a missing one here means that invariant broke —
+            // fail loudly rather than silently substituting an unvalidated
+            // default. The daemon owns this agent's payment identity and
+            // channel (buzz#73) — see `toon` module doc for the topology decision.
+            let sidecar_url = config.toon_sidecar_url.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "toon transport configured without a sidecar URL \
+                     (should have been rejected by Config::from_args)"
+                )
+            })?;
+            tracing::info!(
+                sidecar_url,
+                account_index = config.toon_account_index,
+                "TOON transport: paying writes via toon-clientd sidecar"
+            );
+            let sidecar = toon::SidecarClient::new(sidecar_url)?;
+            // Best-effort readiness probe: confirms the sidecar has a channel
+            // open (resumed from a prior run, or freshly opened on first run —
+            // buzz#73's "opens or resumes" acceptance criterion is the
+            // sidecar's job, this just surfaces its outcome). Never blocks
+            // startup — a still-bootstrapping sidecar becomes ready before the
+            // first paid write and is retried at that point.
+            match sidecar.status().await {
+                Ok(status) => tracing::info!(
+                    ready = status.ready,
+                    bootstrapping = status.bootstrapping,
+                    identity = %status.identity.nostr_pubkey,
+                    "toon-clientd sidecar reachable"
+                ),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    retryable = e.is_retryable(),
+                    "toon-clientd sidecar not reachable at startup — will retry on first paid write"
+                ),
+            }
+            toon::EventTransport::Toon(sidecar)
+        }
+    };
     let ctx = Arc::new(PromptContext {
         mcp_servers: build_mcp_servers(&config),
         initial_message: config.initial_message.clone(),
@@ -1548,6 +1591,7 @@ async fn tokio_main() -> Result<()> {
             .to_string_lossy()
             .to_string(),
         rest_client: relay.rest_client(),
+        event_transport,
         channel_info: pool::ChannelInfoResolver::new(channel_info_map, relay.rest_client()),
         context_message_limit: config.context_message_limit,
         max_turns_per_session: config.max_turns_per_session,
@@ -2365,7 +2409,7 @@ async fn tokio_main() -> Result<()> {
                     &respawn_tx,
                     &mut respawn_tasks,
                     observer.clone(),
-                    Some(&ctx.rest_client),
+                    Some(&ctx.event_transport),
                 ) == LoopAction::Exit
                 {
                     break;
@@ -3033,20 +3077,22 @@ fn is_auth_error(error: &acp::AcpError) -> bool {
 /// Shared by the hard-cap immediate dead-letter path and the retries-exhausted
 /// dead-letter path so neither duplicates the tokio::spawn block.
 fn spawn_failure_notice(
-    rest_client: Option<&relay::RestClient>,
+    event_transport: Option<&toon::EventTransport>,
+    keys: &nostr::Keys,
     batch: &FlushBatch,
     content: String,
 ) {
-    if let Some(rest) = rest_client {
+    if let Some(transport) = event_transport {
         let thread_tags = batch
             .events
             .last()
             .map(|be| queue::parse_thread_tags(&be.event))
             .unwrap_or_default();
-        let rest = rest.clone();
+        let transport = transport.clone();
+        let keys = keys.clone();
         let channel_id = batch.channel_id;
         tokio::spawn(async move {
-            pool::post_failure_notice(&rest, channel_id, &thread_tags, &content).await;
+            pool::post_failure_notice(&transport, &keys, channel_id, &thread_tags, &content).await;
         });
     }
 }
@@ -3063,7 +3109,7 @@ fn handle_prompt_result(
     respawn_tx: &mpsc::Sender<RespawnResult>,
     respawn_tasks: &mut tokio::task::JoinSet<()>,
     observer: Option<observer::ObserverHandle>,
-    rest_client: Option<&relay::RestClient>,
+    event_transport: Option<&toon::EventTransport>,
 ) -> LoopAction {
     let before = pool.task_map().len();
     let agent_index = result.agent.index;
@@ -3125,7 +3171,7 @@ fn handle_prompt_result(
                     "⚠️ I couldn't process the last request (the turn exceeded the maximum duration ({}s)). Please re-send if it's still needed.",
                     config.max_turn_duration_secs
                 );
-                spawn_failure_notice(rest_client, &batch, content);
+                spawn_failure_notice(event_transport, &config.keys, &batch, content);
                 hard_timeout_fate_suffix = Some(" — dead-lettered (no recent activity)");
             } else if matches!(
                 result.outcome,
@@ -3143,7 +3189,7 @@ fn handle_prompt_result(
                         "⚠️ I couldn't process the last request after multiple retries (the turn exceeded the maximum duration ({}s)). Please re-send if it's still needed.",
                         config.max_turn_duration_secs
                     );
-                    spawn_failure_notice(rest_client, &dead, content);
+                    spawn_failure_notice(event_transport, &config.keys, &dead, content);
                     hard_timeout_fate_suffix = Some(" — dead-lettered (retry budget exhausted)");
                 } else {
                     hard_timeout_fate_suffix = Some(" — requeued for retry (recently active)");
@@ -3162,7 +3208,7 @@ fn handle_prompt_result(
                     Please re-authenticate the CLI (e.g. run `claude /login` or `codex login`) \
                     and then re-send."
                     .to_string();
-                spawn_failure_notice(rest_client, &batch, content);
+                spawn_failure_notice(event_transport, &config.keys, &batch, content);
             } else if let Some(dead) = queue.requeue(batch) {
                 let reason = match &result.outcome {
                     PromptOutcome::Timeout(TimeoutKind::Idle) => "the turn timed out".to_string(),
@@ -3176,7 +3222,7 @@ fn handle_prompt_result(
                 let content = format!(
                     "⚠️ I couldn't process the last request after multiple retries ({reason}). Please re-send if it's still needed."
                 );
-                spawn_failure_notice(rest_client, &dead, content);
+                spawn_failure_notice(event_transport, &config.keys, &dead, content);
             }
         } else {
             tracing::debug!(
@@ -4997,6 +5043,9 @@ mod build_mcp_servers_tests {
         Config {
             keys: nostr::Keys::generate(),
             relay_url: "ws://localhost:3000".into(),
+            transport: crate::toon::TransportMode::Relay,
+            toon_sidecar_url: None,
+            toon_account_index: None,
             agent_command: "goose".into(),
             agent_args: vec!["acp".into()],
             mcp_command: "test-mcp-server".into(),
@@ -5215,6 +5264,9 @@ mod error_outcome_emission_tests {
         Config {
             keys: nostr::Keys::generate(),
             relay_url: "ws://localhost:3000".into(),
+            transport: crate::toon::TransportMode::Relay,
+            toon_sidecar_url: None,
+            toon_account_index: None,
             // `true` exits cleanly, so the async respawn fails fast and
             // harmlessly off the JoinSet — irrelevant to the synchronous
             // feed emission under test.

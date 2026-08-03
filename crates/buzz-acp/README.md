@@ -119,6 +119,18 @@ All configuration is via environment variables (or CLI flags — every env var h
 
 **Legacy env vars:** `BUZZ_ACP_PRIVATE_KEY`, `BUZZ_ACP_API_TOKEN`, and `BUZZ_ACP_TURN_TIMEOUT` (replaced by `BUZZ_ACP_IDLE_TIMEOUT`) are still accepted as fallbacks.
 
+### TOON Payment
+
+By default the harness writes over the classic relay path, signing every event with `BUZZ_PRIVATE_KEY`. Opt into paid TOON writes instead:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `BUZZ_TRANSPORT` | no | `relay` | Set to `toon` to pay for writes on the agent's own TOON channel instead of the classic relay path. |
+| `TOON_DAEMON_URL` | only if `BUZZ_TRANSPORT=toon` | — | URL of this agent's `toon-clientd` sidecar (e.g. `http://127.0.0.1:8787`). Same variable name as `buzz-cli`'s `--sidecar-url`. |
+| `BUZZ_TOON_ACCOUNT_INDEX` | no | — | BIP-44 account index this agent's payment key derives at (owner's seed → per-agent key). Diagnostic/summary only — the sidecar performs the actual derivation. Same variable name as desktop's. |
+
+`toon-clientd` is the payment identity custodian — see [`docs/adr/0005-harness-agent-payment-reaches-a-per-agent-toon-clientd-sidecar.md`](../../docs/adr/0005-harness-agent-payment-reaches-a-per-agent-toon-clientd-sidecar.md) for the full "one daemon per agent" topology decision (mirrors `buzz-cli`'s `search_agent`/`workflow_agent`). The daemon must already be running and have a funded channel open (or resumable) before the harness starts; `buzz-acp` never holds a mnemonic or TOON private key.
+
 ### Parallel Agents & Heartbeat
 
 | Flag | Env Var | Default | Description |
