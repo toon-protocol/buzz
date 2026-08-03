@@ -105,7 +105,11 @@ export function parseAgentTurnMetric(
   };
 }
 
-function addToken(total: number | null, value: number | null): number | null {
+/** Adds `value` into `total`, treating `null` as absent rather than zero. */
+function addNullable(
+  total: number | null,
+  value: number | null,
+): number | null {
   if (value === null) return total;
   return (total ?? 0) + value;
 }
@@ -148,9 +152,9 @@ export function aggregateAgentModelUsage(
 
   const applyCounts = (counts: AgentTurnTokenCounts | null) => {
     if (!counts) return;
-    totalInputTokens = addToken(totalInputTokens, counts.inputTokens);
-    totalOutputTokens = addToken(totalOutputTokens, counts.outputTokens);
-    totalCostUsd = addToken(totalCostUsd, counts.costUsd);
+    totalInputTokens = addNullable(totalInputTokens, counts.inputTokens);
+    totalOutputTokens = addNullable(totalOutputTokens, counts.outputTokens);
+    totalCostUsd = addNullable(totalCostUsd, counts.costUsd);
   };
 
   for (const sessionMetrics of bySession.values()) {
