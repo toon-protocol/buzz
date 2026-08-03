@@ -177,6 +177,39 @@ fn boundary_huddle_stt_blocks_ncryptsec() {
     assert!(crate::huddle::pipeline::sign_and_guard_stt_body(builder, &keys).is_ok());
 }
 
+/// Boundary 9: huddle TOON frame publisher (`huddle/toon_pipeline.rs`).
+///
+/// The frame payload is base64 of encoder output, so the realistic injection
+/// vector is the free-text channel id riding the `h` tag — which the signed
+/// event JSON carries verbatim.
+#[test]
+fn boundary_toon_frames_blocks_ncryptsec() {
+    use crate::channel_keys::channel_keys_test_lock;
+
+    let _guard = channel_keys_test_lock();
+    crate::channel_keys::sync_keys(std::collections::HashMap::new());
+
+    let keys = nostr::Keys::generate();
+    let header = crate::huddle::wire::FrameHeader {
+        seq: 1,
+        ts_48k: 960,
+        level_dbov: -30,
+        flags: 0,
+    };
+    let poisoned_channel = format!("huddle-{NCRYPTSEC}");
+    let event =
+        crate::huddle::toon_frames::build_frame_event(&poisoned_channel, header, &[1, 2, 3], &keys)
+            .unwrap();
+    let err = crate::huddle::toon_pipeline::guarded_frame_body(&event).unwrap_err();
+    assert_guard_error(&err);
+
+    // Clean frames pass through the same seam.
+    let event =
+        crate::huddle::toon_frames::build_frame_event("huddle-chan", header, &[1, 2, 3], &keys)
+            .unwrap();
+    assert!(crate::huddle::toon_pipeline::guarded_frame_body(&event).is_ok());
+}
+
 /// Boundary 8: native websocket send loop — the single choke point for all
 /// webview-originated relay websocket frames.
 #[tokio::test]
@@ -261,6 +294,7 @@ const EVENTS_INVENTORY: &[(&str, usize, usize)] = &[
     ("src/relay.rs", 2, 0),        // boundaries 2, 4 (guard moved to the seam)
     ("src/relay/submit.rs", 1, 0), // boundaries 1 + 3 (guard moved to the seam)
     ("src/huddle/pipeline.rs", 1, 1), // boundary 5 (still guards locally too)
+    ("src/huddle/toon_pipeline.rs", 1, 1), // boundary 9 (still guards locally too)
     ("src/commands/team_snapshot.rs", 1, 0), // boundary 6 (guard moved to the seam)
     ("src/commands/personas/snapshot/import.rs", 2, 0), // boundary 7 (guard moved to the seam) + its in-file injection-test fixture URL
     ("src/native_websocket.rs", 0, 2),                  // boundary 8 (WS frames; no events URL)

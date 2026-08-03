@@ -8,11 +8,6 @@
 //! SSRC for NetEq plus a map key for the per-speaker rodio player); two
 //! listeners in the same huddle may number the same speakers differently.
 
-// Staged for buzz#23: consumed by the TOON huddle pipeline (stage 2 keys the
-// receive path's jitter buffers by these slots). Remove the allow with that
-// wiring.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
 /// Highest slot index handed out (inclusive). Matches the legacy room's
@@ -48,11 +43,6 @@ impl SpeakerSlots {
     /// so the caller can drop the matching jitter buffer / player.
     pub fn release(&mut self, pubkey: &str) -> Option<u8> {
         self.by_pubkey.remove(pubkey)
-    }
-
-    /// Pubkeys currently holding a slot.
-    pub fn pubkeys(&self) -> impl Iterator<Item = &str> {
-        self.by_pubkey.keys().map(String::as_str)
     }
 }
 

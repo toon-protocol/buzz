@@ -12,10 +12,6 @@
 //! The legacy relay-room transport keeps its Opus-DTX behaviour and does not
 //! use this gate — DTX comfort packets cost nothing over a plain WebSocket.
 
-// Staged for buzz#23: consumed by the TOON huddle pipeline (stage 2 wires the
-// send loop through this gate). Remove the allow with that wiring.
-#![allow(dead_code)]
-
 /// Frames at or above this level count as speech. Typical normalized speech
 /// peaks measure ≈ -20..-8 dBov (see `wire.rs`'s tests); ambient room noise
 /// through a normal mic sits below ≈ -55 dBov. -50 keeps quiet speech in

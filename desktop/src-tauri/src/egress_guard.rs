@@ -14,6 +14,7 @@
 //! | 6 | `submit_engram_event` (team snapshot) | `commands/team_snapshot.rs` (re-exported from `event_transport`) | `event_transport::dispatch` |
 //! | 7 | `submit_engram_event` (persona import) | `commands/personas/snapshot/import.rs` (re-exported from `event_transport`) | `event_transport::dispatch` |
 //! | 8 | native websocket send loop (all webview relay WS) | `native_websocket.rs` | locally |
+//! | 9 | huddle TOON frame publisher | `huddle/toon_pipeline.rs` | locally (`guarded_frame_body`), then again in `event_transport::dispatch` |
 //!
 //! buzz#27 consolidated boundaries 1-4, 6, and 7's actual submission behind
 //! `event_transport::dispatch` — the Rust-side write seam that also picks

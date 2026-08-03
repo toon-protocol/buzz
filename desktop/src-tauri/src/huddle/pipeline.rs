@@ -21,6 +21,33 @@ use super::state::{HuddlePhase, VoiceInputMode};
 use super::stt;
 use super::tts;
 
+/// Dial the huddle audio pipeline for whichever transport carries this run's
+/// writes — the same `BUZZ_TRANSPORT` switch every other write follows
+/// (buzz#23 stage 2): the relay's audio room WebSocket by default, the TOON
+/// frame pipeline (paid ephemeral events out, free subscription in) when
+/// `BUZZ_TRANSPORT=toon`. Both return the same `(cancel, pcm_tx)` contract,
+/// so join, teardown, and audio reconnect are transport-agnostic.
+pub(crate) async fn connect_transport_audio(
+    ephemeral_channel_id: &str,
+    parent_channel_id: Option<&str>,
+    state: &AppState,
+) -> Result<
+    (
+        tokio_util::sync::CancellationToken,
+        tokio::sync::mpsc::Sender<Vec<u8>>,
+    ),
+    String,
+> {
+    match crate::event_transport::transport_mode() {
+        crate::event_transport::TransportMode::Toon => {
+            super::toon_pipeline::connect_toon_audio(ephemeral_channel_id, state).await
+        }
+        crate::event_transport::TransportMode::Relay => {
+            relay_api::connect_audio_relay(ephemeral_channel_id, parent_channel_id, state).await
+        }
+    }
+}
+
 pub(crate) async fn post_connect_setup(
     state: &AppState,
     ephemeral_channel_id: &str,
@@ -49,14 +76,14 @@ pub(crate) async fn post_connect_setup(
         mgr.start_tts_download(state.http_client.clone());
     }
 
-    // Connect audio relay WebSocket (Opus encode/decode pipeline).
-    // This is the core audio path — failure is fatal for the huddle.
+    // Connect the audio pipeline (Opus encode/decode). This is the core
+    // audio path — failure is fatal for the huddle.
     let parent_id = {
         let hs = state.huddle()?;
         hs.parent_channel_id.clone()
     };
     let (cancel, pcm_tx) =
-        relay_api::connect_audio_relay(ephemeral_channel_id, parent_id.as_deref(), state).await?;
+        connect_transport_audio(ephemeral_channel_id, parent_id.as_deref(), state).await?;
     {
         let mut hs = state.huddle()?;
         hs.audio_ws_cancel = Some(cancel);
