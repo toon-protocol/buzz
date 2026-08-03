@@ -21,6 +21,7 @@ import {
   SunMoon,
   Ticket,
   UserRound,
+  Wallet,
   type LucideIcon,
 } from "lucide-react";
 import type {
@@ -78,6 +79,7 @@ import { ModerationQueueCard } from "./ModerationQueueCard";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
 import { PreventSleepSettingsCard } from "./PreventSleepSettingsCard";
 import { AgentDefaultsSettingsCard } from "./AgentDefaultsSettingsCard";
+import { PaymentsSettingsCard } from "@/features/payments/ui/PaymentsSettingsCard";
 import { HostedCommunitiesSettingsCard } from "./HostedCommunitiesSettingsCard";
 import { SettingsOptionGroup, SettingsOptionRow } from "./SettingsOptionGroup";
 import { ProfileSettingsCard } from "./ProfileSettingsCard";
@@ -91,6 +93,7 @@ export type SettingsSection =
   | "agents"
   | "channel-templates"
   | "compute"
+  | "payments"
   | "appearance"
   | "shortcuts"
   | "hosted-communities"
@@ -110,6 +113,7 @@ const SETTINGS_SECTION_VALUES: readonly SettingsSection[] = [
   "agents",
   "channel-templates",
   "compute",
+  "payments",
   "appearance",
   "shortcuts",
   "hosted-communities",
@@ -188,6 +192,11 @@ export const settingsSections: SettingsSectionDescriptor[] = [
     value: "compute",
     label: "Compute",
     icon: Cpu,
+  },
+  {
+    value: "payments",
+    label: "Payments",
+    icon: Wallet,
   },
   {
     value: "shortcuts",
@@ -821,6 +830,8 @@ export function renderSettingsSection(
       return <ChannelTemplatesSettingsCard />;
     case "compute":
       return <MeshComputeSettingsCard />;
+    case "payments":
+      return <PaymentsSettingsCard />;
     case "appearance":
       return <ThemeSettingsCard />;
     case "shortcuts":

@@ -1,10 +1,16 @@
 import {
+  clearPersistedChannel,
+  hasPersistedChannel,
   loadPersistedChannel,
   savePersistedChannel,
   type PersistedChannelContext,
 } from "@/shared/api/toonChannelResumeStore";
 import type { ToonTransportConfig } from "@/shared/api/toonTransportConfig";
 import type { RelayEvent } from "@/shared/api/types";
+import type {
+  ChannelCloseState,
+  RawPaymentChannelStatus,
+} from "@/features/payments/lib/paymentsOverview";
 
 /**
  * The paying half of the TOON transport.
@@ -141,6 +147,29 @@ type PaidClient = {
     eventId?: string;
     error?: string;
   }>;
+  /** Cumulative claimed amount for a tracked channel — spend, not collateral. */
+  getChannelCumulativeAmount(channelId: string): bigint;
+  /** On-chain deposit total (locked collateral) for a tracked channel. */
+  getChannelDepositTotal(channelId: string): bigint;
+  /** Where a tracked channel sits in the withdraw journey. */
+  getChannelCloseState(channelId: string): ChannelCloseState;
+  getSettleableAt(channelId: string): bigint | undefined;
+  /** Add collateral to an open channel. `amount` is the delta, base units. */
+  depositToChannel(
+    channelId: string,
+    amount: string | bigint,
+  ): Promise<{ channelId: string; txHash?: string; depositTotal: string }>;
+  /** Begin the settlement grace period (first half of withdraw). */
+  closeChannel(channelId: string): Promise<{
+    channelId: string;
+    txHash?: string;
+    closedAt: string;
+    settleableAt: string;
+  }>;
+  /** Release collateral once the grace period has elapsed (second half). */
+  settleChannel(
+    channelId: string,
+  ): Promise<{ channelId: string; txHash?: string }>;
 };
 
 export type PaidClientFactory = (
@@ -415,6 +444,90 @@ export class ToonPaidWriter {
     this.lastReceipt = receipt;
     for (const listener of this.listeners) listener(receipt);
     return receipt;
+  }
+
+  /**
+   * Whether a channel exists to report on — this session's live channel, or
+   * one persisted from an earlier launch. Guards every method below from
+   * accidentally opening (and collateralizing) a fresh channel just because
+   * a Settings panel asked to look at one: unlike `publish`'s `ensureChannelId`,
+   * these calls must never *open* a channel as a side effect of reading or
+   * managing an existing one.
+   */
+  private hasChannel(): boolean {
+    return (
+      this.channelId !== null ||
+      hasPersistedChannel(this.config.destination, this.config.chain)
+    );
+  }
+
+  private async requireChannelId(): Promise<{
+    client: PaidClient;
+    channelId: string;
+  }> {
+    if (!this.hasChannel()) {
+      throw new ToonPaidWriteError(
+        "No payment channel is open yet — it opens automatically on the first paid write.",
+      );
+    }
+    const client = await this.ensureClient();
+    const channelId = await this.ensureChannelId(client);
+    return { client, channelId };
+  }
+
+  /**
+   * The tracked payment channel's status for the Settings -> Payments card
+   * (buzz#77), or `null` when none has ever opened for this destination.
+   * Read-only: resumes a persisted channel's tracking state if needed, but
+   * — see {@link hasChannel} — never opens a new one.
+   */
+  async getChannelStatus(): Promise<RawPaymentChannelStatus | null> {
+    if (!this.hasChannel()) return null;
+    const { client, channelId } = await this.requireChannelId();
+    return {
+      channelId,
+      depositTotalBaseUnits: client.getChannelDepositTotal(channelId),
+      cumulativeAmountBaseUnits: client.getChannelCumulativeAmount(channelId),
+      closeState: client.getChannelCloseState(channelId),
+      settleableAt: client.getSettleableAt(channelId) ?? null,
+    };
+  }
+
+  /** Add collateral to the open channel. Throws if none is open. */
+  async depositToChannel(
+    amountBaseUnits: bigint,
+  ): Promise<{ channelId: string; depositTotalBaseUnits: bigint }> {
+    const { client, channelId } = await this.requireChannelId();
+    const result = await client.depositToChannel(channelId, amountBaseUnits);
+    return { channelId, depositTotalBaseUnits: BigInt(result.depositTotal) };
+  }
+
+  /** Begin the settlement grace period. Throws if no channel is open. */
+  async closeChannel(): Promise<{
+    channelId: string;
+    closedAt: bigint;
+    settleableAt: bigint;
+  }> {
+    const { client, channelId } = await this.requireChannelId();
+    const result = await client.closeChannel(channelId);
+    return {
+      channelId,
+      closedAt: BigInt(result.closedAt),
+      settleableAt: BigInt(result.settleableAt),
+    };
+  }
+
+  /**
+   * Release collateral once the grace period has elapsed. Forgets the
+   * persisted channel on success — a settled channel has nothing left to
+   * resume, so keeping the record around would only make a future write try
+   * to sign claims against a channel that no longer exists on-chain.
+   */
+  async settleChannel(): Promise<{ channelId: string; txHash?: string }> {
+    const { client, channelId } = await this.requireChannelId();
+    const result = await client.settleChannel(channelId);
+    clearPersistedChannel(this.config.destination, this.config.chain);
+    return result;
   }
 
   /** Release the client and its channel bookkeeping. */
