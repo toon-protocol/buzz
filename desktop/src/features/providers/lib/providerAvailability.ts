@@ -19,14 +19,9 @@
  * duplicating the value. As of this writing that export is not yet present
  * in any published `@toon-protocol/client`/`@toon-protocol/connector`
  * release this repo can pin, so there is no live caller yet — this module is
- * ready for one once the value is available, the `agentNetworkFlow.ts`
- * precedent for shipping pure domain logic ahead of its data source.
- *
- * The refresh cadence mirrors the mesh's own reference pattern
- * (`mesh_llm/discovery.rs` `STATUS_FRESHNESS_SECS` = 120s freshness window,
- * `mesh_llm/coordinator.rs` `STATUS_PUBLISH_INTERVAL` = 45s republish) at the
- * same ~0.375 ratio, scaled to whatever lease the connector actually grants
- * rather than hardcoding either side of that ratio.
+ * ready for one once the value is available, mirroring the
+ * `agentNetworkFlow.ts` precedent for shipping pure domain logic ahead of
+ * its data source.
  */
 
 /** What the provider surface knows about its own current advertisement. */
@@ -41,12 +36,23 @@ export type ProviderAvailability =
   | { kind: "stale" };
 
 /**
+ * The mesh's own reference cadence: `mesh_llm/coordinator.rs`
+ * `STATUS_PUBLISH_INTERVAL` republishes every 45s within the 120s freshness
+ * window `mesh_llm/discovery.rs` `STATUS_FRESHNESS_SECS` allows.
+ */
+const MESH_REFRESH_INTERVAL_SECS = 45;
+const MESH_FRESHNESS_WINDOW_SECS = 120;
+
+/**
  * How long after publishing an advertisement to refresh it, given the
- * connector's session lease. Scaled at the mesh's own 45s/120s ratio so a
- * refresh always lands well inside the lease rather than racing its edge.
+ * connector's session lease. Scaled at the mesh's own ratio so a refresh
+ * always lands well inside the lease rather than racing its edge.
  */
 export function refreshIntervalForLease(sessionLeaseTtlMs: number): number {
-  return Math.floor(sessionLeaseTtlMs * (45 / 120));
+  return Math.floor(
+    (sessionLeaseTtlMs * MESH_REFRESH_INTERVAL_SECS) /
+      MESH_FRESHNESS_WINDOW_SECS,
+  );
 }
 
 /**
