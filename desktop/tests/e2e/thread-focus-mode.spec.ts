@@ -214,6 +214,11 @@ test("focus and split preserve reading context and interaction ownership", async
     .evaluate((element) => (element as HTMLElement).click());
   await expect(page.getByTestId("message-thread-panel")).toBeVisible();
 
+  // Each toggle restores whatever was top-visible at the moment it was
+  // clicked, not the anchor from the very start of the test — the intervening
+  // sidebar click above is free to move scroll position. Re-capture fresh.
+  const secondAnchorId = await topVisibleMessageId(body);
+
   const splitModeToggle = page.getByRole("button", { name: "Expand thread" });
   await splitModeToggle.focus();
   await splitModeToggle.press("Enter");
@@ -221,7 +226,7 @@ test("focus and split preserve reading context and interaction ownership", async
   await expect(channel).toHaveAttribute("inert", "");
   await expect(page.getByTestId("thread-view-mode-toggle")).toBeFocused();
   await expect(
-    body.locator(`[data-message-id="${anchorId}"]`),
+    body.locator(`[data-message-id="${secondAnchorId}"]`),
   ).toBeInViewport();
 
   // Focus mode owns Escape even while the rich-text composer and one of its
