@@ -1,19 +1,13 @@
 /**
  * Regression test for buzz#57: the spoiler-gallery lightbox nav-button race.
  *
- * `visibleImageGalleryForTrigger` scans sibling `[data-image-lightbox-trigger]`
- * buttons and excludes any whose own (or its `<img>`'s) computed `opacity` is
- * `0` — meant to skip triggers that are genuinely not shown. But a spoiler
- * reveal flips `data-revealed` to `"true"` synchronously while the CSS
- * fade-in transition it kicks off animates that same image's opacity from 0
- * to 1 over ~200ms. If the gallery scan runs before that transition's first
- * frame lands, `getComputedStyle` can still report `opacity: 0` for an image
- * that is, per `data-revealed`, already revealed — wrongly excluding it from
- * the gallery and leaving the lightbox with no "Next image" button.
- *
- * `isInsideHiddenSpoiler` (checked first) is already the authoritative,
- * non-animated signal for spoiler visibility, so the opacity check must not
- * re-exclude an element the spoiler gate has already cleared.
+ * Revealing a spoiler flips `data-revealed` to `"true"` synchronously, then
+ * kicks off a ~200ms CSS fade-in on that same image. If the gallery scan in
+ * `visibleImageGalleryForTrigger` runs before the transition's first frame
+ * lands, `getComputedStyle` can still report `opacity: 0` for an image that
+ * is, per `data-revealed`, already revealed. See the comment on
+ * `isVisibleImageLightboxTrigger` in imageLightbox.ts for why that transient
+ * opacity must not be used to re-exclude it.
  */
 
 import assert from "node:assert/strict";
