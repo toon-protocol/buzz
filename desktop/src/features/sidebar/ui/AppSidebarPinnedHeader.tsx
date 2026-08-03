@@ -1,4 +1,4 @@
-import { Activity, Bot, FolderGit2, Inbox, Zap } from "lucide-react";
+import { Activity, Bot, Briefcase, FolderGit2, Inbox, Zap } from "lucide-react";
 
 import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
 import { FeatureGate } from "@/shared/features";
@@ -19,7 +19,8 @@ type SidebarSelectedView =
   | "agents"
   | "workflows"
   | "pulse"
-  | "projects";
+  | "projects"
+  | "jobs";
 
 type AppSidebarPinnedHeaderProps = {
   channelLabels: Record<string, string>;
@@ -39,6 +40,7 @@ type AppSidebarPrimaryMenuProps = {
   homeBadgeCount: number;
   onSelectAgents: () => void;
   onSelectHome: () => void;
+  onSelectJobs: () => void;
   onSelectProjects: () => void;
   onSelectPulse: () => void;
   onSelectWorkflows: () => void;
@@ -84,6 +86,7 @@ export function AppSidebarPrimaryMenu({
   homeBadgeCount,
   onSelectAgents,
   onSelectHome,
+  onSelectJobs,
   onSelectProjects,
   onSelectPulse,
   onSelectWorkflows,
@@ -166,6 +169,20 @@ export function AppSidebarPrimaryMenu({
             >
               <Zap className="h-4 w-4" />
               <SidebarMenuLabel>Workflows</SidebarMenuLabel>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </FeatureGate>
+        <FeatureGate feature="factoryJobs">
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              data-testid="open-jobs-view"
+              isActive={selectedView === "jobs"}
+              onClick={onSelectJobs}
+              tooltip="Jobs"
+              type="button"
+            >
+              <Briefcase className="h-4 w-4" />
+              <SidebarMenuLabel>Jobs</SidebarMenuLabel>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </FeatureGate>

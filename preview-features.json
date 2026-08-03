@@ -30,6 +30,12 @@
       "name": "Agent-managed profiles",
       "description": "Let agents manage their own relay name and avatar instead of restoring the desktop copy",
       "platforms": ["desktop"]
+    },
+    {
+      "id": "factoryJobs",
+      "name": "Jobs",
+      "description": "Post a factory job, compare quotes, and pay increment by increment (TOON only)",
+      "platforms": ["desktop"]
     }
   ]
 }
