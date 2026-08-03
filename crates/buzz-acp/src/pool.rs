@@ -524,6 +524,11 @@ pub struct PromptContext {
     pub cwd: String,
     /// REST client for pre-prompt context fetches (thread/DM history).
     pub rest_client: RestClient,
+    /// Transport seam (buzz#73) for writes this harness signs and submits
+    /// itself (e.g. failure notices). Reads always go through `rest_client`
+    /// directly — only writes route through here, since only writes are
+    /// paid on TOON.
+    pub event_transport: crate::toon::EventTransport,
     /// Shared channel metadata for startup-known and dynamically joined channels.
     pub channel_info: ChannelInfoResolver,
     /// Max messages to include in thread/DM context. 0 = disabled.
@@ -3804,8 +3809,14 @@ pub(crate) async fn reaction_add(rest: &crate::relay::RestClient, event_id: &str
 /// batch is dead-lettered. Replies into the thread of `thread_tags` when the
 /// triggering event was threaded. Errors are logged and swallowed — the
 /// notice must never take down the main loop.
+///
+/// Goes through [`crate::toon::EventTransport`] (buzz#73) rather than
+/// signing and submitting directly: on `BUZZ_TRANSPORT=toon` this write is
+/// paid from the agent's own channel by its `toon-clientd` sidecar, on the
+/// default relay path it is signed locally and submitted exactly as before.
 pub(crate) async fn post_failure_notice(
-    rest: &crate::relay::RestClient,
+    transport: &crate::toon::EventTransport,
+    keys: &nostr::Keys,
     channel_id: Uuid,
     thread_tags: &ThreadTags,
     content: &str,
@@ -3830,15 +3841,21 @@ pub(crate) async fn post_failure_notice(
                 return;
             }
         };
-    let event = match builder.sign_with_keys(&rest.keys) {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::warn!(channel = %channel_id, "failure notice: sign failed: {e}");
-            return;
+    match tokio::time::timeout(Duration::from_secs(5), transport.publish(keys, builder)).await {
+        Ok(Ok(crate::toon::PublishOutcome::Relay)) => {}
+        Ok(Ok(crate::toon::PublishOutcome::Toon {
+            fee_paid,
+            channel_id: paid_channel,
+            nonce,
+        })) => {
+            tracing::debug!(
+                channel = %channel_id,
+                paid_channel,
+                fee_paid,
+                nonce,
+                "failure notice: paid write accepted"
+            );
         }
-    };
-    match tokio::time::timeout(Duration::from_secs(5), rest.submit_event(&event)).await {
-        Ok(Ok(_)) => {}
         Ok(Err(e)) => tracing::warn!(channel = %channel_id, "failure notice failed: {e}"),
         Err(_) => tracing::warn!(channel = %channel_id, "failure notice timed out"),
     }
@@ -6284,6 +6301,12 @@ mod tests {
                 keys: agent_keys.clone(),
                 auth_tag_json: None,
             },
+            event_transport: crate::toon::EventTransport::Relay(RestClient {
+                http: reqwest::Client::new(),
+                base_url: "http://127.0.0.1:0".to_string(),
+                keys: agent_keys.clone(),
+                auth_tag_json: None,
+            }),
             channel_info: ChannelInfoResolver::new(
                 std::collections::HashMap::new(),
                 RestClient {
@@ -6746,6 +6769,117 @@ mod tests {
             requests.load(Ordering::SeqCst),
             2,
             "one fetch_channel_info sequence (initial attempt + single retry)"
+        );
+        server.abort();
+    }
+
+    // ── transport seam (buzz#73): post_failure_notice routes through EventTransport ──
+
+    /// Minimal raw-TCP HTTP stub: captures each request's start line + body and
+    /// replies with a fixed JSON body. Proves `post_failure_notice` dispatches
+    /// through whichever [`crate::toon::EventTransport`] it is given, rather
+    /// than a hard-wired path.
+    async fn body_capturing_stub(
+        response_body: &'static str,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test HTTP server");
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let server_requests = requests.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = vec![0; 8192];
+                let n = socket.read(&mut buf).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                server_requests.lock().unwrap().push(request);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        (base_url, requests, server)
+    }
+
+    /// The Toon dispatch hits `POST /publish-unsigned` on the agent's own
+    /// sidecar — never `/events` — scoped to the channel via the `h` tag, and
+    /// treats the daemon's receipt (fee + channel + watermark nonce) as success.
+    #[tokio::test]
+    async fn test_post_failure_notice_toon_transport_pays_from_agents_own_channel() {
+        let receipt =
+            r#"{"eventId":"e1","channelId":"agent-own-channel","nonce":9,"feePaid":"1000"}"#;
+        let (base_url, requests, server) = body_capturing_stub(receipt).await;
+
+        let sidecar = crate::toon::SidecarClient::new(base_url).unwrap();
+        let transport = crate::toon::EventTransport::Toon(sidecar);
+        let keys = nostr::Keys::generate();
+        let channel_id = Uuid::new_v4();
+
+        post_failure_notice(
+            &transport,
+            &keys,
+            channel_id,
+            &ThreadTags::default(),
+            "the turn timed out",
+        )
+        .await;
+
+        let seen = requests.lock().unwrap();
+        assert_eq!(seen.len(), 1, "exactly one paid write, no fallback path");
+        let req = &seen[0];
+        assert!(
+            req.starts_with("POST /publish-unsigned"),
+            "must pay via the sidecar's publish-unsigned endpoint, not /events: {req}"
+        );
+        assert!(
+            req.contains(&channel_id.to_string()),
+            "h tag must scope the write to the agent's own channel: {req}"
+        );
+        assert!(req.contains("the turn timed out"));
+        server.abort();
+    }
+
+    /// The default relay path is unchanged by the seam: it still signs
+    /// locally and submits via `POST /events`.
+    #[tokio::test]
+    async fn test_post_failure_notice_relay_transport_submits_via_events() {
+        let (base_url, requests, server) = body_capturing_stub("{}").await;
+
+        let keys = nostr::Keys::generate();
+        let rest = crate::relay::RestClient {
+            http: reqwest::Client::new(),
+            base_url,
+            keys: keys.clone(),
+            auth_tag_json: None,
+        };
+        let transport = crate::toon::EventTransport::Relay(rest);
+        let channel_id = Uuid::new_v4();
+
+        post_failure_notice(
+            &transport,
+            &keys,
+            channel_id,
+            &ThreadTags::default(),
+            "authentication failed",
+        )
+        .await;
+
+        let seen = requests.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert!(
+            seen[0].starts_with("POST /events"),
+            "relay path must hit POST /events, not the sidecar: {}",
+            seen[0]
         );
         server.abort();
     }
