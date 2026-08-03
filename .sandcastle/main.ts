@@ -63,8 +63,14 @@ const hooks = {
       // only succeeds by luck. `gh auth setup-git` installs `gh` as git's
       // credential helper (reads GH_TOKEN at push time, stores no token in any
       // file). Guarded on GH_TOKEN so token-less local dev no-ops rather than
-      // aborting setup. See ./agent-implement-issue.ts for the full note.
-      { command: 'if [ -n "$GH_TOKEN" ]; then gh auth setup-git; fi' },
+      // aborting setup. See ./agent-implement-issue.ts for the full note,
+      // including why the extraheader unset is load-bearing (actions/checkout
+      // persists a read-only-token header that beats the credential helper).
+      {
+        command:
+          'if [ -n "$GH_TOKEN" ]; then gh auth setup-git; ' +
+          "git config --unset-all 'http.https://github.com/.extraheader' 2>/dev/null || true; fi",
+      },
       { command: "pnpm install --frozen-lockfile" },
     ],
   },

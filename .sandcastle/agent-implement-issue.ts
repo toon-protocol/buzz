@@ -92,7 +92,20 @@ const hooks = {
       // shells out to `gh auth git-credential`, which reads GH_TOKEN at push
       // time. Guarded on GH_TOKEN so local dev without a token no-ops instead
       // of aborting sandbox setup (onSandboxReady failures are fatal).
-      { command: 'if [ -n "$GH_TOKEN" ]; then gh auth setup-git; fi' },
+      //
+      // The `--unset-all http.<github>.extraheader` that follows is LOAD-BEARING
+      // (org-wide pattern; its absence here is what broke this repo's first live
+      // run on issue #56): actions/checkout persists an `AUTHORIZATION: basic`
+      // extraheader carrying the workflow's READ-ONLY job token in the repo-local
+      // git config, the engine bind-mounts the whole `.git` into the sandbox, and
+      // an explicit header BEATS any credential helper — so without the unset,
+      // the in-sandbox `git push` authenticates as the read-only token and is
+      // rejected, while `gh` API calls (which read GH_TOKEN directly) still work.
+      {
+        command:
+          'if [ -n "$GH_TOKEN" ]; then gh auth setup-git; ' +
+          "git config --unset-all 'http.https://github.com/.extraheader' 2>/dev/null || true; fi",
+      },
       { command: "pnpm install --frozen-lockfile" },
     ],
   },
