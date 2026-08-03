@@ -28,6 +28,17 @@ export const KIND_JOB_PROGRESS = 43003;
 export const KIND_JOB_RESULT = 43004;
 export const KIND_JOB_CANCEL = 43005;
 export const KIND_JOB_ERROR = 43006;
+// NIP-90 factory job market (toon-meta#262 decision 4 / toon-meta#263 §1.2).
+// A parallel allocation to KIND_JOB_REQUEST..KIND_JOB_ERROR above, not a
+// replacement — see docs/factory-job-protocol.md in toon-meta. 43001-43006
+// stay in place; nothing implements them either.
+export const KIND_FACTORY_JOB_REQUEST = 5097;
+// Result kind is request + 1000, per the NIP-90 formula.
+export const KIND_FACTORY_JOB_RESULT = 6097;
+// Shared feedback kind covering the RFQ quote, per-increment offer, and free
+// narration (disambiguated by the event's `status` tag: "quote" / "partial" /
+// "processing") — the NIP-90 counterpart to KIND_JOB_ACCEPTED/PROGRESS/CANCEL/ERROR.
+export const KIND_FACTORY_JOB_FEEDBACK = 7000;
 export const KIND_FORUM_POST = 45001;
 export const KIND_FORUM_COMMENT = 45003;
 export const KIND_APPROVAL_REQUEST = 46010;
@@ -154,6 +165,9 @@ export const CHANNEL_TIMELINE_CONTENT_KINDS = [
   KIND_JOB_RESULT, // 43004
   KIND_JOB_CANCEL, // 43005
   KIND_JOB_ERROR, // 43006
+  KIND_FACTORY_JOB_REQUEST, // 5097 — NIP-90 factory job request
+  KIND_FACTORY_JOB_FEEDBACK, // 7000 — NIP-90 factory job quote/increment/narration
+  KIND_FACTORY_JOB_RESULT, // 6097 — NIP-90 factory job result
   KIND_HUDDLE_STARTED, // 48100 — huddle session card
 ] as const;
 
@@ -170,6 +184,9 @@ const NON_CONVERSATIONAL_UNREAD_KINDS: ReadonlySet<number> = new Set([
   KIND_JOB_RESULT, // 43004
   KIND_JOB_CANCEL, // 43005
   KIND_JOB_ERROR, // 43006
+  KIND_FACTORY_JOB_REQUEST, // 5097 — NIP-90 factory job request
+  KIND_FACTORY_JOB_FEEDBACK, // 7000 — NIP-90 factory job quote/increment/narration
+  KIND_FACTORY_JOB_RESULT, // 6097 — NIP-90 factory job result
   KIND_HUDDLE_STARTED, // 48100 — huddle cards are visible but non-conversational
   KIND_HUDDLE_PARTICIPANT_JOINED, // 48101
   KIND_HUDDLE_PARTICIPANT_LEFT, // 48102

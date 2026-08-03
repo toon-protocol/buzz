@@ -2,7 +2,16 @@ use tauri::State;
 
 use crate::{app_state::AppState, models::ChannelPageCursor, relay::query_relay};
 
-const TIMELINE_KINDS: [u32; 11] = [
+/// Timeline content kinds — the message/channel-event kinds that make up a
+/// channel timeline and a thread's replies. Used to build relay `/query`
+/// filters for the channel window and the [`crate::commands::messages`]
+/// keyset readers, which share this constant rather than keeping a second
+/// copy. None of these are in `P_GATED_KINDS`, so a filter carrying them
+/// clears the bridge p-gate (`p_gated_filters_authorized`) without a `#p`
+/// tag — load-bearing for the thread-subtree read, whose relay routing keys
+/// off `#e`+`depth_limit` (not kind) but still passes through the p-gate
+/// before it runs.
+pub(crate) const TIMELINE_KINDS: [u32; 14] = [
     9,
     40002,
     40008,
@@ -13,6 +22,9 @@ const TIMELINE_KINDS: [u32; 11] = [
     43004,
     43005,
     43006,
+    buzz_core_pkg::kind::KIND_FACTORY_JOB_REQUEST,
+    buzz_core_pkg::kind::KIND_FACTORY_JOB_FEEDBACK,
+    buzz_core_pkg::kind::KIND_FACTORY_JOB_RESULT,
     buzz_core_pkg::kind::KIND_HUDDLE_STARTED,
 ];
 

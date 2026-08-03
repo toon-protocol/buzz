@@ -4,6 +4,8 @@ import {
   KIND_JOB_ERROR,
   KIND_JOB_PROGRESS,
   KIND_JOB_RESULT,
+  KIND_FACTORY_JOB_FEEDBACK,
+  KIND_FACTORY_JOB_RESULT,
 } from "@/shared/constants/kinds";
 import type { FeedItemCategory } from "@/shared/api/types";
 
@@ -46,8 +48,9 @@ export const SLOT_LABELS: Record<SoundSlot, string> = {
   job_error: "Agent: job error",
 };
 
-// The agent job protocol (kinds 43001-43006) is defined and queryable but
-// nothing emits the events yet — buzz-acp publishes plain stream messages.
+// The agent job protocol (kinds 43001-43006, and its NIP-90 factory-job-market
+// parallel 5097/7000/6097 — toon-meta#262 decision 4) is defined and queryable
+// but nothing emits the events yet — buzz-acp publishes plain stream messages.
 // These slots stay wired (resolver, defaults, settings) but render disabled
 // with a "coming soon" badge until an emitter exists.
 export const COMING_SOON_SLOTS: ReadonlySet<SoundSlot> = new Set([
@@ -124,6 +127,11 @@ export function slotForFeedKind(
   if (kind === KIND_JOB_PROGRESS) return "job_progress";
   if (kind === KIND_JOB_RESULT) return "job_result";
   if (kind === KIND_JOB_ERROR) return "job_error";
+  if (kind === KIND_FACTORY_JOB_RESULT) return "job_result";
+  // kind:7000 is shared across the RFQ quote, per-increment offer, and free
+  // narration (disambiguated by a `status` tag) — job_progress is the
+  // closest single in-flight slot without inspecting job protocol state.
+  if (kind === KIND_FACTORY_JOB_FEEDBACK) return "job_progress";
   if (kind === KIND_APPROVAL_REQUEST) return "needs_action";
   return "needs_action";
 }

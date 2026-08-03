@@ -34,6 +34,9 @@ import {
   KIND_JOB_PROGRESS,
   KIND_JOB_REQUEST,
   KIND_JOB_RESULT,
+  KIND_FACTORY_JOB_REQUEST,
+  KIND_FACTORY_JOB_FEEDBACK,
+  KIND_FACTORY_JOB_RESULT,
   KIND_HUDDLE_STARTED,
   KIND_DELETION,
   KIND_NIP29_DELETE_EVENT,
@@ -66,6 +69,9 @@ export function isTimelineContentEvent(event: RelayEvent) {
     event.kind === KIND_JOB_RESULT ||
     event.kind === KIND_JOB_CANCEL ||
     event.kind === KIND_JOB_ERROR ||
+    event.kind === KIND_FACTORY_JOB_REQUEST ||
+    event.kind === KIND_FACTORY_JOB_FEEDBACK ||
+    event.kind === KIND_FACTORY_JOB_RESULT ||
     event.kind === KIND_HUDDLE_STARTED
   );
 }

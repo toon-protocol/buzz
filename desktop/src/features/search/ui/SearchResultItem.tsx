@@ -169,6 +169,10 @@ function describeSearchHit(hit: SearchHit) {
       return "Agent job";
     case 43003:
       return "Agent update";
+    case 5097:
+      return "Agent job";
+    case 7000:
+      return "Agent update";
     case 46010:
       return "Approval request";
     default:

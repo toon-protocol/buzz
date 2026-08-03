@@ -474,6 +474,18 @@ pub const KIND_JOB_CANCEL: u32 = 43005;
 /// An agent job failed with an error.
 pub const KIND_JOB_ERROR: u32 = 43006;
 
+// NIP-90 factory job market (toon-meta#262 decision 4 / toon-meta#263 §1.2).
+// A parallel allocation to the 43001-43006 range above, not a replacement —
+// see docs/factory-job-protocol.md in toon-meta. 43001-43006 stay in place;
+// nothing implements them either.
+/// Factory job request (NIP-90 `kind:5097`).
+pub const KIND_FACTORY_JOB_REQUEST: u32 = 5097;
+/// Factory job result (NIP-90 `kind:6097` = request kind + 1000, per the NIP-90 formula).
+pub const KIND_FACTORY_JOB_RESULT: u32 = 6097;
+/// Factory job feedback (NIP-90 `kind:7000`): the RFQ quote, per-increment offer, and free
+/// narration, disambiguated by the event's `status` tag ("quote" / "partial" / "processing").
+pub const KIND_FACTORY_JOB_FEEDBACK: u32 = 7000;
+
 /// Relay-signed notification: the target pubkey was added to a channel.
 /// Stored globally (channel_id = None) with p-tag = target, h-tag = channel UUID.
 pub const KIND_MEMBER_ADDED_NOTIFICATION: u32 = 44100;
@@ -659,6 +671,9 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_JOB_RESULT,
     KIND_JOB_CANCEL,
     KIND_JOB_ERROR,
+    KIND_FACTORY_JOB_REQUEST,
+    KIND_FACTORY_JOB_RESULT,
+    KIND_FACTORY_JOB_FEEDBACK,
     KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION,
     KIND_AGENT_TURN_METRIC,

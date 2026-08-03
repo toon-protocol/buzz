@@ -183,6 +183,12 @@ function feedHeadline(item: FeedItem, groupItems: readonly FeedItem[] = []) {
       return "Job cancelled";
     case 43006:
       return "Job failed";
+    case 5097:
+      return "Job requested";
+    case 7000:
+      return "Progress update";
+    case 6097:
+      return "Job result";
     case 45001:
       return "Forum post";
     case 45003:

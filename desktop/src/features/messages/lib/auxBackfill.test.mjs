@@ -34,6 +34,7 @@ test("collects content-kind message ids (stream, v2, diff, system, jobs)", () =>
     event(hex("3"), 40008), // diff (own row)
     event(hex("4"), 40099), // system message
     event(hex("5"), 43001), // job request
+    event(hex("6"), 5097), // NIP-90 factory job request
   ];
   assert.deepEqual(collectMessageIdsForAuxBackfill(events), [
     hex("1"),
@@ -41,6 +42,7 @@ test("collects content-kind message ids (stream, v2, diff, system, jobs)", () =>
     hex("3"),
     hex("4"),
     hex("5"),
+    hex("6"),
   ]);
 });
 
