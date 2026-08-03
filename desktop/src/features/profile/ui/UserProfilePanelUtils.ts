@@ -27,7 +27,12 @@ export type ProfilePanelView =
   | "channels"
   | "logs";
 
-export type ProfilePanelTab = "info" | "runtime" | "channels" | "memories";
+export type ProfilePanelTab =
+  | "info"
+  | "runtime"
+  | "channels"
+  | "memories"
+  | "money";
 
 export const PROFILE_PANEL_VIEW_TITLES: Record<ProfilePanelView, string> = {
   summary: "Profile",
@@ -49,6 +54,7 @@ const PROFILE_PANEL_TABS = new Set<ProfilePanelTab>([
   "runtime",
   "channels",
   "memories",
+  "money",
 ]);
 
 const LEGACY_PROFILE_PANEL_VIEW_ALIASES: Record<string, ProfilePanelView> = {

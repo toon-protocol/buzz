@@ -179,7 +179,7 @@ test("profilePanelViewFromSearch falls back to summary for invalid values", () =
 });
 
 test("parseProfilePanelTab accepts profile summary tabs", () => {
-  for (const tab of ["info", "runtime", "channels", "memories"]) {
+  for (const tab of ["info", "runtime", "channels", "memories", "money"]) {
     assert.equal(parseProfilePanelTab(tab), tab);
   }
 });
