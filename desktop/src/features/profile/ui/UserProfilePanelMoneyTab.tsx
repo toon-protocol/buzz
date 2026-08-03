@@ -175,7 +175,8 @@ function NetworkSpendPlaceholder() {
         <Wallet className="h-4 w-4 shrink-0 text-muted-foreground" />
         <p className="text-sm text-muted-foreground">
           Balance, runway, and refill will land here — never summed with model
-          usage above.
+          usage above. Any income this agent earns nets into this same balance;
+          there's no separate earnings account to check.
         </p>
       </div>
     </section>
