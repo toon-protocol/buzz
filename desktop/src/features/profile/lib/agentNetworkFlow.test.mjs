@@ -66,13 +66,14 @@ test("no income yet — runway is finite, driven by burn rate alone", () => {
 test("a single payment does not flip runway to indefinite", () => {
   // Income currently outpaces burn, but only one sample has ever landed —
   // must not be trusted as self-funding yet.
-  const state = deriveNetworkRunway({
+  const read = {
     ...NO_INCOME,
     incomeRateBaseUnitsPerSec: 500,
     incomeSampleCount: 1,
-  });
+  };
+  const state = deriveNetworkRunway(read);
   assert.equal(state.kind, "finite");
-  assert.equal(isEarning(NO_INCOME) || false, false);
+  assert.equal(isEarning(read), false);
 });
 
 test("sustained income that covers burn is self-funding — no depletion date", () => {
