@@ -27,6 +27,18 @@ import {
  * nothing honest to compute it from until a later ticket adds one.
  */
 
+function appendByProvider<T>(
+  setState: React.Dispatch<React.SetStateAction<Map<string, T[]>>>,
+  providerPubkey: string,
+  item: T,
+) {
+  setState((prev) => {
+    const next = new Map(prev);
+    next.set(providerPubkey, [...(next.get(providerPubkey) ?? []), item]);
+    return next;
+  });
+}
+
 /** All kind:7000 feedback for one job, split by shape, plus per-provider quotes. */
 export function useFactoryJobFeedback(
   transport: ToonEventTransport | null,
@@ -69,24 +81,10 @@ export function useFactoryJobFeedback(
         return;
       }
       if (parsed.status === "partial") {
-        setOffersByProvider((prev) => {
-          const next = new Map(prev);
-          next.set(parsed.providerPubkey, [
-            ...(next.get(parsed.providerPubkey) ?? []),
-            parsed,
-          ]);
-          return next;
-        });
+        appendByProvider(setOffersByProvider, parsed.providerPubkey, parsed);
         return;
       }
-      setNarrationByProvider((prev) => {
-        const next = new Map(prev);
-        next.set(parsed.providerPubkey, [
-          ...(next.get(parsed.providerPubkey) ?? []),
-          parsed,
-        ]);
-        return next;
-      });
+      appendByProvider(setNarrationByProvider, parsed.providerPubkey, parsed);
     };
 
     let disposed = false;
@@ -170,6 +168,7 @@ export function useProviderJobHistory(
   >(new Map());
 
   React.useEffect(() => {
+    setCompletedByProvider(new Map());
     if (!transport || providerPubkeys.length === 0) return;
     let cancelled = false;
 

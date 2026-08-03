@@ -211,6 +211,10 @@ export function FactoryJobsScreen() {
           </div>
           {selectedJobId ? (
             <JobDetail
+              // Remount on job switch: `JobDetail` holds per-job payment
+              // state (selected provider, paid increments) that must never
+              // carry over to a different job.
+              key={selectedJobId}
               bidBaseUnits={
                 ownJobs.find((job) => job.eventId === selectedJobId)
                   ?.bidBaseUnits ?? 0n

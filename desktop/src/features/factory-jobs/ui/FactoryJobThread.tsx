@@ -30,7 +30,7 @@ type FactoryJobThreadProps = {
   schedule: FactoryJobQuoteIncrement[];
   offers: FactoryJobIncrementOffer[];
   narration: FactoryJobNarration[];
-  /** Increment numbers already paid — see `useFactoryJobPayments`. */
+  /** Increment numbers already paid — see `JobDetail` in `FactoryJobsScreen`. */
   paidIncrementNumbers: ReadonlySet<number>;
   payingIncrementNumber: number | null;
   payError: string | null;

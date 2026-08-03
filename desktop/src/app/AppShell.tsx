@@ -549,7 +549,7 @@ export function AppShell() {
     [applyAgents, applyCanvas, createForumMutation, goChannel],
   );
 
-  // The channel browser can create either a stream or a forum depending on which section opened it. Route to the matching handler.
+  // Routes to the stream or forum handler, whichever section opened the browser.
   const handleBrowseChannelCreate = React.useCallback(
     async (input: {
       name: string;
@@ -600,7 +600,7 @@ export function AppShell() {
     [closeSettings],
   );
 
-  // Section switches rewrite the settings entry rather than stacking one history entry per section, so back always exits settings in one step.
+  // Section switches rewrite the settings entry so back exits in one step.
   const handleSettingsSectionChange = React.useCallback(
     (section: SettingsSection) => {
       void goSettings(section, { replace: true });
