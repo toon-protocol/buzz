@@ -143,7 +143,16 @@ test("failed initial relay dial retries automatically", async ({ page }) => {
       { timeout: 10_000 },
     )
     .toBe("connected");
-  await expect(page.getByTestId("channel-general")).toBeVisible();
+  // The connection poll above can itself burn close to its 10s budget under
+  // CI-load contention (asset-loading contention from parallel shards, not
+  // the reconnect logic). The channel list render that follows is a second,
+  // separate wait — give it the same generous budget as the "service restart"
+  // test's identical post-dial-retry assertion below instead of the
+  // project's default expect timeout, so shard contention on this render
+  // doesn't fail a test that already proved the reconnect worked.
+  await expect(page.getByTestId("channel-general")).toBeVisible({
+    timeout: 15_000,
+  });
 });
 
 test("routine traffic cannot bypass outage backoff and recovery stays automatic", async ({
