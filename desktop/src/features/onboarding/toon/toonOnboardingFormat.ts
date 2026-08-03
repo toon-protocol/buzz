@@ -1,3 +1,5 @@
+import { TOON_DEVNET_DEFAULTS } from "@/shared/api/toonTransportConfig";
+
 /**
  * USDC has 6 decimals on every settlement chain the devnet offers — matches
  * `SETTLEMENT_ASSET_SCALE` in `toonPaidWriter.ts`. Kept as its own small
@@ -24,10 +26,13 @@ export function formatUsdcBaseUnits(amount: bigint): string {
  * The channel-open collateral the wizard shows BEFORE the user consents to
  * opening one.
  *
- * This is `ChannelManagerConfig`'s own default (`@toon-protocol/client`,
- * `initialDeposit: '100000'` = 0.1 USDC) — Buzz's `createToonClient` does not
- * override it (`toonPaidWriter.ts`). A connector that negotiates a different
- * amount would make this estimate wrong, which is why the wizard's copy
- * hedges with "up to" rather than presenting it as exact.
+ * Follows the transport config's `initialDeposit` default, which Buzz's
+ * `createToonClient` now passes through (buzz#23 stage 2 — the client
+ * library's own 0.1 USDC default cannot carry huddle audio). An operator
+ * override (`BUZZ_TOON_INITIAL_DEPOSIT`) or a connector that negotiates a
+ * different amount would make this estimate wrong, which is why the wizard's
+ * copy hedges with "up to" rather than presenting it as exact.
  */
-export const DEFAULT_CHANNEL_COLLATERAL_BASE_UNITS = 100_000n;
+export const DEFAULT_CHANNEL_COLLATERAL_BASE_UNITS = BigInt(
+  TOON_DEVNET_DEFAULTS.initialDeposit,
+);

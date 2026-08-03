@@ -6,7 +6,7 @@ import {
   savePersistedChannel,
   setToonChannelStorage,
 } from "./toonChannelResumeStore.ts";
-import { ToonPaidWriter } from "./toonPaidWriter.ts";
+import { ToonPaidWriter, transportEndpointFields } from "./toonPaidWriter.ts";
 import { resolveToonTransportConfig } from "./toonTransportConfig.ts";
 
 /**
@@ -245,4 +245,28 @@ test("a refused write still leaves the watermark persisted (the claim was issued
 
   const persisted = loadPersistedChannel(CONFIG.destination, CONFIG.chain);
   assert.equal(persisted.nonce, 1);
+});
+
+test("the client is built for the BTP session by default (buzz#23 stage 2)", () => {
+  // `proxyUrl` must NOT be among the fields: the real client prefers the
+  // stateless HTTP transport whenever a proxyUrl is present, which caps paid
+  // writes at ~16 fps — not viable for 50 fps huddle audio.
+  const fields = transportEndpointFields(CONFIG);
+
+  assert.deepEqual(fields, {
+    connectorUrl: CONFIG.connectorUrl,
+    btpUrl: CONFIG.btpUrl,
+    btpAuthToken: "",
+  });
+});
+
+test("opting out of BTP falls back to one-shot ILP-over-HTTP", () => {
+  const config = resolveToonTransportConfig({
+    BUZZ_TOON_MNEMONIC: "test test test",
+    BUZZ_TOON_BTP_URL: "off",
+  });
+
+  assert.deepEqual(transportEndpointFields(config), {
+    proxyUrl: config.proxyUrl,
+  });
 });

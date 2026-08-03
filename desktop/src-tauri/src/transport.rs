@@ -25,6 +25,14 @@ const TRANSPORT_ENV_KEYS: &[&str] = &[
     // this is the only path the renderer has to the process environment.
     "BUZZ_CHANNEL_KEYS",
     "BUZZ_TOON_PROXY_URL",
+    // BTP endpoints for the paid-write seam (buzz#23 stage 2): the connector
+    // base URL and its BTP WebSocket. BTP is the frontend's default; the
+    // literal value `off` opts back into one-shot ILP-over-HTTP.
+    "BUZZ_TOON_CONNECTOR_URL",
+    "BUZZ_TOON_BTP_URL",
+    // Channel-open collateral in settlement base units — the client library's
+    // 0.1 USDC default is exhausted by ~2 s of huddle audio (buzz#23).
+    "BUZZ_TOON_INITIAL_DEPOSIT",
     "BUZZ_TOON_RELAY_URL",
     "BUZZ_TOON_DESTINATION",
     "BUZZ_TOON_MNEMONIC",
