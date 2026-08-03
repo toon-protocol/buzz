@@ -185,7 +185,7 @@ test("focus and split preserve reading context and interaction ownership", async
     element.scrollTop = element.scrollHeight * 0.4;
     element.dispatchEvent(new Event("scroll", { bubbles: true }));
   });
-  const anchorId = await topVisibleMessageId(body);
+  const anchorIdBeforeFocusToggle = await topVisibleMessageId(body);
 
   const focusModeToggle = page.getByRole("button", {
     name: "Show thread beside channel",
@@ -202,10 +202,10 @@ test("focus and split preserve reading context and interaction ownership", async
   await expect(page.getByTestId("message-thread-body")).toBeFocused();
   await expect(summary).not.toBeFocused();
   await expect(
-    body.locator(`[data-message-id="${anchorId}"]`),
+    body.locator(`[data-message-id="${anchorIdBeforeFocusToggle}"]`),
   ).toBeInViewport();
   await expect(
-    body.locator(`[data-message-id="${anchorId}"]`),
+    body.locator(`[data-message-id="${anchorIdBeforeFocusToggle}"]`),
   ).not.toHaveAttribute("data-highlighted", "true");
 
   // Sidebar background dismissal belongs to the overlay presentation only.
@@ -214,6 +214,10 @@ test("focus and split preserve reading context and interaction ownership", async
     .evaluate((element) => (element as HTMLElement).click());
   await expect(page.getByTestId("message-thread-panel")).toBeVisible();
 
+  // The sidebar click above is free to move scroll position, so re-capture
+  // the anchor fresh rather than reusing anchorIdBeforeFocusToggle.
+  const anchorIdBeforeSplitToggle = await topVisibleMessageId(body);
+
   const splitModeToggle = page.getByRole("button", { name: "Expand thread" });
   await splitModeToggle.focus();
   await splitModeToggle.press("Enter");
@@ -221,7 +225,7 @@ test("focus and split preserve reading context and interaction ownership", async
   await expect(channel).toHaveAttribute("inert", "");
   await expect(page.getByTestId("thread-view-mode-toggle")).toBeFocused();
   await expect(
-    body.locator(`[data-message-id="${anchorId}"]`),
+    body.locator(`[data-message-id="${anchorIdBeforeSplitToggle}"]`),
   ).toBeInViewport();
 
   // Focus mode owns Escape even while the rich-text composer and one of its
