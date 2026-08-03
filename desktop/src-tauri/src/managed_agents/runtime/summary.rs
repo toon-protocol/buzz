@@ -18,7 +18,7 @@ use super::process_is_running;
 /// - persona_id set + persona gone: orphaned (no current hash to respawn into,
 ///   so never out_of_date — we must not tell the user to respawn into nothing).
 /// - no persona_id: neither — a hand-built agent has no persona to drift from.
-fn persona_drift_state(
+pub(super) fn persona_drift_state(
     record: &ManagedAgentRecord,
     personas: &[crate::managed_agents::types::AgentDefinition],
 ) -> (bool, bool) {
@@ -289,6 +289,10 @@ pub fn build_managed_agent_summary(
 /// returns `false` for an orphan regardless of drift. Extracted for unit
 /// testing without `AppHandle`/global state, following the
 /// `availability_drift` pattern in `discovery.rs`.
-fn restart_eligible(persona_orphaned: bool, hash_drift: bool, availability_drift: bool) -> bool {
+pub(super) fn restart_eligible(
+    persona_orphaned: bool,
+    hash_drift: bool,
+    availability_drift: bool,
+) -> bool {
     !persona_orphaned && (hash_drift || availability_drift)
 }
