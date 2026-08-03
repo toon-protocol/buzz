@@ -12,6 +12,11 @@ import { DropdownMenuItem } from "@/shared/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { useHuddle } from "../HuddleContext";
 import { formatHuddleActionError } from "../lib/huddleError";
+import {
+  huddleCostCaption,
+  joinGatedOnQuote,
+  useHuddleFeeQuote,
+} from "../lib/huddleFeeQuote";
 
 /** Huddle lifecycle event kinds */
 const KIND_HUDDLE_STARTED = 48100;
@@ -47,6 +52,12 @@ export function HuddleIndicator({
   startDisabled,
 }: HuddleIndicatorProps) {
   const { joinHuddle, isStarting } = useHuddle();
+  // buzz#23: on TOON, speaking is paid per frame. The cost renders on every
+  // start/join affordance BEFORE the action is possible, and the action is
+  // held closed until the quote has had its chance to resolve.
+  const feeQuote = useHuddleFeeQuote();
+  const feeCaption = huddleCostCaption(feeQuote);
+  const feeGated = joinGatedOnQuote(feeQuote);
   const queryClient = useQueryClient();
   const [activeHuddle, setActiveHuddle] = React.useState<ActiveHuddle | null>(
     null,
@@ -216,11 +227,18 @@ export function HuddleIndicator({
         <DropdownMenuItem
           className={className}
           data-testid="channel-start-huddle-trigger"
-          disabled={startDisabled || isStarting}
+          disabled={startDisabled || isStarting || feeGated}
           onSelect={() => onStart()}
         >
           <Headphones />
-          <span>Start huddle</span>
+          <span className="flex min-w-0 flex-col">
+            <span>Start huddle</span>
+            {feeCaption ? (
+              <span className="text-xs text-muted-foreground">
+                {feeCaption}
+              </span>
+            ) : null}
+          </span>
         </DropdownMenuItem>
       );
     }
@@ -236,7 +254,7 @@ export function HuddleIndicator({
               aria-label="Start huddle"
               className={className}
               data-testid="channel-start-huddle-trigger"
-              disabled={startDisabled || isStarting}
+              disabled={startDisabled || isStarting || feeGated}
               onClick={() => onStart()}
               size="icon"
               type="button"
@@ -246,7 +264,14 @@ export function HuddleIndicator({
             </Button>
           </span>
         </TooltipTrigger>
-        <TooltipContent>Huddle</TooltipContent>
+        <TooltipContent>
+          Huddle
+          {feeCaption ? (
+            <div className="max-w-56 text-xs text-muted-foreground">
+              {feeCaption}
+            </div>
+          ) : null}
+        </TooltipContent>
       </Tooltip>
     );
   }
@@ -276,11 +301,16 @@ export function HuddleIndicator({
       <DropdownMenuItem
         className={className}
         data-testid="channel-start-huddle-trigger"
-        disabled={isJoining || isStarting}
+        disabled={isJoining || isStarting || feeGated}
         onSelect={() => void doJoin()}
       >
         <Headphones />
-        <span>Join huddle</span>
+        <span className="flex min-w-0 flex-col">
+          <span>Join huddle</span>
+          {feeCaption ? (
+            <span className="text-xs text-muted-foreground">{feeCaption}</span>
+          ) : null}
+        </span>
         <span className="ml-auto text-xs text-muted-foreground">
           {participantCount}
         </span>
@@ -294,7 +324,7 @@ export function HuddleIndicator({
         <Button
           aria-label={`Join active huddle (${participantCount} participant${participantCount !== 1 ? "s" : ""})`}
           className={cn("relative", className)}
-          disabled={isJoining || isStarting}
+          disabled={isJoining || isStarting || feeGated}
           onClick={() => void doJoin()}
           size="icon"
           type="button"
@@ -312,6 +342,11 @@ export function HuddleIndicator({
       </TooltipTrigger>
       <TooltipContent>
         {`Huddle active — ${participantCount} participant${participantCount !== 1 ? "s" : ""}`}
+        {feeCaption ? (
+          <div className="max-w-56 text-xs text-muted-foreground">
+            {feeCaption}
+          </div>
+        ) : null}
       </TooltipContent>
     </Tooltip>
   );
