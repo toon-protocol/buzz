@@ -1,8 +1,18 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { expectCornerRadiusPx, expectSmoothCorners } from "../helpers/css";
 import { openSettings } from "../helpers/settings";
+
+// The channel timeline renders off a `useDeferredValue` snapshot that lags
+// the latest `messages` by a commit; the list wrapper carries
+// `data-render-pending="true"` while that commit is in flight and drops the
+// attribute once it settles. Poll for its absence before asserting on
+// freshly-sent content (e.g. avatar mount, thread-summary counts) so the
+// assertion does not race the deferred commit.
+async function waitForTimelineSettled(page: Page) {
+  await expect(page.locator("[data-render-pending]")).toHaveCount(0);
+}
 
 async function expectThreadReplyUnobscured(row: Locator) {
   await expect
@@ -661,6 +671,7 @@ test("shows your avatar on your own message when profile avatar is set", async (
 
   await page.getByTestId("message-input").fill(message);
   await page.getByTestId("send-message").click();
+  await waitForTimelineSettled(page);
 
   const lastMessage = page.getByTestId("message-row").last();
   await expect(lastMessage).toContainText(message);
@@ -745,6 +756,9 @@ test("opens a single-level thread panel with inline expansion", async ({
     timeline.getByTestId("message-row").filter({ hasText: siblingReply }),
   ).toHaveCount(0);
 
+  // The 16-reply burst above lands on the main timeline's deferred snapshot;
+  // wait for it to settle so the summary count below isn't read mid-commit.
+  await waitForTimelineSettled(page);
   await expect(rootSummaryRow).toContainText("16 replies");
   await expect(
     rootSummaryRow.getByTestId("message-thread-summary-participant"),
@@ -923,6 +937,7 @@ test("opens a single-level thread panel with inline expansion", async ({
   );
   await expect(firstReplyBranchRail).toHaveCount(1);
 
+  await waitForTimelineSettled(page);
   await expect(rootSummaryRow).toContainText("18 replies");
   await expect(
     rootSummaryRow.getByTestId("message-thread-summary-participant"),
