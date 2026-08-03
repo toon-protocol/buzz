@@ -109,7 +109,9 @@ export async function installSelectedTransport(): Promise<TransportSelection> {
     setMediaUploader(new StoreMediaUploader(transport.getPaidWriter()));
     activeToonTransport = transport;
     console.info(
-      `[transport] TOON active — paying ${selection.config.destination} via ${selection.config.proxyUrl}, reading ${selection.config.relayUrl}, storing media at ${selection.config.storeDestination}`,
+      `[transport] TOON active — paying ${selection.config.destination} via ${
+        selection.config.btpUrl ?? selection.config.proxyUrl
+      }, reading ${selection.config.relayUrl}, storing media at ${selection.config.storeDestination}`,
     );
   } catch (error) {
     console.error(

@@ -18,6 +18,38 @@ export type ToonTransportConfig = {
   mode: TransportMode;
   /** ILP-over-HTTP endpoint of the connector edge that terminates writes. */
   proxyUrl: string;
+  /**
+   * Base URL of the connector edge (no `/ilp` suffix) — the admin/runtime
+   * surface `@toon-protocol/client` bootstraps against when it runs a
+   * persistent BTP session instead of one-shot HTTP writes.
+   *
+   * Kept alongside `proxyUrl` rather than derived from it: the two name the
+   * same box today, but the client treats them as different modes (setting
+   * `proxyUrl` *forces* the stateless HTTP transport, which caps paid writes
+   * at ~16 fps — not audio-viable), so which one is passed decides the wire.
+   */
+  connectorUrl: string;
+  /**
+   * BTP WebSocket URL of the same edge, or `null` to stay on one-shot
+   * ILP-over-HTTP.
+   *
+   * BTP is the default: the ordered session is strictly faster (the huddle
+   * frame rate depends on it — ADR 0003) and carries exactly the same
+   * payment-channel claim contract. `BUZZ_TOON_BTP_URL=off` opts out, for
+   * an edge that does not speak BTP.
+   */
+  btpUrl: string | null;
+  /**
+   * Collateral locked on-chain when a fresh payment channel is opened, in
+   * settlement-token base units, or `null` for the client's default.
+   *
+   * The default (0.1 USDC) prices a chat session, not an audio one: at the
+   * devnet's 1000-unit frame fee it is exhausted after ~100 huddle frames —
+   * about two seconds of speech — and every write after that is refused with
+   * F03 until more is deposited. Operators running huddles want this several
+   * orders larger (the deposit is a ceiling on spend, not a spend).
+   */
+  initialDeposit: string | null;
   /** Nostr relay the free read subscriptions attach to. */
   relayUrl: string;
   /** ILP address of the publish route on that edge. */
@@ -90,6 +122,18 @@ export type ToonTransportConfig = {
  */
 export const TOON_DEVNET_DEFAULTS = {
   proxyUrl: "https://proxy.devnet.toonprotocol.dev/rust/ilp",
+  connectorUrl: "https://proxy.devnet.toonprotocol.dev/rust",
+  /**
+   * The same edge's BTP WebSocket — the config shape proven live by the
+   * huddle prototype (toon-meta `proto/huddle-multi-speaker`, Phase H/I).
+   */
+  btpUrl: "wss://proxy.devnet.toonprotocol.dev/rust/ilp/btp",
+  /**
+   * 10 USDC (6 decimals). The deposit is a spend *ceiling* — unspent
+   * collateral comes back at settlement — and the client's own 0.1 USDC
+   * default buys only ~2 seconds of huddle audio at the devnet frame fee.
+   */
+  initialDeposit: "10000000",
   /**
    * Note `relay-ws`, not `relay`: `relay.devnet.toonprotocol.dev` resolves to
    * parked DNS and fails the TLS handshake.
@@ -113,6 +157,9 @@ export const TOON_DEVNET_DEFAULTS = {
 export const TOON_TRANSPORT_ENV_KEYS = [
   "BUZZ_TRANSPORT",
   "BUZZ_TOON_PROXY_URL",
+  "BUZZ_TOON_CONNECTOR_URL",
+  "BUZZ_TOON_BTP_URL",
+  "BUZZ_TOON_INITIAL_DEPOSIT",
   "BUZZ_TOON_RELAY_URL",
   "BUZZ_TOON_DESTINATION",
   "BUZZ_TOON_STORE_DESTINATION",
@@ -169,6 +216,32 @@ export function parseGatewayList(value: string | null | undefined): string[] {
     .filter((entry) => entry.length > 0);
 }
 
+/**
+ * Resolve `BUZZ_TOON_BTP_URL`: unset/blank means the devnet default (BTP is
+ * the default transport), the literal `off` (any case) opts out to one-shot
+ * ILP-over-HTTP for an edge that does not speak BTP.
+ */
+export function parseBtpUrl(value: string | null | undefined): string | null {
+  const trimmed = text(value);
+  if (trimmed === null) return TOON_DEVNET_DEFAULTS.btpUrl;
+  if (trimmed.toLowerCase() === "off") return null;
+  return trimmed;
+}
+
+/**
+ * Resolve `BUZZ_TOON_INITIAL_DEPOSIT` (base units): unset/blank/non-numeric
+ * means the devnet default, an explicit non-negative integer wins. There is
+ * no "client default" spelling — the client's 0.1 USDC default cannot carry
+ * huddle audio, so falling back to it silently would be a trap.
+ */
+export function parseInitialDeposit(
+  value: string | null | undefined,
+): string | null {
+  const trimmed = text(value);
+  if (trimmed === null) return TOON_DEVNET_DEFAULTS.initialDeposit;
+  return /^\d+$/.test(trimmed) ? trimmed : TOON_DEVNET_DEFAULTS.initialDeposit;
+}
+
 function accountIndexOf(value: string | null | undefined): number {
   const parsed = Number.parseInt(text(value) ?? "", 10);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
@@ -181,6 +254,10 @@ export function resolveToonTransportConfig(
   return {
     mode: parseTransportMode(env.BUZZ_TRANSPORT).mode,
     proxyUrl: text(env.BUZZ_TOON_PROXY_URL) ?? TOON_DEVNET_DEFAULTS.proxyUrl,
+    connectorUrl:
+      text(env.BUZZ_TOON_CONNECTOR_URL) ?? TOON_DEVNET_DEFAULTS.connectorUrl,
+    btpUrl: parseBtpUrl(env.BUZZ_TOON_BTP_URL),
+    initialDeposit: parseInitialDeposit(env.BUZZ_TOON_INITIAL_DEPOSIT),
     relayUrl: text(env.BUZZ_TOON_RELAY_URL) ?? TOON_DEVNET_DEFAULTS.relayUrl,
     destination:
       text(env.BUZZ_TOON_DESTINATION) ?? TOON_DEVNET_DEFAULTS.destination,

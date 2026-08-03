@@ -90,6 +90,43 @@ test("a non-numeric account index degrades to 0", () => {
   );
 });
 
+test("BTP is the default paid-write wire", () => {
+  const config = resolveToonTransportConfig({});
+
+  assert.equal(config.connectorUrl, TOON_DEVNET_DEFAULTS.connectorUrl);
+  assert.equal(config.btpUrl, TOON_DEVNET_DEFAULTS.btpUrl);
+});
+
+test("the BTP endpoints are overridable", () => {
+  const config = resolveToonTransportConfig({
+    BUZZ_TOON_CONNECTOR_URL: "https://edge.example",
+    BUZZ_TOON_BTP_URL: "wss://edge.example/ilp/btp",
+  });
+
+  assert.equal(config.connectorUrl, "https://edge.example");
+  assert.equal(config.btpUrl, "wss://edge.example/ilp/btp");
+});
+
+test("BUZZ_TOON_BTP_URL=off opts out of BTP entirely", () => {
+  // `off` (any case) means "this edge does not speak BTP" — paid writes fall
+  // back to one-shot ILP-over-HTTP, they do not dial a default BTP socket.
+  assert.equal(
+    resolveToonTransportConfig({ BUZZ_TOON_BTP_URL: "off" }).btpUrl,
+    null,
+  );
+  assert.equal(
+    resolveToonTransportConfig({ BUZZ_TOON_BTP_URL: "OFF" }).btpUrl,
+    null,
+  );
+});
+
+test("a blank BTP url means the default, not opting out", () => {
+  assert.equal(
+    resolveToonTransportConfig({ BUZZ_TOON_BTP_URL: "  " }).btpUrl,
+    TOON_DEVNET_DEFAULTS.btpUrl,
+  );
+});
+
 test("a missing payment key blocks writes but not reads", () => {
   const config = resolveToonTransportConfig({});
 
@@ -163,4 +200,29 @@ test("the Arweave gateway list is comma-separated, trimmed, and empty when unset
     }).arweaveGateways,
     ["https://a.example", "https://b.example"],
   );
+});
+
+test("the initial channel deposit defaults to an audio-viable ceiling", () => {
+  // The client library's own 0.1 USDC default buys ~2 seconds of huddle
+  // frames at the devnet fee; buzz defaults higher and lets operators tune.
+  assert.equal(
+    resolveToonTransportConfig({}).initialDeposit,
+    TOON_DEVNET_DEFAULTS.initialDeposit,
+  );
+  assert.equal(
+    resolveToonTransportConfig({ BUZZ_TOON_INITIAL_DEPOSIT: "250000" })
+      .initialDeposit,
+    "250000",
+  );
+});
+
+test("a malformed deposit degrades to the default rather than to the client's", () => {
+  for (const bad of ["ten", "-5", "1.5", "  "]) {
+    assert.equal(
+      resolveToonTransportConfig({ BUZZ_TOON_INITIAL_DEPOSIT: bad })
+        .initialDeposit,
+      TOON_DEVNET_DEFAULTS.initialDeposit,
+      `value ${JSON.stringify(bad)} must fall back to the default`,
+    );
+  }
 });
