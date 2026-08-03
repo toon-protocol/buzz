@@ -14,6 +14,7 @@ import {
 } from "@/shared/api/toonRelayReader";
 import type { ToonTransportConfig } from "@/shared/api/toonTransportConfig";
 import type { RelayEvent } from "@/shared/api/types";
+import { KIND_HUDDLE_AUDIO_FRAME } from "@/shared/constants/kinds";
 
 /**
  * The transport seam's TOON implementation: paid writes out through a
@@ -81,10 +82,15 @@ export class ToonEventTransport implements EventTransport {
       const receipt = await this.writer.publish(event);
       // The fee is not incidental detail: on a paid network the user is owed
       // the number. Callers listen via `onPaidWrite`; this keeps it in the log
-      // for the cases where nothing is listening yet.
-      console.info(
-        `[toon] paid write ${receipt.eventId} → ${receipt.destination} for ${formatFee(receipt)}`,
-      );
+      // for the cases where nothing is listening yet. Huddle audio frames are
+      // the one exception — 50 paid writes/sec of console I/O would be its
+      // own renderer load, and the huddle surface already carries the cost
+      // (per-minute estimate before joining, buzz#23 stage 3).
+      if (event.kind !== KIND_HUDDLE_AUDIO_FRAME) {
+        console.info(
+          `[toon] paid write ${receipt.eventId} → ${receipt.destination} for ${formatFee(receipt)}`,
+        );
+      }
       return event;
     } catch (error) {
       throw new Error(
