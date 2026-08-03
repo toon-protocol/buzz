@@ -43,37 +43,46 @@ export function PaymentsSettingsCard() {
       />
 
       {state.kind === "relay" ? (
-        <p
-          className="rounded-lg bg-muted/30 px-3 py-2 text-sm font-normal text-muted-foreground"
-          data-testid="payments-relay-notice"
-        >
+        <PaymentsNotice testId="payments-relay-notice">
           This community isn't using paid transport — nothing here costs money.
-        </p>
+        </PaymentsNotice>
       ) : null}
 
       {state.kind === "no-wallet" ? (
-        <p
-          className="rounded-lg bg-muted/30 px-3 py-2 text-sm font-normal text-muted-foreground"
-          data-testid="payments-no-wallet"
-        >
+        <PaymentsNotice testId="payments-no-wallet">
           Payment setup hasn't completed yet — finish the payment wizard to open
           a wallet.
-        </p>
+        </PaymentsNotice>
       ) : null}
 
       {state.kind === "loading" ? (
-        <p
-          className="rounded-lg bg-muted/30 px-3 py-2 text-sm font-normal text-muted-foreground"
-          data-testid="payments-loading"
-        >
+        <PaymentsNotice testId="payments-loading">
           Checking your wallet…
-        </p>
+        </PaymentsNotice>
       ) : null}
 
       {state.kind === "ready" ? (
         <ReadyPaymentsCard overview={overview} state={state} />
       ) : null}
     </section>
+  );
+}
+
+/** The shared style for the card's single-line status notices. */
+function PaymentsNotice({
+  testId,
+  children,
+}: {
+  testId: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <p
+      className="rounded-lg bg-muted/30 px-3 py-2 text-sm font-normal text-muted-foreground"
+      data-testid={testId}
+    >
+      {children}
+    </p>
   );
 }
 
@@ -186,8 +195,8 @@ function ReadyPaymentsCard({
               onClick={() => {
                 const amount = parseUsdcAmount(depositInput);
                 if (amount === null) return;
-                void overview.deposit(amount).then(() => {
-                  setDepositInput("");
+                void overview.deposit(amount).then((succeeded) => {
+                  if (succeeded) setDepositInput("");
                 });
               }}
               size="sm"

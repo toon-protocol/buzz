@@ -14,6 +14,7 @@ import {
 import {
   deriveChannelState,
   derivePaymentsCardState,
+  type PaymentChannelState,
   type PaymentsCardState,
 } from "@/features/payments/lib/paymentsOverview";
 
@@ -34,6 +35,12 @@ const EMPTY_BALANCES: ToonOnboardingBalanceState = {
   unreadable: false,
 };
 
+function getPaidWriterOrThrow() {
+  const writer = getActiveToonTransport()?.getPaidWriter();
+  if (!writer) throw new Error("No TOON transport is active.");
+  return writer;
+}
+
 export function usePaymentsOverview() {
   const selection = getActiveTransportSelection();
   const isToon = selection?.mode === "toon";
@@ -47,9 +54,9 @@ export function usePaymentsOverview() {
   const [address, setAddress] = React.useState<string | null>(null);
   const [balances, setBalances] =
     React.useState<ToonOnboardingBalanceState>(EMPTY_BALANCES);
-  const [channel, setChannel] = React.useState<ReturnType<
-    typeof deriveChannelState
-  > | null>(null);
+  const [channel, setChannel] = React.useState<PaymentChannelState | null>(
+    null,
+  );
   const [refreshing, setRefreshing] = React.useState(false);
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [actionPending, setActionPending] = React.useState(false);
@@ -91,7 +98,10 @@ export function usePaymentsOverview() {
     } catch (error) {
       console.error("[payments] overview refresh failed", error);
       setBalances((prev) => ({ ...prev, checked: true, unreadable: true }));
-      setChannel(deriveChannelState(null));
+      // Keep whatever channel state was last known good — a transient read
+      // failure must not make an already-open channel look like it never
+      // existed.
+      setChannel((prev) => prev ?? deriveChannelState(null));
     } finally {
       setRefreshing(false);
     }
@@ -102,14 +112,16 @@ export function usePaymentsOverview() {
   }, [address, refresh]);
 
   const runAction = React.useCallback(
-    async (action: () => Promise<unknown>) => {
+    async (action: () => Promise<unknown>): Promise<boolean> => {
       setActionError(null);
       setActionPending(true);
       try {
         await action();
         await refresh();
+        return true;
       } catch (error) {
         setActionError(error instanceof Error ? error.message : String(error));
+        return false;
       } finally {
         setActionPending(false);
       }
@@ -119,31 +131,17 @@ export function usePaymentsOverview() {
 
   const deposit = React.useCallback(
     (amountBaseUnits: bigint) =>
-      runAction(async () => {
-        const writer = getActiveToonTransport()?.getPaidWriter();
-        if (!writer) throw new Error("No TOON transport is active.");
-        await writer.depositToChannel(amountBaseUnits);
-      }),
+      runAction(() => getPaidWriterOrThrow().depositToChannel(amountBaseUnits)),
     [runAction],
   );
 
   const closeChannel = React.useCallback(
-    () =>
-      runAction(async () => {
-        const writer = getActiveToonTransport()?.getPaidWriter();
-        if (!writer) throw new Error("No TOON transport is active.");
-        await writer.closeChannel();
-      }),
+    () => runAction(() => getPaidWriterOrThrow().closeChannel()),
     [runAction],
   );
 
   const settleChannel = React.useCallback(
-    () =>
-      runAction(async () => {
-        const writer = getActiveToonTransport()?.getPaidWriter();
-        if (!writer) throw new Error("No TOON transport is active.");
-        await writer.settleChannel();
-      }),
+    () => runAction(() => getPaidWriterOrThrow().settleChannel()),
     [runAction],
   );
 
