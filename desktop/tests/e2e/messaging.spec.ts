@@ -1,18 +1,9 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 import { expectCornerRadiusPx, expectSmoothCorners } from "../helpers/css";
 import { openSettings } from "../helpers/settings";
-
-// The channel timeline renders off a `useDeferredValue` snapshot that lags
-// the latest `messages` by a commit; the list wrapper carries
-// `data-render-pending="true"` while that commit is in flight and drops the
-// attribute once it settles. Poll for its absence before asserting on
-// freshly-sent content (e.g. avatar mount, thread-summary counts) so the
-// assertion does not race the deferred commit.
-async function waitForTimelineSettled(page: Page) {
-  await expect(page.locator("[data-render-pending]")).toHaveCount(0);
-}
+import { waitForTimelineSettled } from "../helpers/timeline";
 
 async function expectThreadReplyUnobscured(row: Locator) {
   await expect
