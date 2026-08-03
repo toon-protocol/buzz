@@ -81,6 +81,14 @@ env:
 jobs:
   build:
     name: Build (${{ matrix.platform }})
+    # Skip on forks that have not claimed a registry namespace of their own.
+    # Both the image push and the buildcache write target IMAGE_NAME, which
+    # defaults to block/buzz — a fork's GITHUB_TOKEN cannot write there, so
+    # every one of these jobs fails at "Build and push by digest" no matter
+    # what the change is. That is pure noise on a fork's PRs, and it masks
+    # real docker breakage. Set the GHCR_IMAGE repo variable (see env above)
+    # to push to your own namespace and these jobs come back.
+    if: github.repository == 'block/buzz' || vars.GHCR_IMAGE != ''
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
@@ -342,6 +350,11 @@ jobs:
 
   push-gateway-build:
     name: Build public push gateway (${{ matrix.platform }})
+    # Same fork problem as `build` above, minus the escape hatch: this job's
+    # image name is hardcoded to ghcr.io/block/buzz-push-gateway rather than
+    # read from a variable, so GHCR_IMAGE cannot redirect it. Upstream only
+    # until the name is parameterised the way IMAGE_NAME is.
+    if: github.repository == 'block/buzz'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
