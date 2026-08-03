@@ -1375,15 +1375,22 @@ test("profile-only agent author hides actions without agent access", async ({
 test("system member-joined rows render the joined person as a plain profile name", async ({
   page,
 }) => {
+  // Deliberately not "general": that channel's mock fixture permanently
+  // seeds an Alice self-join system message ~30s before page load (see
+  // e2eBridge.ts's SYSTEM_REACTION_TARGET_EVENT_ID seed), well inside the
+  // 5-minute membership-grouping window. Emitting Bob's join there merges
+  // it into Alice's group and demotes Bob into the "along with" list,
+  // making this test assert on the wrong row. "random" starts with no
+  // system messages, matching the sibling avatar test below.
   await page.goto("/");
-  await page.getByTestId("channel-general").click();
-  await expect(page.getByTestId("chat-title")).toHaveText("general");
-  await waitForMockLiveSubscription(page, "general", SYSTEM_MESSAGE_KIND);
+  await page.getByTestId("channel-random").click();
+  await expect(page.getByTestId("chat-title")).toHaveText("random");
+  await waitForMockLiveSubscription(page, "random", SYSTEM_MESSAGE_KIND);
 
   await page.evaluate(
     ({ kind, pubkey }) => {
       window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
-        channelName: "general",
+        channelName: "random",
         content: JSON.stringify({
           type: "member_joined",
           actor: pubkey,
@@ -1400,6 +1407,7 @@ test("system member-joined rows render the joined person as a plain profile name
     .getByTestId("system-message-row")
     .filter({ hasText: "bob" })
     .filter({ hasText: "joined the channel" });
+  await expect(joinedRow).not.toHaveText(/along with/);
   const joinedPersonName = joinedRow.getByText("bob", { exact: true });
 
   await expect(joinedPersonName).toBeVisible();
