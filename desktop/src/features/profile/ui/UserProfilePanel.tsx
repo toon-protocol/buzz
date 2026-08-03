@@ -813,6 +813,7 @@ export function UserProfilePanel({
           managedAgent={managedAgent}
           memoriesLoading={memoryQuery.isLoading}
           memoryCount={memoryCount}
+          moneyOwnerPubkey={ownerProfilePubkey}
           agentInfoFields={agentInfoFields}
           agentSettingsFields={agentSettingsFields}
           diagnosticsFields={diagnosticsFields}

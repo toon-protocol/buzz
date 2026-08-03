@@ -39,6 +39,7 @@ import {
   ProfileRuntimeTabContent,
   ProfileTabBar,
 } from "@/features/profile/ui/UserProfilePanelTabs";
+import { ProfileMoneyTabContent } from "@/features/profile/ui/UserProfilePanelMoneyTab";
 import {
   MaskedAvatarBadgeFrame,
   STATUS_DOT_MASK_CURVE,
@@ -94,6 +95,7 @@ export type ProfileSummaryViewProps = {
   managedAgent: ManagedAgent | undefined;
   memoriesLoading: boolean;
   memoryCount: number | undefined;
+  moneyOwnerPubkey: string | null;
   agentInfoFields: ProfileField[];
   agentSettingsFields: ProfileField[];
   diagnosticsFields: ProfileField[];
@@ -207,6 +209,7 @@ export function ProfileSummaryView({
   managedAgent,
   memoriesLoading,
   memoryCount,
+  moneyOwnerPubkey,
   agentInfoFields,
   agentSettingsFields,
   diagnosticsFields,
@@ -229,6 +232,7 @@ export function ProfileSummaryView({
   const activeTurns = useAgentWorking(isBot ? pubkey : null).channels;
 
   const showMemoriesTab = isOwner === true && Boolean(pubkey);
+  const showMoneyTab = isOwner === true && Boolean(pubkey);
   const showInstructionBlock =
     isOwner === true &&
     (agentInstruction !== null || handleEditPersona !== undefined);
@@ -316,6 +320,9 @@ export function ProfileSummaryView({
             : undefined,
       });
     }
+    if (showMoneyTab) {
+      items.push({ id: "money", label: "Money" });
+    }
     return items;
   }, [
     channelCount,
@@ -326,6 +333,7 @@ export function ProfileSummaryView({
     showChannelsTab,
     showInfoTab,
     showMemoriesTab,
+    showMoneyTab,
     showRuntimeTab,
   ]);
 
@@ -455,6 +463,12 @@ export function ProfileSummaryView({
               agentPubkey={pubkey}
               variant="embedded"
               viewerIsOwner={isOwner}
+            />
+          ) : null}
+          {activeTab === "money" && pubkey ? (
+            <ProfileMoneyTabContent
+              agentPubkey={pubkey}
+              ownerPubkey={moneyOwnerPubkey}
             />
           ) : null}
         </section>
