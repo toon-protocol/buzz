@@ -100,6 +100,15 @@ function scriptedClient(overrides = {}) {
       this.published.push({ event, options });
       return Promise.resolve({ success: true, eventId: event.id });
     },
+    sendSwapPacket(swapParams) {
+      this.swapPackets = this.swapPackets ?? [];
+      this.swapPackets.push(swapParams);
+      return Promise.resolve({
+        accepted: true,
+        // base64("f".repeat(32) as bytes)... a fixed 32-byte fulfillment, base64-encoded.
+        fulfillment: Buffer.from("f".repeat(32), "utf8").toString("base64"),
+      });
+    },
     ...overrides,
   };
   return client;
@@ -245,6 +254,98 @@ test("a refused write still leaves the watermark persisted (the claim was issued
 
   const persisted = loadPersistedChannel(CONFIG.destination, CONFIG.chain);
   assert.equal(persisted.nonce, 1);
+});
+
+test("payFactoryJobIncrement opens a channel to the PROVIDER, not the writer's relay destination", async () => {
+  const client = scriptedClient();
+  const writer = writerOver(client);
+  const conditionHex = "ab".repeat(32);
+
+  const receipt = await writer.payFactoryJobIncrement({
+    destination: "g.toon.provider-xyz",
+    amountBaseUnits: 5_000_000n,
+    conditionHex,
+    jobEventId: "offer-event-id",
+  });
+
+  assert.equal(client.openedChannels.length, 1);
+  assert.equal(client.openedChannels[0].destination, "g.toon.provider-xyz");
+  assert.equal(client.swapPackets.length, 1);
+  assert.equal(client.swapPackets[0].destination, "g.toon.provider-xyz");
+  assert.equal(client.swapPackets[0].amount, 5_000_000n);
+  assert.deepEqual(
+    [...client.swapPackets[0].executionCondition],
+    [...Buffer.from(conditionHex, "hex")],
+  );
+  assert.equal(
+    new TextDecoder().decode(client.swapPackets[0].toonData),
+    "offer-event-id",
+  );
+
+  const expectedFulfillmentHex = Buffer.from("f".repeat(32), "utf8").toString(
+    "hex",
+  );
+  assert.equal(receipt.fulfillmentHex, expectedFulfillmentHex);
+  assert.equal(receipt.destination, "g.toon.provider-xyz");
+  assert.equal(receipt.amount, 5_000_000n);
+
+  // The writer's OWN relay channel is untouched by a job payment.
+  assert.equal(loadPersistedChannel(CONFIG.destination, CONFIG.chain), null);
+});
+
+test("payFactoryJobIncrement rejects a malformed condition before touching the network", async () => {
+  const client = scriptedClient();
+  const writer = writerOver(client);
+
+  await assert.rejects(
+    writer.payFactoryJobIncrement({
+      destination: "g.toon.provider-xyz",
+      amountBaseUnits: 1n,
+      conditionHex: "not-hex",
+      jobEventId: "offer-event-id",
+    }),
+    /32 bytes hex/,
+  );
+  assert.equal(client.openedChannels.length, 0);
+});
+
+test("payFactoryJobIncrement throws when the connector refuses the payment", async () => {
+  const client = scriptedClient({
+    sendSwapPacket: () =>
+      Promise.resolve({
+        accepted: false,
+        code: "F04",
+        message: "insufficient funds",
+      }),
+  });
+  const writer = writerOver(client);
+
+  await assert.rejects(
+    writer.payFactoryJobIncrement({
+      destination: "g.toon.provider-xyz",
+      amountBaseUnits: 1n,
+      conditionHex: "ab".repeat(32),
+      jobEventId: "offer-event-id",
+    }),
+    /insufficient funds/,
+  );
+});
+
+test("payFactoryJobIncrement throws when accepted but no fulfillment came back — money must never move without the key", async () => {
+  const client = scriptedClient({
+    sendSwapPacket: () => Promise.resolve({ accepted: true }),
+  });
+  const writer = writerOver(client);
+
+  await assert.rejects(
+    writer.payFactoryJobIncrement({
+      destination: "g.toon.provider-xyz",
+      amountBaseUnits: 1n,
+      conditionHex: "ab".repeat(32),
+      jobEventId: "offer-event-id",
+    }),
+    /no fulfillment/,
+  );
 });
 
 test("the client is built for the BTP session by default (buzz#23 stage 2)", () => {

@@ -90,6 +90,17 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  const goJobs = React.useCallback(
+    (behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/jobs",
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
   const goProject = React.useCallback(
     (
       projectId: string,
@@ -299,6 +310,7 @@ export function useAppNavigation() {
     goChannel,
     goForumPost,
     goHome,
+    goJobs,
     goNewMessage,
     goProject,
     goProjects,

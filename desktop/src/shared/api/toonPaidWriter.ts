@@ -1,3 +1,5 @@
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
+
 import {
   clearPersistedChannel,
   hasPersistedChannel,
@@ -38,6 +40,28 @@ export type PaidWriteReceipt = {
 };
 
 export type PaidWriteListener = (receipt: PaidWriteReceipt) => void;
+
+/**
+ * What paying one factory-job increment (buzz#85) settles: the fulfillment
+ * IS the artifact's decryption key, per `docs/factory-job-protocol.md` §4.2
+ * (toon-meta) — revealing it to satisfy the hashlock and handing the buyer
+ * the key are the same act, in the same packet.
+ */
+export type FactoryJobIncrementPaymentReceipt = {
+  fulfillmentHex: string;
+  channelId: string;
+  amount: bigint;
+  destination: string;
+};
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
 
 /** TOON settles in USDC on every chain the devnet offers. */
 const SETTLEMENT_ASSET = "USDC";
@@ -146,6 +170,25 @@ type PaidClient = {
     txId?: string;
     eventId?: string;
     error?: string;
+  }>;
+  /**
+   * Send a raw ILP packet carrying a sender-chosen execution condition
+   * (toon-client#350) rather than the connector-minted one `publishEvent`
+   * uses. This is what `payFactoryJobIncrement` rides: the condition is the
+   * job's own hashlock (§4.2), not a route price.
+   */
+  sendSwapPacket(params: {
+    destination: string;
+    amount: bigint;
+    toonData: Uint8Array;
+    claim?: BalanceProof;
+    executionCondition?: Uint8Array;
+  }): Promise<{
+    accepted: boolean;
+    data?: string;
+    code?: string;
+    message?: string;
+    fulfillment?: string;
   }>;
   /** Cumulative claimed amount for a tracked channel — spend, not collateral. */
   getChannelCumulativeAmount(channelId: string): bigint;
@@ -444,6 +487,84 @@ export class ToonPaidWriter {
     this.lastReceipt = receipt;
     for (const listener of this.listeners) listener(receipt);
     return receipt;
+  }
+
+  /**
+   * Pay one factory-job increment (buzz#85) — the buyer's half of
+   * `docs/factory-job-protocol.md` §4.2's hashlock join. `destination` is the
+   * PROVIDER's connector, never `this.config.destination` (the relay this
+   * writer otherwise pays): decision 10 (toon-meta#262) makes multi-
+   * destination channels over the same connector relationship the normal
+   * case, not a special path, so this opens (or reuses — `openChannel` is
+   * idempotent per peer) its own channel to `destination` rather than
+   * touching the writer's single relay channel.
+   *
+   * `conditionHex` MUST be the kind:7000 `partial` offer's `condition` tag,
+   * unmodified — it becomes the PREPARE's sender-chosen `executionCondition`
+   * byte for byte. The connector verifies the returned fulfillment hashes
+   * back to it before accepting; a mismatch or a missing fulfillment throws
+   * rather than reporting success, since either would mean money moved with
+   * no key to show for it.
+   */
+  async payFactoryJobIncrement(params: {
+    destination: string;
+    amountBaseUnits: bigint;
+    /** The offer's `condition` tag: `sha256(key)`, 32 bytes hex. */
+    conditionHex: string;
+    /** The kind:7000 `partial` event id, carried in the PREPARE's `data` so a claim names the job it paid for. */
+    jobEventId: string;
+  }): Promise<FactoryJobIncrementPaymentReceipt> {
+    if (!/^[0-9a-f]{64}$/i.test(params.conditionHex)) {
+      throw new ToonPaidWriteError(
+        `A factory job payment condition must be 32 bytes hex, got "${params.conditionHex}".`,
+      );
+    }
+
+    const client = await this.ensureClient();
+    const channelId = await client.openChannel(params.destination);
+    const proof = await client.signBalanceProof(
+      channelId,
+      params.amountBaseUnits,
+    );
+
+    const result = await client.sendSwapPacket({
+      destination: params.destination,
+      amount: params.amountBaseUnits,
+      toonData: new TextEncoder().encode(params.jobEventId),
+      executionCondition: hexToBytes(params.conditionHex),
+      claim: proof,
+    });
+
+    if (!result.accepted) {
+      const code = result.code ? ` [${result.code}]` : "";
+      throw new ToonPaidWriteError(
+        `The provider's connector refused the payment${code}: ${result.message ?? "no reason given"}`,
+      );
+    }
+    if (!result.fulfillment) {
+      throw new ToonPaidWriteError(
+        "The payment was accepted but carried no fulfillment — the artifact key was not released.",
+      );
+    }
+
+    const fulfillmentHex = bytesToHex(base64ToBytes(result.fulfillment));
+
+    const receipt: PaidWriteReceipt = {
+      eventId: params.jobEventId,
+      amount: params.amountBaseUnits,
+      assetScale: SETTLEMENT_ASSET_SCALE,
+      asset: SETTLEMENT_ASSET,
+      destination: params.destination,
+    };
+    this.lastReceipt = receipt;
+    for (const listener of this.listeners) listener(receipt);
+
+    return {
+      fulfillmentHex,
+      channelId,
+      amount: params.amountBaseUnits,
+      destination: params.destination,
+    };
   }
 
   /**
