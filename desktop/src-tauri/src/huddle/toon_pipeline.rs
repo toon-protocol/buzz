@@ -231,6 +231,20 @@ pub(crate) async fn connect_toon_audio(
     Ok((cancel, pcm_tx))
 }
 
+/// Serialize a signed frame event and run the egress guard on its bytes.
+///
+/// Egress boundary 9 (huddle TOON frames): like the STT boundary
+/// (`pipeline::sign_and_guard_stt_body`), this path guards locally — and
+/// directly testably — in addition to `event_transport::dispatch`'s own
+/// universal guard, rather than trusting the seam alone. The realistic
+/// injection vector here is not the audio payload (base64 of encoder
+/// output) but the free-text channel id riding the `h` tag.
+pub(crate) fn guarded_frame_body(event: &nostr::Event) -> Result<Vec<u8>, String> {
+    let body = event.as_json().into_bytes();
+    crate::egress_guard::assert_no_key_backup_bytes(&body, "huddle TOON frame publish")?;
+    Ok(body)
+}
+
 struct SendLoopArgs {
     pcm_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     cancel: CancellationToken,
@@ -348,6 +362,14 @@ async fn toon_send_loop(args: SendLoopArgs) {
                 };
             seq = seq.wrapping_add(1);
 
+            let body = match guarded_frame_body(&event) {
+                Ok(body) => body,
+                Err(e) => {
+                    eprintln!("buzz-desktop: {e}");
+                    continue;
+                }
+            };
+
             // Drop-late: a frame that cannot start now is worthless by the
             // time the backlog clears, and bursting the backlog would turn a
             // stall into audible added latency (see the module doc).
@@ -370,7 +392,6 @@ async fn toon_send_loop(args: SendLoopArgs) {
             let cancel = cancel.clone();
             let api_url = api_url.clone();
             tokio::spawn(async move {
-                let body = event.as_json().into_bytes();
                 let state = app_handle.state::<AppState>();
                 let submission = crate::event_transport::SignedEventSubmission {
                     body: &body,
