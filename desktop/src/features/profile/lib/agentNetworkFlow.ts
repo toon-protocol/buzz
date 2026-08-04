@@ -8,15 +8,19 @@ import { formatUsdcBaseUnits } from "@/features/onboarding/toon/toonOnboardingFo
  * second "earnings" pot. #261 decision 4 modelled money as net flow for
  * exactly this reason — earning lands here without a UI rewrite.
  *
- * This module is deliberately decoupled from any live data source. The
- * connector claim-state read this feeds from (toon-client#494's
- * `getClaimState()`) is not yet vendored in this repo's pinned
- * `@toon-protocol/client` (0.25.1), and the Network spend block itself
- * (#80 — balance/allowance/refill, `onPaidWrite` live spend) has not
- * landed, so there is no per-agent channel read to attach a UI to yet.
- * These are the pure derivations #80 and the AgentIdentityCard earning
- * badge / low-funds alert can wire straight into once that read exists —
- * mirrors `paymentsOverview.ts`'s pure-derivation-first idiom.
+ * This module started deliberately decoupled from any live data source and
+ * stayed pure by design (mirrors `paymentsOverview.ts`'s
+ * pure-derivation-first idiom) — the connector claim-state read it feeds
+ * from (toon-client#494's `getClaimState()`) now IS live, wired through
+ * `ToonPaidWriter.getNetworkFlowStatus()` and `networkSpendState.ts`
+ * (buzz#80, buzz#108), for the identity this desktop process pays as. The
+ * `creditedBaseUnits` half of a `NetworkFlowRead` comes straight from that
+ * read; `incomeRateBaseUnitsPerSec`/`incomeSampleCount` remain unwired —
+ * no live event feed exists for inbound payments (only
+ * `networkSpendLiveStore.ts`'s outbound `onPaidWrite`) — so runway still
+ * degrades to burn-only until that lands. A per-agent read for any identity
+ * other than `isSelf` is still absent (buzz#79's ADR 0006 — no
+ * `toon-clientd` spawn/lifecycle for managed agents yet).
  *
  * Per the Gotchas, income here is never read from a self-reported
  * money-report event — only from `NetworkFlowRead`, the shape a connector

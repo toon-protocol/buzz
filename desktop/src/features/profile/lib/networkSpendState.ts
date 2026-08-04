@@ -64,11 +64,14 @@ export function deriveNetworkSpendState(input: {
   const read: NetworkFlowRead = {
     depositBaseUnits: input.raw.depositTotalBaseUnits,
     owedBaseUnits: input.raw.cumulativeClaimedBaseUnits,
-    // No income source is wired here (#80's scope is spend, not earning) —
-    // buzz#86's agentNetworkFlow.ts already defaults an absent income to a
-    // plain burn-rate-driven runway, so this stays honest rather than
-    // fabricating a credited figure.
-    creditedBaseUnits: 0n,
+    // Fed straight from the same claim-state read as deposit/owed (buzz#108)
+    // — always 0n for `source: "local"`, since the locally-tracked watermark
+    // only knows this client's own spend, never a connector-applied credit.
+    // Income RATE (burnRate's earning-side counterpart) is a separate,
+    // still-unwired gap: no live event feed exists for inbound payments,
+    // only `networkSpendLiveStore.ts`'s outbound `onPaidWrite` — so runway
+    // still degrades to burn-only until that lands.
+    creditedBaseUnits: input.raw.creditedBaseUnits,
     burnRateBaseUnitsPerSec: input.live.burnRateBaseUnitsPerSec,
     incomeRateBaseUnitsPerSec: 0,
     incomeSampleCount: 0,

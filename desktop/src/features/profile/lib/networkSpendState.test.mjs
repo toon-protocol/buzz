@@ -19,6 +19,7 @@ const RAW = {
   channelId: "channel-1",
   depositTotalBaseUnits: 10_000_000n,
   cumulativeClaimedBaseUnits: 4_000_000n,
+  creditedBaseUnits: 0n,
   source: "claim-state",
 };
 
@@ -80,6 +81,18 @@ test("a real read quotes the block and carries its source through", () => {
   assert.equal(state.read.creditedBaseUnits, 0n);
   assert.equal(state.read.burnRateBaseUnitsPerSec, 2);
   assert.equal(canRefillNetworkSpend(state), true);
+});
+
+test("a credited amount on the claim-state read feeds straight into the quoted state (buzz#108)", () => {
+  const state = deriveNetworkSpendState({
+    isToon: true,
+    isSelf: true,
+    raw: { ...RAW, creditedBaseUnits: 2_000_000n },
+    live: NO_LIVE,
+  });
+  assert.equal(state.kind, "quoted");
+  if (state.kind !== "quoted") return;
+  assert.equal(state.read.creditedBaseUnits, 2_000_000n);
 });
 
 test("a claim-state failure degrades to the local source, still quoted, never blank", () => {
