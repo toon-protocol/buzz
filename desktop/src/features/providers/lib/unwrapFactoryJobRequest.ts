@@ -33,13 +33,16 @@ import {
  * separate against that.
  */
 
-type SealedLayer = {
+type Rumor = {
   kind: number;
   pubkey: string;
   content: string;
   created_at: number;
   tags: unknown;
 };
+
+/** A rumor plus the signature fields `verifyEvent` needs to check the seal. */
+type SealedLayer = Rumor & { id: string; sig: string; tags: string[][] };
 
 function openLayer(
   payload: string,
@@ -51,7 +54,7 @@ function openLayer(
   );
 }
 
-function asLayer(value: unknown): SealedLayer | null {
+function asRumor(value: unknown): Rumor | null {
   if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
   if (
@@ -63,7 +66,19 @@ function asLayer(value: unknown): SealedLayer | null {
   ) {
     return null;
   }
-  return record as unknown as SealedLayer;
+  return record as unknown as Rumor;
+}
+
+// The seal must additionally carry `id`/`sig` for `verifyEvent` to check it —
+// a rumor never has these (it's deliberately unsigned), only the seal does.
+function asSealedLayer(value: unknown): SealedLayer | null {
+  const rumor = asRumor(value);
+  if (!rumor) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.id !== "string" || typeof record.sig !== "string") {
+    return null;
+  }
+  return { ...rumor, id: record.id, sig: record.sig } as SealedLayer;
 }
 
 /** A brief that arrived gift-wrapped, plus who actually sent it. */
@@ -88,15 +103,13 @@ export function unwrapFactoryJobRequestGift(
   if (wrap.kind !== KIND_GIFT_WRAP) return null;
 
   try {
-    const seal = asLayer(
+    const seal = asSealedLayer(
       openLayer(wrap.content, recipientSecretKey, wrap.pubkey),
     );
     if (!seal || seal.kind !== KIND_SEAL) return null;
-    if (!verifyEvent(seal as unknown as Parameters<typeof verifyEvent>[0])) {
-      return null;
-    }
+    if (!verifyEvent(seal)) return null;
 
-    const rumor = asLayer(
+    const rumor = asRumor(
       openLayer(seal.content, recipientSecretKey, seal.pubkey),
     );
     if (!rumor || rumor.kind !== KIND_FACTORY_JOB_REQUEST) return null;
