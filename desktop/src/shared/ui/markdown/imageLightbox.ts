@@ -327,6 +327,12 @@ function imageGalleryItemFromTrigger(
 }
 
 function isVisibleImageLightboxTrigger(trigger: HTMLElement): boolean {
+  // `isInsideHiddenSpoiler` is the authoritative, non-animated signal for
+  // spoiler visibility (it reads `data-revealed` directly). Revealing a
+  // spoiler flips that attribute synchronously, then kicks off a CSS
+  // opacity transition on the same image — so a computed-`opacity` check
+  // below would still see 0 for a frame or two after the reveal and wrongly
+  // re-exclude an image this gate has already cleared (buzz#57).
   if (isInsideHiddenSpoiler(trigger)) {
     return false;
   }
@@ -338,11 +344,7 @@ function isVisibleImageLightboxTrigger(trigger: HTMLElement): boolean {
     }
 
     const style = window.getComputedStyle(element);
-    if (
-      style.display === "none" ||
-      style.visibility === "hidden" ||
-      Number(style.opacity) === 0
-    ) {
+    if (style.display === "none" || style.visibility === "hidden") {
       return false;
     }
   }
