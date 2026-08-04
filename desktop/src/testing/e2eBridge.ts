@@ -3585,6 +3585,24 @@ function buildReplyMessageTags(
   return tags;
 }
 
+/**
+ * Base unix-second timestamp for the general channel's seed message
+ * cluster, anchored to "120s before now" but clamped to local midnight.
+ * Without the clamp, a run starting within the first two minutes after
+ * local midnight puts the earliest seed on the previous calendar day while
+ * the rest land on the new one — formatDayHeading() (dateFormatters.ts)
+ * compares each timestamp against the real `new Date()`, so the cluster
+ * splits across a "Yesterday"/"Today" divider pair. channels.spec.ts's
+ * "channel with messages shows content" asserts exactly one day divider.
+ */
+export function generalChannelSeedBaseSec(nowMs = Date.now()): number {
+  const nowSec = Math.floor(nowMs / 1000);
+  const startOfTodaySec = Math.floor(
+    new Date(new Date(nowMs).setHours(0, 0, 0, 0)).getTime() / 1000,
+  );
+  return Math.max(nowSec - 120, startOfTodaySec);
+}
+
 function getMockMessageStore(channelId: string): RelayEvent[] {
   const existing = mockMessages.get(channelId);
   if (existing) {
@@ -3593,66 +3611,69 @@ function getMockMessageStore(channelId: string): RelayEvent[] {
 
   const seeded: RelayEvent[] =
     channelId === "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50"
-      ? [
-          {
-            id: "mock-general-welcome",
-            pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
-            created_at: Math.floor(Date.now() / 1000) - 120,
-            kind: 9,
-            tags: [["h", channelId]],
-            content: "Welcome to #general",
-            sig: "mocksig".repeat(20).slice(0, 128),
-          },
-          // Alice authored — gives e2e specs a non-self profile pane to open
-          // by clicking the second message-row's author button. Used by
-          // tests/e2e/identity-archive.spec.ts to exercise the admin / OA /
-          // none-of-the-above branches of the NIP-IA gate. Both seeds are
-          // backdated (welcome at -120s, Alice at -60s) so user-sent messages
-          // in other specs always land after both — preserving
-          // `message-row.first()` = welcome and `.last()` = sent.
-          {
-            id: "mock-general-alice",
-            pubkey: ALICE_PUBKEY,
-            created_at: Math.floor(Date.now() / 1000) - 60,
-            kind: 9,
-            tags: [["h", channelId]],
-            content: "Hey team — checking in.",
-            sig: "mocksig".repeat(20).slice(0, 128),
-          },
-          // Reaction-target seed for the custom-emoji reaction guard. Real
-          // 64-hex id so getReactionTargetId() accepts it as a reaction target
-          // (the short-id seeds above can't be reacted to). Backdated after the
-          // other seeds, so it stays at row index >= 2 and never displaces
-          // first()=welcome / nth(1)=alice that other specs rely on.
-          {
-            id: REACTION_TARGET_EVENT_ID,
-            pubkey: ALICE_PUBKEY,
-            created_at: Math.floor(Date.now() / 1000) - 45,
-            kind: 9,
-            tags: [["h", channelId]],
-            content: REACTION_TARGET_CONTENT,
-            sig: "mocksig".repeat(20).slice(0, 128),
-          },
-          // System-message reaction target. A kind:40099 join event renders via
-          // SystemMessageRow (testid `system-message-row`, NOT `message-row`),
-          // so it never displaces the `message-row` index assertions other
-          // specs rely on. Real 64-hex id so getReactionTargetId() accepts it
-          // as a reaction target — this is the surface the original "react to a
-          // system message" bug lived on. Backdated like the other seeds.
-          {
-            id: SYSTEM_REACTION_TARGET_EVENT_ID,
-            pubkey: ALICE_PUBKEY,
-            created_at: Math.floor(Date.now() / 1000) - 30,
-            kind: KIND_SYSTEM_MESSAGE,
-            tags: [["h", channelId]],
-            content: JSON.stringify({
-              type: "member_joined",
-              actor: ALICE_PUBKEY,
-              target: ALICE_PUBKEY,
-            }),
-            sig: "mocksig".repeat(20).slice(0, 128),
-          },
-        ]
+      ? (() => {
+          const baseSec = generalChannelSeedBaseSec();
+          return [
+            {
+              id: "mock-general-welcome",
+              pubkey: DEFAULT_MOCK_IDENTITY.pubkey,
+              created_at: baseSec,
+              kind: 9,
+              tags: [["h", channelId]],
+              content: "Welcome to #general",
+              sig: "mocksig".repeat(20).slice(0, 128),
+            },
+            // Alice authored — gives e2e specs a non-self profile pane to open
+            // by clicking the second message-row's author button. Used by
+            // tests/e2e/identity-archive.spec.ts to exercise the admin / OA /
+            // none-of-the-above branches of the NIP-IA gate. Both seeds are
+            // backdated (welcome at +0s, Alice at +60s from the shared base)
+            // so user-sent messages in other specs always land after both —
+            // preserving `message-row.first()` = welcome and `.last()` = sent.
+            {
+              id: "mock-general-alice",
+              pubkey: ALICE_PUBKEY,
+              created_at: baseSec + 60,
+              kind: 9,
+              tags: [["h", channelId]],
+              content: "Hey team — checking in.",
+              sig: "mocksig".repeat(20).slice(0, 128),
+            },
+            // Reaction-target seed for the custom-emoji reaction guard. Real
+            // 64-hex id so getReactionTargetId() accepts it as a reaction target
+            // (the short-id seeds above can't be reacted to). Backdated after the
+            // other seeds, so it stays at row index >= 2 and never displaces
+            // first()=welcome / nth(1)=alice that other specs rely on.
+            {
+              id: REACTION_TARGET_EVENT_ID,
+              pubkey: ALICE_PUBKEY,
+              created_at: baseSec + 75,
+              kind: 9,
+              tags: [["h", channelId]],
+              content: REACTION_TARGET_CONTENT,
+              sig: "mocksig".repeat(20).slice(0, 128),
+            },
+            // System-message reaction target. A kind:40099 join event renders via
+            // SystemMessageRow (testid `system-message-row`, NOT `message-row`),
+            // so it never displaces the `message-row` index assertions other
+            // specs rely on. Real 64-hex id so getReactionTargetId() accepts it
+            // as a reaction target — this is the surface the original "react to a
+            // system message" bug lived on. Backdated like the other seeds.
+            {
+              id: SYSTEM_REACTION_TARGET_EVENT_ID,
+              pubkey: ALICE_PUBKEY,
+              created_at: baseSec + 90,
+              kind: KIND_SYSTEM_MESSAGE,
+              tags: [["h", channelId]],
+              content: JSON.stringify({
+                type: "member_joined",
+                actor: ALICE_PUBKEY,
+                target: ALICE_PUBKEY,
+              }),
+              sig: "mocksig".repeat(20).slice(0, 128),
+            },
+          ];
+        })()
       : channelId === "a27e1ee9-76a6-5bdf-a5d5-1d85610dad11"
         ? [
             {
