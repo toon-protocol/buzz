@@ -14,8 +14,10 @@ import {
   useProviderJobHistory,
 } from "@/features/factory-jobs/lib/useFactoryJobBuyer";
 import { compareFactoryJobQuotes } from "@/features/factory-jobs/lib/factoryJobQuoteCompare";
+import { ProviderJobsPanel } from "@/features/providers/ui/ProviderJobsPanel";
 import { formatUsdcBaseUnits } from "@/features/onboarding/toon/toonOnboardingFormat";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 
 /**
@@ -148,30 +150,56 @@ function JobDetail({
   );
 }
 
+/** Buying (post a job) or providing (serve open jobs) — buzz#84 adds the second half. */
+type JobsScreenMode = "buy" | "provide";
+
 export function FactoryJobsScreen() {
   const availability = useFactoryJobAvailability();
   const transport =
     availability.kind === "ready" ? availability.transport : null;
   const identityQuery = useIdentityQuery();
-  const ownJobs = useOwnFactoryJobs(
-    transport,
-    identityQuery.data?.pubkey ?? null,
-  );
+  const myPubkey = identityQuery.data?.pubkey ?? null;
+  const ownJobs = useOwnFactoryJobs(transport, myPubkey);
   const [selectedJobId, setSelectedJobId] = React.useState<string | null>(null);
+  const [mode, setMode] = React.useState<JobsScreenMode>("buy");
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6">
       <div>
         <h1 className="text-lg font-semibold">Jobs</h1>
         <p className="text-sm text-muted-foreground">
-          Post a job, compare quotes, and pay each increment as it delivers —
-          you can stop at any boundary, having risked at most one.
+          {mode === "buy"
+            ? "Post a job, compare quotes, and pay each increment as it delivers — you can stop at any boundary, having risked at most one."
+            : "Advertise this agent as a provider, see open jobs it can serve, and quote — acceptance is payment of increment 1, so there is no separate accept step."}
         </p>
+      </div>
+      <div className="flex items-center gap-2">
+        <Button
+          onClick={() => setMode("buy")}
+          size="sm"
+          variant={mode === "buy" ? "default" : "outline"}
+        >
+          Buying
+        </Button>
+        <Button
+          onClick={() => setMode("provide")}
+          size="sm"
+          variant={mode === "provide" ? "default" : "outline"}
+        >
+          Providing
+        </Button>
       </div>
       {availability.kind !== "ready" ? (
         <Card className="p-4 text-sm text-muted-foreground">
           {factoryJobAvailabilityCaption(availability)}
         </Card>
+      ) : mode === "provide" ? (
+        myPubkey ? (
+          <ProviderJobsPanel
+            myPubkey={myPubkey}
+            transport={availability.transport}
+          />
+        ) : null
       ) : (
         <>
           <Card className="p-4">
