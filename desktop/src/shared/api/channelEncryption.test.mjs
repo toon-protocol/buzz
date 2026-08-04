@@ -68,14 +68,14 @@ test("the ciphertext leaks neither the plaintext nor its length", () => {
   // string this long does not (buzz#110).
   const plaintextA = "zQ7mK2xR9vL4nP8wT3yB";
   const plaintextB = "hJ5cN0dF6sG1kM9oV2eZ";
-  const short = encryptChannelContent(plaintextA, key);
-  const alsoShort = encryptChannelContent(plaintextB, key);
+  const ciphertextA = encryptChannelContent(plaintextA, key);
+  const ciphertextB = encryptChannelContent(plaintextB, key);
 
-  assert.ok(!short.includes(plaintextA));
+  assert.ok(!ciphertextA.includes(plaintextA));
   // NIP-44 pads to a bucket, so two short messages (both well under the
   // 32-byte first bucket) are the same size on the wire — the property the
   // padding exists for.
-  assert.equal(short.length, alsoShort.length);
+  assert.equal(ciphertextA.length, ciphertextB.length);
 });
 
 test("the same plaintext encrypts differently every time", () => {
