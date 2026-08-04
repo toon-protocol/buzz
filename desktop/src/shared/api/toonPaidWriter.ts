@@ -42,6 +42,19 @@ export type PaidWriteReceipt = {
 export type PaidWriteListener = (receipt: PaidWriteReceipt) => void;
 
 /**
+ * What {@link ToonPaidWriter.getNetworkFlowStatus} reads for one channel —
+ * deposit and cumulative-claimed, tagged with where the read came from
+ * (`"claim-state"` when the connector verified it, `"local"` for this
+ * client's own tracked watermark).
+ */
+export type RawNetworkFlowStatus = {
+  channelId: string;
+  depositTotalBaseUnits: bigint;
+  cumulativeClaimedBaseUnits: bigint;
+  source: "claim-state" | "local";
+};
+
+/**
  * What paying one factory-job increment (buzz#85) settles: the fulfillment
  * IS the artifact's decryption key, per `docs/factory-job-protocol.md` §4.2
  * (toon-meta) — revealing it to satisfy the hashlock and handing the buyer
@@ -87,6 +100,25 @@ export class ToonPaidWriteError extends Error {
     this.name = "ToonPaidWriteError";
   }
 }
+
+/**
+ * The one shape `getNetworkFlowStatus` reads off a connector claim-state
+ * answer, as `ToonClient.getClaimState` (toon-client#494) returns it — hand-
+ * rolled rather than imported from `@toon-protocol/client`'s own
+ * `ClaimStateResult` type, same reason every other `PaidClient` method
+ * below is a hand-written subset: `getClaimState` ships in
+ * `@toon-protocol/client@0.26.0`, and buzz is still pinned to `^0.25.1`
+ * (toon-client#494 is not vendored yet — see `getNetworkFlowStatus`'s doc).
+ * Only the fields this module reads are named.
+ */
+type ClaimStateReadResult =
+  | {
+      ok: true;
+      /** `null` for a channel the connector only declared, never funded. */
+      depositTotal: string | null;
+      cumulativeClaimed: string;
+    }
+  | { ok: false };
 
 /**
  * A signed balance proof, as `ToonClient.signBalanceProof` returns it —
@@ -197,6 +229,21 @@ type PaidClient = {
   /** Where a tracked channel sits in the withdraw journey. */
   getChannelCloseState(channelId: string): ChannelCloseState;
   getSettleableAt(channelId: string): bigint | undefined;
+  /**
+   * Connector-verified deposit/cumulative-claimed for tracked channels
+   * (toon-client#494) — the runway source of truth (toon-meta#261 decision
+   * 5), correct even when this client's own local watermark has drifted.
+   * Optional: buzz's pinned `@toon-protocol/client@^0.25.1` predates
+   * toon-client#494 (it lands in 0.26.0), so no real client build supplies
+   * this yet — callers fall back to the locally-tracked
+   * `getChannelDepositTotal`/`getChannelCumulativeAmount` until the pin
+   * bumps. Kept on the interface (and wired below) so that bump is the only
+   * remaining step once it's unblocked; see `getNetworkFlowStatus`.
+   */
+  getClaimState?(
+    channelIds?: string[],
+    opts?: { expiresInSeconds?: number },
+  ): Promise<ClaimStateReadResult[]>;
   /** Add collateral to an open channel. `amount` is the delta, base units. */
   depositToChannel(
     channelId: string,
@@ -612,6 +659,66 @@ export class ToonPaidWriter {
       closeState: client.getChannelCloseState(channelId),
       settleableAt: client.getSettleableAt(channelId) ?? null,
     };
+  }
+
+  /**
+   * The deposit/owed pair the Money tab's Network spend block (#80) reads,
+   * or `null` when no channel has ever opened for this destination — never
+   * opens one as a side effect (same guard as {@link getChannelStatus}).
+   *
+   * Prefers the connector's claim-state endpoint (toon-meta#261 decision 5 —
+   * the runway source of truth, correct even if this client's own watermark
+   * has drifted). A connector that is unreachable, a `PaidClient` build that
+   * predates `getClaimState`, or a response the connector could not verify
+   * (`ok: false`) all fall back to this client's own locally-tracked read —
+   * the "always-available free floor" decision 5 also calls for — so the
+   * block degrades gracefully instead of going blank.
+   */
+  async getNetworkFlowStatus(): Promise<RawNetworkFlowStatus | null> {
+    if (!this.hasChannel()) return null;
+    const { client, channelId } = await this.requireChannelId();
+
+    const verified = await this.tryClaimState(client, channelId);
+    if (verified) {
+      return { channelId, source: "claim-state", ...verified };
+    }
+    return {
+      channelId,
+      source: "local",
+      depositTotalBaseUnits: client.getChannelDepositTotal(channelId),
+      cumulativeClaimedBaseUnits: client.getChannelCumulativeAmount(channelId),
+    };
+  }
+
+  /**
+   * Ask the connector for `channelId`'s verified position. Never throws —
+   * every failure (no `getClaimState` on this client build, an unreachable
+   * connector, or a challenge the connector could not verify) reads as "no
+   * verified answer", which {@link getNetworkFlowStatus} treats as a signal
+   * to fall back to the local read, not as an error to surface.
+   */
+  private async tryClaimState(
+    client: PaidClient,
+    channelId: string,
+  ): Promise<{
+    depositTotalBaseUnits: bigint;
+    cumulativeClaimedBaseUnits: bigint;
+  } | null> {
+    if (!client.getClaimState) return null;
+    try {
+      const [result] = await client.getClaimState([channelId]);
+      if (!result?.ok || result.depositTotal === null) return null;
+      return {
+        depositTotalBaseUnits: BigInt(result.depositTotal),
+        cumulativeClaimedBaseUnits: BigInt(result.cumulativeClaimed),
+      };
+    } catch (error) {
+      console.warn(
+        "[toon] claim-state read failed — falling back to the local channel record",
+        error,
+      );
+      return null;
+    }
   }
 
   /** Add collateral to the open channel. Throws if none is open. */

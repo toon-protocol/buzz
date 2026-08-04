@@ -1,4 +1,4 @@
-import { CircleDollarSign, Coins, Sparkles, Wallet } from "lucide-react";
+import { CircleDollarSign, Coins, Sparkles } from "lucide-react";
 
 import {
   type AgentModelUsageSummary,
@@ -10,22 +10,25 @@ import {
   type ProfileField,
   ProfileFieldGroup,
 } from "@/features/profile/ui/UserProfilePanelFields";
+import { NetworkSpendSection } from "@/features/profile/ui/UserProfilePanelNetworkSpend";
 
 /**
- * Money tab (buzz#75): two blocks, deliberately never summed into one number.
+ * Money tab (buzz#75 + #80): two blocks, deliberately never summed into one
+ * number.
  *
- * - Model usage (this ticket): LLM tokens, postpaid, estimated — billed to the
- *   owner's own provider account, where buzz cannot see it. No refill
- *   affordance; there is nothing here buzz could refill.
- * - Network spend (#80): USDC, prepaid, exact, enforcing — the only block
- *   that gets a refill action. Reserved as a sibling section below so #80
- *   lands beside this one rather than retrofitting the layout.
+ * - Model usage: LLM tokens, postpaid, estimated — billed to the owner's own
+ *   provider account, where buzz cannot see it. No refill affordance; there
+ *   is nothing here buzz could refill.
+ * - Network spend (this ticket): USDC, prepaid, exact, enforcing — the only
+ *   block that gets a refill action.
  */
 export function ProfileMoneyTabContent({
   agentPubkey,
+  isSelf,
   ownerPubkey,
 }: {
   agentPubkey: string;
+  isSelf: boolean;
   ownerPubkey: string | null;
 }) {
   const usageQuery = useAgentModelUsageQuery(agentPubkey, ownerPubkey);
@@ -37,7 +40,7 @@ export function ProfileMoneyTabContent({
         isPending={usageQuery.isPending}
         summary={usageQuery.data ?? null}
       />
-      <NetworkSpendPlaceholder />
+      <NetworkSpendSection isSelf={isSelf} />
     </div>
   );
 }
@@ -155,30 +158,6 @@ function ModelUsageSection({
         Estimated from LLM token usage and billed to your provider account —
         buzz cannot see this spend.
       </p>
-    </section>
-  );
-}
-
-function NetworkSpendPlaceholder() {
-  return (
-    <section
-      className="space-y-2"
-      data-testid="user-profile-money-network-spend"
-    >
-      <h3 className="flex items-center gap-2 px-1 text-sm font-semibold text-foreground">
-        Network spend
-        <span className="rounded-full bg-muted/70 px-2 py-0.5 text-2xs font-normal uppercase tracking-wide text-muted-foreground">
-          Coming soon
-        </span>
-      </h3>
-      <div className="flex items-center gap-3 rounded-2xl bg-muted/20 px-4 py-3">
-        <Wallet className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">
-          Balance, runway, and refill will land here — never summed with model
-          usage above. Any income this agent earns nets into this same balance;
-          there's no separate earnings account to check.
-        </p>
-      </div>
     </section>
   );
 }
