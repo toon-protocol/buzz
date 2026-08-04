@@ -1,5 +1,6 @@
 import {
   deriveNetworkRunway,
+  isEarning,
   type NetworkFlowRead,
 } from "@/features/profile/lib/agentNetworkFlow";
 import type { NetworkSpendState } from "@/features/profile/lib/networkSpendState";
@@ -39,6 +40,19 @@ export function deriveAgentFleetRunwayBadge(
 ): AgentFleetRunwayBadge {
   if (state.kind !== "quoted") return null;
   return runwayBadgeForRead(state.read);
+}
+
+/**
+ * Whether `state` shows a fleet agent that pays for itself — the
+ * `AgentIdentityCard` earning badge predicate (buzz#86 AC3). Same
+ * `state.kind !== "quoted"` gate as {@link deriveAgentFleetRunwayBadge} and
+ * the same trusted-income bar as the badge's own self-funding branch, so
+ * the earning badge and the low-funds suppression never disagree about
+ * whether an agent is self-funding.
+ */
+export function isAgentFleetEarning(state: NetworkSpendState): boolean {
+  if (state.kind !== "quoted") return false;
+  return isEarning(state.read);
 }
 
 function runwayBadgeForRead(read: NetworkFlowRead): AgentFleetRunwayBadge {

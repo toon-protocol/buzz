@@ -5,6 +5,7 @@ import {
   agentFleetRunwaySortWeight,
   countLowFundsAgents,
   deriveAgentFleetRunwayBadge,
+  isAgentFleetEarning,
   sortByFleetRunway,
 } from "./agentFleetRunway.ts";
 
@@ -124,4 +125,28 @@ test("countLowFundsAgents counts critical and warning, ignores everything else",
 
 test("countLowFundsAgents is zero when nothing needs attention", () => {
   assert.equal(countLowFundsAgents([null, null]), 0);
+});
+
+test("isAgentFleetEarning is false for unavailable/relay/pending states", () => {
+  assert.equal(isAgentFleetEarning({ kind: "relay" }), false);
+  assert.equal(isAgentFleetEarning({ kind: "pending" }), false);
+  assert.equal(isAgentFleetEarning({ kind: "unavailable" }), false);
+});
+
+test("isAgentFleetEarning is false when income has not proven itself sustained", () => {
+  const read = {
+    ...READ,
+    incomeRateBaseUnitsPerSec: 500,
+    incomeSampleCount: 1,
+  };
+  assert.equal(isAgentFleetEarning(quoted(read)), false);
+});
+
+test("isAgentFleetEarning is true once sustained income covers burn — buzz#86 AC3", () => {
+  const read = {
+    ...READ,
+    incomeRateBaseUnitsPerSec: 150,
+    incomeSampleCount: 5,
+  };
+  assert.equal(isAgentFleetEarning(quoted(read)), true);
 });
