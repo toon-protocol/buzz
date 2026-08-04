@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronRight,
   RefreshCw,
+  TrendingUp,
 } from "lucide-react";
 
 import { resolveAgentCardModelLabel } from "@/features/agents/lib/agentCardModelLabel";
@@ -14,7 +15,7 @@ import {
 } from "@/features/agents/lib/agentFleetRunway";
 import { friendlyAgentLastError } from "@/features/agents/lib/friendlyAgentLastError";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
-import { useAgentFleetRunwayBadges } from "@/features/agents/lib/useAgentFleetRunwayBadges";
+import { useAgentFleetStatus } from "@/features/agents/lib/useAgentFleetStatus";
 import { useUserProfileQuery } from "@/features/profile/hooks";
 import type { AgentPersona, ManagedAgent } from "@/shared/api/types";
 import type { ProfilePanelOpenOptions } from "@/shared/context/ProfilePanelContext";
@@ -115,11 +116,16 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     () => buildUnifiedGroups(personas, agents),
     [personas, agents],
   );
-  const runwayBadges = useAgentFleetRunwayBadges(agents);
+  const { runwayBadges, earningPubkeys } = useAgentFleetStatus(agents);
   const runwayBadgeForAgent = React.useCallback(
     (agent: ManagedAgent | undefined): AgentFleetRunwayBadge =>
       agent ? (runwayBadges.get(agent.pubkey) ?? null) : null,
     [runwayBadges],
+  );
+  const isAgentEarning = React.useCallback(
+    (agent: ManagedAgent | undefined): boolean =>
+      agent ? earningPubkeys.has(agent.pubkey) : false,
+    [earningPubkeys],
   );
   // Starving agents rise to the top of the grid (buzz#76's fleet glance).
   const groups = React.useMemo(
@@ -209,6 +215,7 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
                   )}
                   agent={profileAgent}
                   defaultModel={defaultModel}
+                  isEarning={isAgentEarning(profileAgent)}
                   key={group.persona.id}
                   persona={group.persona}
                   runwayBadge={runwayBadgeForAgent(profileAgent)}
@@ -235,6 +242,7 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
               collapsed={collapsed}
               defaultModel={defaultModel}
               groupKey="__unknown__"
+              isAgentEarning={isAgentEarning}
               label="Unknown agents"
               runwayBadgeForAgent={runwayBadgeForAgent}
               startingAgentPubkey={startingAgentPubkey}
@@ -249,6 +257,7 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
               collapsed={collapsed}
               defaultModel={defaultModel}
               groupKey="__ungrouped__"
+              isAgentEarning={isAgentEarning}
               label="Custom agents"
               runwayBadgeForAgent={runwayBadgeForAgent}
               startingAgentPubkey={startingAgentPubkey}
@@ -278,12 +287,14 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
   );
 }
 
-/** The `statusBadge` slot's single warning, in priority order — operational issues before a low-funds runway warning, never both. */
+/** The `statusBadge` slot's single warning, in priority order — operational issues before a low-funds runway warning before the earning indicator, never more than one at a time. */
 function AgentStatusBadge({
   agent,
+  isEarning,
   runwayBadge,
 }: {
   agent: ManagedAgent | undefined;
+  isEarning: boolean;
   runwayBadge: AgentFleetRunwayBadge;
 }) {
   if (agent?.personaOrphaned) {
@@ -314,6 +325,18 @@ function AgentStatusBadge({
       </Badge>
     );
   }
+  if (isEarning) {
+    return (
+      <Badge
+        className="gap-1"
+        data-testid="agent-earning-badge"
+        variant="success"
+      >
+        <TrendingUp className="h-3 w-3" />
+        Earning
+      </Badge>
+    );
+  }
   return null;
 }
 
@@ -321,6 +344,7 @@ function AgentPersonaCard({
   actions,
   agent,
   defaultModel,
+  isEarning,
   persona,
   runwayBadge,
   startingAgentPubkey,
@@ -336,6 +360,7 @@ function AgentPersonaCard({
   ) => React.ReactNode;
   agent: ManagedAgent | undefined;
   defaultModel: string;
+  isEarning: boolean;
   persona: AgentPersona;
   runwayBadge: AgentFleetRunwayBadge;
   startingAgentPubkey: string | null;
@@ -413,7 +438,13 @@ function AgentPersonaCard({
         }
         onOpenPersonaProfile(persona);
       }}
-      statusBadge={<AgentStatusBadge agent={agent} runwayBadge={runwayBadge} />}
+      statusBadge={
+        <AgentStatusBadge
+          agent={agent}
+          isEarning={isEarning}
+          runwayBadge={runwayBadge}
+        />
+      }
     />
   );
 }
@@ -421,6 +452,7 @@ function AgentPersonaCard({
 function StandaloneAgentCard({
   agent,
   defaultModel,
+  isEarning,
   runwayBadge,
   startingAgentPubkey,
   onOpenAgentProfile,
@@ -428,6 +460,7 @@ function StandaloneAgentCard({
 }: {
   agent: ManagedAgent;
   defaultModel: string;
+  isEarning: boolean;
   runwayBadge: AgentFleetRunwayBadge;
   startingAgentPubkey: string | null;
   onOpenAgentProfile: (
@@ -478,7 +511,13 @@ function StandaloneAgentCard({
           opensRuntimeTab ? { tab: "runtime" } : undefined,
         );
       }}
-      statusBadge={<AgentStatusBadge agent={agent} runwayBadge={runwayBadge} />}
+      statusBadge={
+        <AgentStatusBadge
+          agent={agent}
+          isEarning={isEarning}
+          runwayBadge={runwayBadge}
+        />
+      }
     />
   );
 }
@@ -556,6 +595,7 @@ function CollapsibleAgentGroup({
   agents,
   collapsed,
   defaultModel,
+  isAgentEarning,
   runwayBadgeForAgent,
   startingAgentPubkey,
   onToggle,
@@ -567,6 +607,7 @@ function CollapsibleAgentGroup({
   agents: ManagedAgent[];
   collapsed: ReadonlySet<string>;
   defaultModel: string;
+  isAgentEarning: (agent: ManagedAgent | undefined) => boolean;
   runwayBadgeForAgent: (
     agent: ManagedAgent | undefined,
   ) => AgentFleetRunwayBadge;
@@ -600,6 +641,7 @@ function CollapsibleAgentGroup({
             <StandaloneAgentCard
               agent={agent}
               defaultModel={defaultModel}
+              isEarning={isAgentEarning(agent)}
               key={agent.pubkey}
               runwayBadge={runwayBadgeForAgent(agent)}
               startingAgentPubkey={startingAgentPubkey}
