@@ -1,4 +1,5 @@
 import { getStoredMnemonic } from "@/features/onboarding/toon/toonOnboardingStore";
+import { recordNetworkSpendWrite } from "@/features/profile/lib/networkSpendLiveStore";
 import { setEventTransport } from "@/shared/api/eventTransport";
 import { resetMediaUploader, setMediaUploader } from "@/shared/api/mediaUpload";
 import { StoreMediaUploader } from "@/shared/api/storeMediaUploader";
@@ -107,6 +108,9 @@ export async function installSelectedTransport(): Promise<TransportSelection> {
     setEventTransport(transport);
     setArweaveGateways(selection.config.arweaveGateways);
     setMediaUploader(new StoreMediaUploader(transport.getPaidWriter()));
+    // Feeds the Money tab's Network spend burn rate (#80) — module-level
+    // store + useSyncExternalStore per the epic's established idiom.
+    transport.onPaidWrite(recordNetworkSpendWrite);
     activeToonTransport = transport;
     console.info(
       `[transport] TOON active — paying ${selection.config.destination} via ${

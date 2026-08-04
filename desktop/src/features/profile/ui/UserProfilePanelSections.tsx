@@ -118,10 +118,7 @@ export type ProfileSummaryViewProps = {
 
 type RuntimeTabStatus = "running" | "stopped" | "error";
 
-const PROFILE_HERO_SPACING = {
-  "0": 0,
-  "6": 24,
-} as const;
+const PROFILE_HERO_SPACING = { "0": 0, "6": 24 } as const;
 
 const PROFILE_HERO_PRESENCE_BADGE = {
   cutout: { cx: 68, cy: 68, r: 15 },
@@ -468,6 +465,7 @@ export function ProfileSummaryView({
           {activeTab === "money" && pubkey ? (
             <ProfileMoneyTabContent
               agentPubkey={pubkey}
+              isSelf={isSelf}
               ownerPubkey={moneyOwnerPubkey}
             />
           ) : null}

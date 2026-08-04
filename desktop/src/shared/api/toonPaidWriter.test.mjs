@@ -348,6 +348,75 @@ test("payFactoryJobIncrement throws when accepted but no fulfillment came back â
   );
 });
 
+test("getNetworkFlowStatus returns null when no channel has ever opened", async () => {
+  const client = scriptedClient();
+  const writer = writerOver(client);
+
+  assert.equal(await writer.getNetworkFlowStatus(), null);
+});
+
+test("getNetworkFlowStatus prefers a verified claim-state read over the local watermark", async () => {
+  const client = scriptedClient({
+    getChannelDepositTotal: () => 999n,
+    getChannelCumulativeAmount: () => 999n,
+    getClaimState: (channelIds) =>
+      Promise.resolve(
+        channelIds.map(() => ({
+          ok: true,
+          depositTotal: "10000000",
+          cumulativeClaimed: "4000000",
+        })),
+      ),
+  });
+  const writer = writerOver(client);
+  await writer.publish(EVENT);
+
+  const status = await writer.getNetworkFlowStatus();
+  assert.equal(status.source, "claim-state");
+  assert.equal(status.depositTotalBaseUnits, 10_000_000n);
+  assert.equal(status.cumulativeClaimedBaseUnits, 4_000_000n);
+});
+
+test("getNetworkFlowStatus falls back to the local watermark when the client has no getClaimState", async () => {
+  const client = scriptedClient({
+    getChannelDepositTotal: () => 5_000_000n,
+    getChannelCumulativeAmount: () => 1_000_000n,
+  });
+  const writer = writerOver(client);
+  await writer.publish(EVENT);
+
+  const status = await writer.getNetworkFlowStatus();
+  assert.equal(status.source, "local");
+  assert.equal(status.depositTotalBaseUnits, 5_000_000n);
+  assert.equal(status.cumulativeClaimedBaseUnits, 1_000_000n);
+});
+
+test("getNetworkFlowStatus falls back to the local watermark when claim-state is unreachable", async () => {
+  const client = scriptedClient({
+    getChannelDepositTotal: () => 5_000_000n,
+    getChannelCumulativeAmount: () => 1_000_000n,
+    getClaimState: () => Promise.reject(new Error("connector unreachable")),
+  });
+  const writer = writerOver(client);
+  await writer.publish(EVENT);
+
+  const status = await writer.getNetworkFlowStatus();
+  assert.equal(status.source, "local");
+});
+
+test("getNetworkFlowStatus falls back to the local watermark when the connector could not verify the challenge", async () => {
+  const client = scriptedClient({
+    getChannelDepositTotal: () => 5_000_000n,
+    getChannelCumulativeAmount: () => 1_000_000n,
+    getClaimState: () => Promise.resolve([{ ok: false }]),
+  });
+  const writer = writerOver(client);
+  await writer.publish(EVENT);
+
+  const status = await writer.getNetworkFlowStatus();
+  assert.equal(status.source, "local");
+});
+
 test("the client is built for the BTP session by default (buzz#23 stage 2)", () => {
   // `proxyUrl` must NOT be among the fields: the real client prefers the
   // stateless HTTP transport whenever a proxyUrl is present, which caps paid
