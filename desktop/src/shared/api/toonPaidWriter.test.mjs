@@ -417,6 +417,72 @@ test("getNetworkFlowStatus falls back to the local watermark when the connector 
   assert.equal(status.source, "local");
 });
 
+test("getSessionLease is undefined until the first successful write", async () => {
+  const client = scriptedClient({
+    getLastConnectorRouteTerms: () => ({
+      extra: { session_lease_ttl_ms: 120_000 },
+    }),
+  });
+  const writer = writerOver(client);
+
+  assert.equal(writer.getSessionLease(), undefined);
+});
+
+test("getSessionLease reads session_lease_ttl_ms off the greeting's extra bag after a write lands (toon-client#509)", async () => {
+  const before = Date.now();
+  const client = scriptedClient({
+    getLastConnectorRouteTerms: () => ({
+      extra: { session_lease_ttl_ms: 120_000 },
+    }),
+  });
+  const writer = writerOver(client);
+
+  await writer.publish(EVENT);
+
+  const lease = writer.getSessionLease();
+  assert.equal(lease.sessionLeaseTtlMs, 120_000);
+  assert.ok(lease.observedAtMs >= before);
+  assert.ok(lease.observedAtMs <= Date.now());
+});
+
+test("getSessionLease also updates from a factory-job increment payment", async () => {
+  const client = scriptedClient({
+    getLastConnectorRouteTerms: () => ({
+      extra: { session_lease_ttl_ms: 45_000 },
+    }),
+  });
+  const writer = writerOver(client);
+
+  await writer.payFactoryJobIncrement({
+    destination: "g.toon.provider-xyz",
+    amountBaseUnits: 1n,
+    conditionHex: "ab".repeat(32),
+    jobEventId: "offer-event-id",
+  });
+
+  assert.equal(writer.getSessionLease().sessionLeaseTtlMs, 45_000);
+});
+
+test("getSessionLease stays undefined against a client build without getLastConnectorRouteTerms", async () => {
+  const client = scriptedClient(); // no getLastConnectorRouteTerms — predates issue #509
+  const writer = writerOver(client);
+
+  await writer.publish(EVENT);
+
+  assert.equal(writer.getSessionLease(), undefined);
+});
+
+test("getSessionLease stays undefined when the greeting carried no session_lease_ttl_ms (connector predates #722)", async () => {
+  const client = scriptedClient({
+    getLastConnectorRouteTerms: () => ({ extra: { settlement: "evm" } }),
+  });
+  const writer = writerOver(client);
+
+  await writer.publish(EVENT);
+
+  assert.equal(writer.getSessionLease(), undefined);
+});
+
 test("the client is built for the BTP session by default (buzz#23 stage 2)", () => {
   // `proxyUrl` must NOT be among the fields: the real client prefers the
   // stateless HTTP transport whenever a proxyUrl is present, which caps paid

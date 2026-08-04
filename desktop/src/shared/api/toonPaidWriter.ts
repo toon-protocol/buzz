@@ -67,6 +67,21 @@ export type FactoryJobIncrementPaymentReceipt = {
   destination: string;
 };
 
+/**
+ * The connector's session lease TTL, as last confirmed by a real write —
+ * buzz#84's freshness invariant (`providerAvailability.ts`) reads this
+ * rather than a hardcoded constant. `observedAtMs` is stamped fresh on
+ * every successful write, not just the first: `ToonClient` caches the
+ * greeting negotiation per peer, so a repeat write does not re-fetch the
+ * TTL, but it still proves the SESSION (not just the cached negotiation)
+ * was live at that moment — which is what the freshness window needs to
+ * bound.
+ */
+export type SessionLease = {
+  sessionLeaseTtlMs: number;
+  observedAtMs: number;
+};
+
 function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -165,6 +180,14 @@ function channelManagerOf(client: PaidClient): ChannelManagerLike | undefined {
   return undefined;
 }
 
+/**
+ * The `extra` bag of the connector's x402 greeting `accepts` entry, as
+ * `ConnectorRouteTerms.extra` carries it (toon-client#509,
+ * `@toon-protocol/client@0.28.0`). `session_lease_ttl_ms` is the one member
+ * this module reads by name; everything else rides along unread.
+ */
+type ConnectorGreetingExtra = { session_lease_ttl_ms?: number };
+
 /** The subset of `ToonClient` this module drives. */
 type PaidClient = {
   start(): Promise<unknown>;
@@ -244,6 +267,16 @@ type PaidClient = {
     channelIds?: string[],
     opts?: { expiresInSeconds?: number },
   ): Promise<ClaimStateReadResult[]>;
+  /**
+   * The `ConnectorRouteTerms` from the most recent ordinary channel
+   * bootstrap (toon-client#509, `@toon-protocol/client@0.28.0`) — populated
+   * by `publishEvent`/`openChannel`/`adoptChannel` themselves, with no
+   * separate probe. `undefined` until this session's first successful
+   * write, and permanently `undefined` against a `PaidClient` build that
+   * predates issue #509. Optional for the same reason `getClaimState` is:
+   * a test double or an older client build may not implement it.
+   */
+  getLastConnectorRouteTerms?(): { extra?: ConnectorGreetingExtra } | undefined;
   /** Add collateral to an open channel. `amount` is the delta, base units. */
   depositToChannel(
     channelId: string,
@@ -388,6 +421,7 @@ export class ToonPaidWriter {
   private lastReceipt: PaidWriteReceipt | null = null;
   private channelId: string | null = null;
   private channelReady: Promise<string> | null = null;
+  private sessionLease: SessionLease | null = null;
 
   constructor(
     config: ToonTransportConfig,
@@ -422,6 +456,35 @@ export class ToonPaidWriter {
   /** The most recent paid write's cost, for status surfaces. */
   getLastReceipt(): PaidWriteReceipt | null {
     return this.lastReceipt;
+  }
+
+  /**
+   * The connector's session lease TTL, last confirmed live by a successful
+   * write — see {@link SessionLease}. `undefined` until this session's first
+   * successful write, and permanently `undefined` against a connector
+   * predating connector#722 (`extra` absent). Never a substituted default —
+   * callers (`providerAvailability.ts`) must treat an unknown TTL as
+   * "not yet knowable", not as a live-but-unmeasured window.
+   */
+  getSessionLease(): SessionLease | undefined {
+    return this.sessionLease ?? undefined;
+  }
+
+  /**
+   * Read the connector's session lease TTL off the client's most recent
+   * greeting negotiation, if any, and stamp it with the current time. Called
+   * after every successful write (see {@link SessionLease}'s doc for why a
+   * repeat call still matters even when the negotiation itself is cached).
+   */
+  private captureSessionLease(client: PaidClient): void {
+    const ttlMs =
+      client.getLastConnectorRouteTerms?.()?.extra?.session_lease_ttl_ms;
+    if (typeof ttlMs === "number") {
+      this.sessionLease = {
+        sessionLeaseTtlMs: ttlMs,
+        observedAtMs: Date.now(),
+      };
+    }
   }
 
   /** Observe every paid write's cost. Returns an unsubscribe. */
@@ -549,6 +612,8 @@ export class ToonPaidWriter {
       );
     }
 
+    this.captureSessionLease(client);
+
     const receipt: PaidWriteReceipt = {
       eventId: result.eventId ?? event.id,
       amount,
@@ -618,6 +683,8 @@ export class ToonPaidWriter {
         "The payment was accepted but carried no fulfillment — the artifact key was not released.",
       );
     }
+
+    this.captureSessionLease(client);
 
     const fulfillmentHex = bytesToHex(base64ToBytes(result.fulfillment));
 
