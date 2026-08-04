@@ -14,14 +14,13 @@
  * reputation (nothing here touches any of those).
  *
  * `sessionLeaseTtlMs` is a caller-supplied parameter, not a constant defined
- * here: connector#698 exports it as `SESSION_LEASE_BACKSTOP_TTL` and its own
- * doc comment says this ticket should read it from there rather than
- * duplicating the value. As of this writing that export is not yet present
- * in any published `@toon-protocol/client`/`@toon-protocol/connector`
- * release this repo can pin, so there is no live caller yet — this module is
- * ready for one once the value is available, mirroring the
- * `agentNetworkFlow.ts` precedent for shipping pure domain logic ahead of
- * its data source.
+ * here: connector#698 exports it as `SESSION_LEASE_BACKSTOP_TTL`, but that
+ * export is not yet present in any published
+ * `@toon-protocol/client`/`@toon-protocol/connector` release this repo can
+ * pin. The live caller, `useProviderAvailability.ts`, instead reads the TTL
+ * off `ToonPaidWriter.getSessionLease()` (toon-client#509,
+ * `@toon-protocol/client@0.28.0`) — a per-write-observed value rather than
+ * the connector#698 constant — so this module still never hardcodes it.
  */
 
 /** What the provider surface knows about its own current advertisement. */
