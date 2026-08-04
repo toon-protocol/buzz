@@ -189,69 +189,98 @@ export function FactoryJobsScreen() {
           Providing
         </Button>
       </div>
-      {availability.kind !== "ready" ? (
-        <Card className="p-4 text-sm text-muted-foreground">
-          {factoryJobAvailabilityCaption(availability)}
-        </Card>
-      ) : mode === "provide" ? (
-        myPubkey ? (
-          <ProviderJobsPanel
-            myPubkey={myPubkey}
-            transport={availability.transport}
-          />
-        ) : null
-      ) : (
-        <>
-          <Card className="p-4">
-            <PostJobForm
-              onPosted={(event) => setSelectedJobId(event.id)}
-              transport={availability.transport}
-            />
-          </Card>
-          <div className="flex flex-col gap-2">
-            <h2 className="text-sm font-medium">Your jobs</h2>
-            {ownJobs.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Nothing posted yet.
-              </p>
-            ) : (
-              <ul className="flex flex-col gap-1">
-                {ownJobs.map((job) => (
-                  <li key={job.eventId}>
-                    <button
-                      className={`w-full rounded-lg border px-3 py-2 text-left text-sm hover:bg-muted/50 ${
-                        job.eventId === selectedJobId
-                          ? "border-primary"
-                          : "border-transparent"
-                      }`}
-                      onClick={() => setSelectedJobId(job.eventId)}
-                      type="button"
-                    >
-                      <span className="font-medium">{job.brief}</span>
-                      <span className="ml-2 text-xs text-muted-foreground">
-                        bid up to {formatUsdcBaseUnits(job.bidBaseUnits)}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          {selectedJobId ? (
-            <JobDetail
-              // Remount on job switch: `JobDetail` holds per-job payment
-              // state (selected provider, paid increments) that must never
-              // carry over to a different job.
-              key={selectedJobId}
-              bidBaseUnits={
-                ownJobs.find((job) => job.eventId === selectedJobId)
-                  ?.bidBaseUnits ?? 0n
-              }
-              jobId={selectedJobId}
-            />
-          ) : null}
-        </>
-      )}
+      {renderJobsScreenBody({
+        availability,
+        mode,
+        myPubkey,
+        ownJobs,
+        selectedJobId,
+        setSelectedJobId,
+      })}
     </div>
+  );
+}
+
+function renderJobsScreenBody({
+  availability,
+  mode,
+  myPubkey,
+  ownJobs,
+  selectedJobId,
+  setSelectedJobId,
+}: {
+  availability: ReturnType<typeof useFactoryJobAvailability>;
+  mode: JobsScreenMode;
+  myPubkey: string | null;
+  ownJobs: ReturnType<typeof useOwnFactoryJobs>;
+  selectedJobId: string | null;
+  setSelectedJobId: (jobId: string) => void;
+}) {
+  if (availability.kind !== "ready") {
+    return (
+      <Card className="p-4 text-sm text-muted-foreground">
+        {factoryJobAvailabilityCaption(availability)}
+      </Card>
+    );
+  }
+
+  if (mode === "provide") {
+    return myPubkey ? (
+      <ProviderJobsPanel
+        myPubkey={myPubkey}
+        transport={availability.transport}
+      />
+    ) : null;
+  }
+
+  return (
+    <>
+      <Card className="p-4">
+        <PostJobForm
+          onPosted={(event) => setSelectedJobId(event.id)}
+          transport={availability.transport}
+        />
+      </Card>
+      <div className="flex flex-col gap-2">
+        <h2 className="text-sm font-medium">Your jobs</h2>
+        {ownJobs.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Nothing posted yet.</p>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {ownJobs.map((job) => (
+              <li key={job.eventId}>
+                <button
+                  className={`w-full rounded-lg border px-3 py-2 text-left text-sm hover:bg-muted/50 ${
+                    job.eventId === selectedJobId
+                      ? "border-primary"
+                      : "border-transparent"
+                  }`}
+                  onClick={() => setSelectedJobId(job.eventId)}
+                  type="button"
+                >
+                  <span className="font-medium">{job.brief}</span>
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    bid up to {formatUsdcBaseUnits(job.bidBaseUnits)}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {selectedJobId ? (
+        <JobDetail
+          // Remount on job switch: `JobDetail` holds per-job payment
+          // state (selected provider, paid increments) that must never
+          // carry over to a different job.
+          key={selectedJobId}
+          bidBaseUnits={
+            ownJobs.find((job) => job.eventId === selectedJobId)
+              ?.bidBaseUnits ?? 0n
+          }
+          jobId={selectedJobId}
+        />
+      ) : null}
+    </>
   );
 }
