@@ -13,6 +13,7 @@
 import { expect, test } from "@playwright/test";
 
 import { installMockBridge } from "../helpers/bridge";
+import { waitForTimelineSettled } from "../helpers/timeline";
 
 // A managed agent that is NOT a member of any channel in the seed data.
 const OUT_OF_CHANNEL_BOT_PUBKEY =
@@ -36,12 +37,6 @@ async function readCommandLog(page: import("@playwright/test").Page) {
 
 function commandCount(commands: string[], command: string) {
   return commands.filter((c) => c === command).length;
-}
-
-// The channel timeline renders off a `useDeferredValue` snapshot; poll for the
-// pending marker to clear before asserting on freshly-sent content.
-async function waitForTimelineSettled(page: import("@playwright/test").Page) {
-  await expect(page.locator("[data-render-pending]")).toHaveCount(0);
 }
 
 // ---------------------------------------------------------------------------

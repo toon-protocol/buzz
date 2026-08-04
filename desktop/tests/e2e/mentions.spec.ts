@@ -5,6 +5,7 @@ import {
   openChannelBrowser,
   TEST_IDENTITIES,
 } from "../helpers/bridge";
+import { waitForTimelineSettled } from "../helpers/timeline";
 
 const MOCK_VIEWER_PUBKEY = "deadbeef".repeat(8);
 
@@ -146,15 +147,6 @@ async function waitForMockLiveSubscription(
       );
     })
     .toBe(true);
-}
-
-// The channel timeline renders off a `useDeferredValue` snapshot that lags the
-// latest `messages` by a commit; the list wrapper carries
-// `data-render-pending="true"` while that commit is in flight and drops the
-// attribute once it settles. Poll for its absence before asserting on
-// freshly-sent content so the assertion does not race the deferred commit.
-async function waitForTimelineSettled(page: import("@playwright/test").Page) {
-  await expect(page.locator("[data-render-pending]")).toHaveCount(0);
 }
 
 async function expectAgentProfileMessageOnly(
