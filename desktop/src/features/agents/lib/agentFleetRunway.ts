@@ -83,19 +83,23 @@ export function agentFleetRunwaySortWeight(
 }
 
 /**
- * Sort `items` so the most-starving agents surface first. Uses `Array.sort`,
- * which is stable — items with the same (or no) badge keep their existing
- * relative order rather than being shuffled.
+ * Sort `items` so the most-starving agents surface first. `badgeOf` is
+ * evaluated once per item up front (it can be as expensive as picking and
+ * sorting a group's agents) rather than on every comparison. Uses
+ * `Array.sort`, which is stable — items with the same (or no) badge keep
+ * their existing relative order rather than being shuffled.
  */
 export function sortByFleetRunway<T>(
   items: readonly T[],
   badgeOf: (item: T) => AgentFleetRunwayBadge,
 ): T[] {
-  return [...items].sort(
-    (a, b) =>
-      agentFleetRunwaySortWeight(badgeOf(a)) -
-      agentFleetRunwaySortWeight(badgeOf(b)),
-  );
+  return items
+    .map((item) => ({
+      item,
+      weight: agentFleetRunwaySortWeight(badgeOf(item)),
+    }))
+    .sort((a, b) => a.weight - b.weight)
+    .map(({ item }) => item);
 }
 
 /** The sidebar low-funds alert's count — how many fleet agents need attention right now. */
