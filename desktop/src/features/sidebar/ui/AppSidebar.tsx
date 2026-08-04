@@ -44,6 +44,7 @@ import {
   SectionQuickAction,
 } from "@/features/sidebar/ui/CustomChannelSection";
 import { CreateChannelDialog } from "@/features/sidebar/ui/CreateChannelDialog";
+import { SidebarLowFundsCard } from "@/features/sidebar/ui/SidebarLowFundsCard";
 import { SidebarProfileCard } from "@/features/sidebar/ui/SidebarProfileCard";
 import { SidebarRelayConnectionCard } from "@/features/sidebar/ui/SidebarRelayConnectionCard";
 import type { useSidebarRelayConnectionCard } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
@@ -885,6 +886,7 @@ export function AppSidebar({
                 onReconnect={relayConnectionCard.onReconnectRelay}
               />
             ) : null}
+            <SidebarLowFundsCard onOpenFleet={onSelectAgents} />
             {showSidebarUpdateCard ? (
               <div className="mb-2 group-data-[collapsible=icon]:hidden">
                 <SidebarUpdateCard
