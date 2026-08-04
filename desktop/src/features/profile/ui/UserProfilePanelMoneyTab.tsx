@@ -6,11 +6,13 @@ import {
   formatTokenCount,
   useAgentModelUsageQuery,
 } from "@/features/profile/lib/agentModelUsage";
+import { useNetworkSpend } from "@/features/profile/lib/useNetworkSpend";
 import {
   type ProfileField,
   ProfileFieldGroup,
 } from "@/features/profile/ui/UserProfilePanelFields";
 import { NetworkSpendSection } from "@/features/profile/ui/UserProfilePanelNetworkSpend";
+import { SpendAttributionSection } from "@/features/profile/ui/UserProfilePanelSpendAttribution";
 
 /**
  * Money tab (buzz#75 + #80): two blocks, deliberately never summed into one
@@ -32,6 +34,7 @@ export function ProfileMoneyTabContent({
   ownerPubkey: string | null;
 }) {
   const usageQuery = useAgentModelUsageQuery(agentPubkey, ownerPubkey);
+  const network = useNetworkSpend(isSelf);
 
   return (
     <div className="space-y-4 pt-4" data-testid="user-profile-money-tab">
@@ -40,7 +43,12 @@ export function ProfileMoneyTabContent({
         isPending={usageQuery.isPending}
         summary={usageQuery.data ?? null}
       />
-      <NetworkSpendSection isSelf={isSelf} />
+      <NetworkSpendSection isSelf={isSelf} network={network} />
+      <SpendAttributionSection
+        agentPubkey={agentPubkey}
+        isSelf={isSelf}
+        network={network.state}
+      />
     </div>
   );
 }

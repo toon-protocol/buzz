@@ -9,7 +9,7 @@ import {
   type NetworkSpendState,
 } from "@/features/profile/lib/networkSpendState";
 import { parseUsdcAmount } from "@/features/payments/lib/paymentsOverview";
-import { useNetworkSpend } from "@/features/profile/lib/useNetworkSpend";
+import type { useNetworkSpend } from "@/features/profile/lib/useNetworkSpend";
 import {
   type ProfileField,
   ProfileFieldGroup,
@@ -27,10 +27,20 @@ import { Input } from "@/shared/ui/input";
  * channel to read — see `networkSpendState.ts`'s module doc for the
  * architectural reason a managed agent's own spend cannot be read
  * remotely yet.
+ *
+ * `network` is passed in rather than read via its own `useNetworkSpend`
+ * call: `UserProfilePanelMoneyTab.tsx` fetches it once and shares it with
+ * the Spend attribution block (buzz#78) below this one, so viewing the
+ * Money tab never asks the connector for the same channel's claim state
+ * twice.
  */
-export function NetworkSpendSection({ isSelf }: { isSelf: boolean }) {
-  const network = useNetworkSpend(isSelf);
-
+export function NetworkSpendSection({
+  isSelf,
+  network,
+}: {
+  isSelf: boolean;
+  network: ReturnType<typeof useNetworkSpend>;
+}) {
   return (
     <section
       className="space-y-2"
