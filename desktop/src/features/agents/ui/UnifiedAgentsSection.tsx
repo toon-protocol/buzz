@@ -1,14 +1,20 @@
 import * as React from "react";
 import {
   AlertTriangle,
+  BatteryWarning,
   ChevronDown,
   ChevronRight,
   RefreshCw,
 } from "lucide-react";
 
 import { resolveAgentCardModelLabel } from "@/features/agents/lib/agentCardModelLabel";
+import {
+  sortByFleetRunway,
+  type AgentFleetRunwayBadge,
+} from "@/features/agents/lib/agentFleetRunway";
 import { friendlyAgentLastError } from "@/features/agents/lib/friendlyAgentLastError";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
+import { useAgentFleetRunwayBadges } from "@/features/agents/lib/useAgentFleetRunwayBadges";
 import { useUserProfileQuery } from "@/features/profile/hooks";
 import type { AgentPersona, ManagedAgent } from "@/shared/api/types";
 import type { ProfilePanelOpenOptions } from "@/shared/context/ProfilePanelContext";
@@ -101,9 +107,35 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     onImportSnapshotFile,
   } = props;
 
-  const { groups, ungrouped, unknown } = React.useMemo(
+  const {
+    groups: unsortedGroups,
+    ungrouped: unsortedUngrouped,
+    unknown: unsortedUnknown,
+  } = React.useMemo(
     () => buildUnifiedGroups(personas, agents),
     [personas, agents],
+  );
+  const runwayBadges = useAgentFleetRunwayBadges(agents);
+  const runwayBadgeForAgent = React.useCallback(
+    (agent: ManagedAgent | undefined): AgentFleetRunwayBadge =>
+      agent ? (runwayBadges.get(agent.pubkey) ?? null) : null,
+    [runwayBadges],
+  );
+  // Starving agents rise to the top of the grid (buzz#76's fleet glance).
+  const groups = React.useMemo(
+    () =>
+      sortByFleetRunway(unsortedGroups, (group) =>
+        runwayBadgeForAgent(pickProfileAgent(group.agents)),
+      ),
+    [unsortedGroups, runwayBadgeForAgent],
+  );
+  const ungrouped = React.useMemo(
+    () => sortByFleetRunway(unsortedUngrouped, runwayBadgeForAgent),
+    [unsortedUngrouped, runwayBadgeForAgent],
+  );
+  const unknown = React.useMemo(
+    () => sortByFleetRunway(unsortedUnknown, runwayBadgeForAgent),
+    [unsortedUnknown, runwayBadgeForAgent],
   );
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
   const {
@@ -179,6 +211,7 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
                   defaultModel={defaultModel}
                   key={group.persona.id}
                   persona={group.persona}
+                  runwayBadge={runwayBadgeForAgent(profileAgent)}
                   startingAgentPubkey={startingAgentPubkey}
                   startingPersonaIds={startingPersonaIds}
                   onOpenAgentProfile={onOpenAgentProfile}
@@ -203,6 +236,7 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
               defaultModel={defaultModel}
               groupKey="__unknown__"
               label="Unknown agents"
+              runwayBadgeForAgent={runwayBadgeForAgent}
               startingAgentPubkey={startingAgentPubkey}
               onToggle={toggle}
               onOpenAgentProfile={onOpenAgentProfile}
@@ -216,6 +250,7 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
               defaultModel={defaultModel}
               groupKey="__ungrouped__"
               label="Custom agents"
+              runwayBadgeForAgent={runwayBadgeForAgent}
               startingAgentPubkey={startingAgentPubkey}
               onToggle={toggle}
               onOpenAgentProfile={onOpenAgentProfile}
@@ -243,11 +278,51 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
   );
 }
 
+/** The `statusBadge` slot's single warning, in priority order — operational issues before a low-funds runway warning, never both. */
+function AgentStatusBadge({
+  agent,
+  runwayBadge,
+}: {
+  agent: ManagedAgent | undefined;
+  runwayBadge: AgentFleetRunwayBadge;
+}) {
+  if (agent?.personaOrphaned) {
+    return (
+      <Badge className="gap-1" variant="warning">
+        <AlertTriangle className="h-3 w-3" />
+        Configuration missing
+      </Badge>
+    );
+  }
+  if (agent?.needsRestart) {
+    return (
+      <Badge className="gap-1" variant="warning">
+        <RefreshCw className="h-3 w-3" />
+        Restart required
+      </Badge>
+    );
+  }
+  if (runwayBadge) {
+    return (
+      <Badge
+        className="gap-1"
+        data-testid="agent-runway-badge"
+        variant={runwayBadge.level === "critical" ? "destructive" : "warning"}
+      >
+        <BatteryWarning className="h-3 w-3" />
+        {runwayBadge.label}
+      </Badge>
+    );
+  }
+  return null;
+}
+
 function AgentPersonaCard({
   actions,
   agent,
   defaultModel,
   persona,
+  runwayBadge,
   startingAgentPubkey,
   startingPersonaIds,
   onOpenAgentProfile,
@@ -262,6 +337,7 @@ function AgentPersonaCard({
   agent: ManagedAgent | undefined;
   defaultModel: string;
   persona: AgentPersona;
+  runwayBadge: AgentFleetRunwayBadge;
   startingAgentPubkey: string | null;
   startingPersonaIds: ReadonlySet<string>;
   onOpenAgentProfile: (
@@ -337,19 +413,7 @@ function AgentPersonaCard({
         }
         onOpenPersonaProfile(persona);
       }}
-      statusBadge={
-        agent?.personaOrphaned ? (
-          <Badge className="gap-1" variant="warning">
-            <AlertTriangle className="h-3 w-3" />
-            Configuration missing
-          </Badge>
-        ) : agent?.needsRestart ? (
-          <Badge className="gap-1" variant="warning">
-            <RefreshCw className="h-3 w-3" />
-            Restart required
-          </Badge>
-        ) : null
-      }
+      statusBadge={<AgentStatusBadge agent={agent} runwayBadge={runwayBadge} />}
     />
   );
 }
@@ -357,12 +421,14 @@ function AgentPersonaCard({
 function StandaloneAgentCard({
   agent,
   defaultModel,
+  runwayBadge,
   startingAgentPubkey,
   onOpenAgentProfile,
   onStartAgent,
 }: {
   agent: ManagedAgent;
   defaultModel: string;
+  runwayBadge: AgentFleetRunwayBadge;
   startingAgentPubkey: string | null;
   onOpenAgentProfile: (
     pubkey: string,
@@ -412,19 +478,7 @@ function StandaloneAgentCard({
           opensRuntimeTab ? { tab: "runtime" } : undefined,
         );
       }}
-      statusBadge={
-        agent.personaOrphaned ? (
-          <Badge className="gap-1" variant="warning">
-            <AlertTriangle className="h-3 w-3" />
-            Configuration missing
-          </Badge>
-        ) : agent.needsRestart ? (
-          <Badge className="gap-1" variant="warning">
-            <RefreshCw className="h-3 w-3" />
-            Restart required
-          </Badge>
-        ) : null
-      }
+      statusBadge={<AgentStatusBadge agent={agent} runwayBadge={runwayBadge} />}
     />
   );
 }
@@ -502,6 +556,7 @@ function CollapsibleAgentGroup({
   agents,
   collapsed,
   defaultModel,
+  runwayBadgeForAgent,
   startingAgentPubkey,
   onToggle,
   onOpenAgentProfile,
@@ -512,6 +567,9 @@ function CollapsibleAgentGroup({
   agents: ManagedAgent[];
   collapsed: ReadonlySet<string>;
   defaultModel: string;
+  runwayBadgeForAgent: (
+    agent: ManagedAgent | undefined,
+  ) => AgentFleetRunwayBadge;
   startingAgentPubkey: string | null;
   onToggle: (key: string) => void;
   onOpenAgentProfile: (
@@ -543,6 +601,7 @@ function CollapsibleAgentGroup({
               agent={agent}
               defaultModel={defaultModel}
               key={agent.pubkey}
+              runwayBadge={runwayBadgeForAgent(agent)}
               startingAgentPubkey={startingAgentPubkey}
               onOpenAgentProfile={onOpenAgentProfile}
               onStartAgent={onStartAgent}
