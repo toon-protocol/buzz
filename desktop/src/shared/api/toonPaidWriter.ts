@@ -247,7 +247,12 @@ export function transportEndpointFields(
 }
 
 /**
- * Build a real `ToonClient` for `config`.
+ * The `ToonClient` constructor options for `config` at `accountIndex` — the
+ * identity/settlement bootstrap every `ToonClient` this app builds shares,
+ * whether it is this writer's own client or one of buzz#74's provisioning
+ * clients (`provisionAgent.ts`'s owner-scoped client for `sendTransfer`, and
+ * agent-scoped client for `openChannel`), which need a different account
+ * index and initial deposit but nothing else about the bootstrap.
  *
  * `supportedChains` and `chainRpcUrls` are both load-bearing and easy to
  * mistake for optional: the client only constructs an on-chain channel client
@@ -265,22 +270,36 @@ export function transportEndpointFields(
  * them. The exact BTP config shape is the one proven live by the huddle
  * prototype (toon-meta `proto/huddle-multi-speaker`, `multi.mjs`).
  */
-const createToonClient: PaidClientFactory = async (config) => {
+export async function buildToonClientOptions(
+  config: Pick<
+    ToonTransportConfig,
+    | "mnemonic"
+    | "connectorUrl"
+    | "btpUrl"
+    | "proxyUrl"
+    | "relayUrl"
+    | "destination"
+    | "chain"
+    | "chainRpcUrl"
+    | "tokenNetwork"
+    | "preferredToken"
+  >,
+  accountIndex: number,
+  initialDeposit?: string | null,
+): Promise<Record<string, unknown>> {
   if (config.mnemonic === null) {
     throw new ToonPaidWriteError(
       "No TOON payment identity configured (BUZZ_TOON_MNEMONIC).",
     );
   }
 
-  const [{ ToonClient }, { encodeEventToToon, decodeEventFromToon }] =
-    await Promise.all([
-      import("@toon-protocol/client"),
-      import("@toon-protocol/core"),
-    ]);
+  const { encodeEventToToon, decodeEventFromToon } = await import(
+    "@toon-protocol/core"
+  );
 
-  return new ToonClient({
+  return {
     mnemonic: config.mnemonic,
-    mnemonicAccountIndex: config.accountIndex,
+    mnemonicAccountIndex: accountIndex,
     ...transportEndpointFields(config),
     relayUrl: config.relayUrl,
     destinationAddress: config.destination,
@@ -299,10 +318,16 @@ const createToonClient: PaidClientFactory = async (config) => {
     preferredTokens: { [config.chain]: config.preferredToken },
     // Collateral for a fresh channel open. The client's own default (0.1
     // USDC) is exhausted by ~2 seconds of huddle audio; see the config field.
-    ...(config.initialDeposit !== null
-      ? { initialDeposit: config.initialDeposit }
-      : {}),
-  }) as unknown as PaidClient;
+    ...(initialDeposit != null ? { initialDeposit } : {}),
+  };
+}
+
+const createToonClient: PaidClientFactory = async (config) => {
+  const [options, { ToonClient }] = await Promise.all([
+    buildToonClientOptions(config, config.accountIndex, config.initialDeposit),
+    import("@toon-protocol/client"),
+  ]);
+  return new ToonClient(options as never) as unknown as PaidClient;
 };
 
 export class ToonPaidWriter {

@@ -104,6 +104,16 @@ fn assign_index_in(entries: &mut Vec<AccountIndexEntry>, pubkey: &str, agent_nam
     next_index
 }
 
+/// Pure lookup: `pubkey`'s already-assigned index, or `None` if it has never
+/// been assigned one (never mutates `entries` — unlike [`assign_index_in`],
+/// this must not conjure an index just because a caller asked to look).
+fn find_index_in(entries: &[AccountIndexEntry], pubkey: &str) -> Option<u32> {
+    entries
+        .iter()
+        .find(|entry| entry.pubkey == pubkey)
+        .map(|entry| entry.account_index)
+}
+
 /// Tombstone `pubkey`'s entry in place. Returns `true` if an entry was found
 /// (tombstoned or already tombstoned); `false` if `pubkey` has no entry
 /// (agent deleted before it ever spawned under this registry).
@@ -130,6 +140,19 @@ pub fn assign_account_index(
     let index = assign_index_in(&mut entries, pubkey, agent_name);
     save_registry_to_path(&path, &entries)?;
     Ok(index)
+}
+
+/// Look up `pubkey`'s already-assigned account index without assigning one
+/// (buzz#74: the provisioning flow needs to derive the agent's payment
+/// address before it can fund it, and `create_managed_agent` already
+/// assigns the index synchronously at creation — this is a read, not a
+/// fallback path). `None` when `pubkey` has no entry yet, which the caller
+/// should treat as "not provisionable yet" rather than an error.
+pub fn find_account_index(app: &AppHandle, pubkey: &str) -> Result<Option<u32>, String> {
+    let path = account_index_registry_path(app)?;
+    let _guard = REGISTRY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let entries = load_registry_from_path(&path)?;
+    Ok(find_index_in(&entries, pubkey))
 }
 
 /// Tombstone `pubkey`'s registry entry on agent deletion. The entry (and its
@@ -209,6 +232,27 @@ mod tests {
         let second = assign_index_in(&mut entries, "agent-a", "Agent A (renamed)");
         assert_eq!(first, second);
         assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn find_returns_none_for_an_unassigned_pubkey_without_mutating() {
+        let entries = Vec::new();
+        assert_eq!(find_index_in(&entries, "agent-a"), None);
+    }
+
+    #[test]
+    fn find_returns_the_assigned_index() {
+        let mut entries = Vec::new();
+        let a = assign_index_in(&mut entries, "agent-a", "Agent A");
+        assert_eq!(find_index_in(&entries, "agent-a"), Some(a));
+    }
+
+    #[test]
+    fn find_still_returns_a_tombstoned_agents_index() {
+        let mut entries = Vec::new();
+        let a = assign_index_in(&mut entries, "agent-a", "Agent A");
+        tombstone_index_in(&mut entries, "agent-a");
+        assert_eq!(find_index_in(&entries, "agent-a"), Some(a));
     }
 
     #[test]

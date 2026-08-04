@@ -6,6 +6,7 @@ import {
   type OpenCreateAgentOptions,
 } from "@/features/agents/openCreateAgentEvent";
 import { AgentDialog } from "./AgentDialog";
+import { AgentProvisioningDialog } from "./AgentProvisioningDialog";
 import { SecretRevealDialog } from "./SecretRevealDialog";
 import { usePersonaActions } from "./usePersonaActions";
 
@@ -17,6 +18,22 @@ export function RequestedAgentCreateDialogs() {
     name: string;
   } | null>(null);
   const [isOpen, setIsOpen] = React.useState(false);
+  const [provisioningAgent, setProvisioningAgent] = React.useState<{
+    pubkey: string;
+    name: string;
+  } | null>(null);
+
+  // Hand off to provisioning (buzz#74) once the secret-reveal dialog closes
+  // for a successfully created (non-spawn-error) agent — sequential, not
+  // simultaneous, so the operator sees one dialog at a time.
+  const previousCreatedAgent = React.useRef(personas.createdAgent);
+  React.useEffect(() => {
+    const was = previousCreatedAgent.current;
+    previousCreatedAgent.current = personas.createdAgent;
+    if (was && !personas.createdAgent && !was.spawnError) {
+      setProvisioningAgent({ pubkey: was.agent.pubkey, name: was.agent.name });
+    }
+  }, [personas.createdAgent]);
 
   const openCreate = React.useEffectEvent((options: OpenCreateAgentOptions) => {
     personas.prepareCreate();
@@ -71,6 +88,10 @@ export function RequestedAgentCreateDialogs() {
           }}
         />
       ) : null}
+      <AgentProvisioningDialog
+        agent={provisioningAgent}
+        onDismiss={() => setProvisioningAgent(null)}
+      />
     </>
   );
 }

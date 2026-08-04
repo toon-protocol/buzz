@@ -48,7 +48,8 @@ pub(crate) fn lock_path_mutex() -> std::sync::MutexGuard<'static, ()> {
 }
 
 pub(crate) use account_index::{
-    apply_account_index_env, assign_account_index, tombstone_account_index_best_effort,
+    apply_account_index_env, assign_account_index, find_account_index,
+    tombstone_account_index_best_effort,
 };
 pub use backend::*;
 pub use discovery::*;

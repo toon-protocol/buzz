@@ -184,8 +184,8 @@ importers:
         specifier: ^0.2.0
         version: 0.2.0
       '@toon-protocol/client':
-        specifier: ^0.25.1
-        version: 0.25.1(@solana/sysvars@5.5.1(fastestsmallesttextencoderdecoder@1.0.22)(typescript@6.0.3))(@tanstack/query-core@5.100.14)(@tanstack/react-query@5.100.14(react@19.2.8))(@types/react@19.2.17)(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(react@19.2.8)(typescript@6.0.3)(utf-8-validate@6.0.6)(zod@4.4.3)
+        specifier: ^0.26.0
+        version: 0.26.0(@solana/sysvars@5.5.1(fastestsmallesttextencoderdecoder@1.0.22)(typescript@6.0.3))(@tanstack/query-core@5.100.14)(@tanstack/react-query@5.100.14(react@19.2.8))(@types/react@19.2.17)(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(react@19.2.8)(typescript@6.0.3)(utf-8-validate@6.0.6)(zod@4.4.3)
       '@toon-protocol/core':
         specifier: ^3.1.4
         version: 3.1.4(@solana/sysvars@5.5.1(fastestsmallesttextencoderdecoder@1.0.22)(typescript@6.0.3))(@tanstack/query-core@5.100.14)(@tanstack/react-query@5.100.14(react@19.2.8))(@types/react@19.2.17)(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(react@19.2.8)(typescript@6.0.3)(utf-8-validate@6.0.6)
@@ -3128,8 +3128,8 @@ packages:
   '@toon-protocol/arweave@0.2.0':
     resolution: {integrity: sha512-+SQSrzzg1hmm6lzjptuCNxDcT8TkTEhP7E3k9HKdOm5kUHiCgdVfCtvnquzskmPYRSeEDKl7TJq0Lh5eY5hSqQ==}
 
-  '@toon-protocol/client@0.25.1':
-    resolution: {integrity: sha512-D80IA/SpNh30TXdZNjGDwezkKgMx4IMqlpvE2r4AkorKWlhPHtIfR2TnUYis2CCwEveFxLI8U9jnG/gSdIC8lw==}
+  '@toon-protocol/client@0.26.0':
+    resolution: {integrity: sha512-mb878Un/qQWjkqfFjcOJPSIGUYCwTNI3i38dnmqxCNhdlsn3mHJmsxUz6uzFackiG6A4S0qYR+uR9K38xhzaww==}
 
   '@toon-protocol/core@3.1.3':
     resolution: {integrity: sha512-qN+RXHwriLXDl67hjBWiWXo49aqLBBtOnuh+aykpjKDyuMe26cKEHraV7ydiSpHFefgzA/yOAmuKl+ArmKcpZw==}
@@ -10012,7 +10012,7 @@ snapshots:
 
   '@toon-protocol/arweave@0.2.0': {}
 
-  '@toon-protocol/client@0.25.1(@solana/sysvars@5.5.1(fastestsmallesttextencoderdecoder@1.0.22)(typescript@6.0.3))(@tanstack/query-core@5.100.14)(@tanstack/react-query@5.100.14(react@19.2.8))(@types/react@19.2.17)(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(react@19.2.8)(typescript@6.0.3)(utf-8-validate@6.0.6)(zod@4.4.3)':
+  '@toon-protocol/client@0.26.0(@solana/sysvars@5.5.1(fastestsmallesttextencoderdecoder@1.0.22)(typescript@6.0.3))(@tanstack/query-core@5.100.14)(@tanstack/react-query@5.100.14(react@19.2.8))(@types/react@19.2.17)(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(react@19.2.8)(typescript@6.0.3)(utf-8-validate@6.0.6)(zod@4.4.3)':
     dependencies:
       '@noble/ciphers': 2.1.1
       '@noble/curves': 2.0.1
@@ -11479,6 +11479,11 @@ snapshots:
     optionalDependencies:
       typescript: 6.0.3
       zod: 4.4.3
+
+  abitype@1.3.0(typescript@6.0.3)(zod@3.22.4):
+    optionalDependencies:
+      typescript: 6.0.3
+      zod: 3.22.4
 
   abitype@1.3.0(typescript@6.0.3)(zod@3.25.76):
     optionalDependencies:
@@ -13247,7 +13252,7 @@ snapshots:
       '@noble/hashes': 1.8.0
       '@scure/bip32': 1.7.0
       '@scure/bip39': 1.6.0
-      abitype: 1.2.3(typescript@6.0.3)(zod@3.22.4)
+      abitype: 1.3.0(typescript@6.0.3)(zod@3.22.4)
       eventemitter3: 5.0.1
     optionalDependencies:
       typescript: 6.0.3
@@ -13262,7 +13267,7 @@ snapshots:
       '@noble/hashes': 1.8.0
       '@scure/bip32': 1.7.0
       '@scure/bip39': 1.6.0
-      abitype: 1.2.3(typescript@6.0.3)(zod@3.25.76)
+      abitype: 1.3.0(typescript@6.0.3)(zod@3.25.76)
       eventemitter3: 5.0.1
     optionalDependencies:
       typescript: 6.0.3
@@ -13277,7 +13282,7 @@ snapshots:
       '@noble/hashes': 1.8.0
       '@scure/bip32': 1.7.0
       '@scure/bip39': 1.6.0
-      abitype: 1.2.3(typescript@6.0.3)(zod@4.4.3)
+      abitype: 1.3.0(typescript@6.0.3)(zod@4.4.3)
       eventemitter3: 5.0.1
     optionalDependencies:
       typescript: 6.0.3
@@ -13287,11 +13292,11 @@ snapshots:
   ox@0.6.7(typescript@6.0.3)(zod@3.25.76):
     dependencies:
       '@adraffy/ens-normalize': 1.11.1
-      '@noble/curves': 1.8.1
-      '@noble/hashes': 1.7.1
-      '@scure/bip32': 1.6.2
-      '@scure/bip39': 1.5.4
-      abitype: 1.0.8(typescript@6.0.3)(zod@3.25.76)
+      '@noble/curves': 1.9.7
+      '@noble/hashes': 1.8.0
+      '@scure/bip32': 1.7.0
+      '@scure/bip39': 1.6.0
+      abitype: 1.3.0(typescript@6.0.3)(zod@3.25.76)
       eventemitter3: 5.0.1
     optionalDependencies:
       typescript: 6.0.3
@@ -13301,11 +13306,11 @@ snapshots:
   ox@0.6.7(typescript@6.0.3)(zod@4.4.3):
     dependencies:
       '@adraffy/ens-normalize': 1.11.1
-      '@noble/curves': 1.8.1
-      '@noble/hashes': 1.7.1
-      '@scure/bip32': 1.6.2
-      '@scure/bip39': 1.5.4
-      abitype: 1.0.8(typescript@6.0.3)(zod@4.4.3)
+      '@noble/curves': 1.9.7
+      '@noble/hashes': 1.8.0
+      '@scure/bip32': 1.7.0
+      '@scure/bip39': 1.6.0
+      abitype: 1.3.0(typescript@6.0.3)(zod@4.4.3)
       eventemitter3: 5.0.1
     optionalDependencies:
       typescript: 6.0.3
