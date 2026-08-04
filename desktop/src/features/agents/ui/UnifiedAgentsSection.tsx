@@ -15,8 +15,7 @@ import {
 } from "@/features/agents/lib/agentFleetRunway";
 import { friendlyAgentLastError } from "@/features/agents/lib/friendlyAgentLastError";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
-import { useAgentFleetEarningBadges } from "@/features/agents/lib/useAgentFleetEarningBadges";
-import { useAgentFleetRunwayBadges } from "@/features/agents/lib/useAgentFleetRunwayBadges";
+import { useAgentFleetStatus } from "@/features/agents/lib/useAgentFleetStatus";
 import { useUserProfileQuery } from "@/features/profile/hooks";
 import type { AgentPersona, ManagedAgent } from "@/shared/api/types";
 import type { ProfilePanelOpenOptions } from "@/shared/context/ProfilePanelContext";
@@ -117,13 +116,12 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     () => buildUnifiedGroups(personas, agents),
     [personas, agents],
   );
-  const runwayBadges = useAgentFleetRunwayBadges(agents);
+  const { runwayBadges, earningPubkeys } = useAgentFleetStatus(agents);
   const runwayBadgeForAgent = React.useCallback(
     (agent: ManagedAgent | undefined): AgentFleetRunwayBadge =>
       agent ? (runwayBadges.get(agent.pubkey) ?? null) : null,
     [runwayBadges],
   );
-  const earningPubkeys = useAgentFleetEarningBadges(agents);
   const isAgentEarning = React.useCallback(
     (agent: ManagedAgent | undefined): boolean =>
       agent ? earningPubkeys.has(agent.pubkey) : false,

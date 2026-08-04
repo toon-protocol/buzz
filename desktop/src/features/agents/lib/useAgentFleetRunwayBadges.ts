@@ -1,11 +1,5 @@
-import * as React from "react";
-
-import {
-  deriveAgentFleetRunwayBadge,
-  type AgentFleetRunwayBadge,
-} from "@/features/agents/lib/agentFleetRunway";
-import { useNetworkSpend } from "@/features/profile/lib/useNetworkSpend";
-import { useIdentityQuery } from "@/shared/api/hooks";
+import type { AgentFleetRunwayBadge } from "@/features/agents/lib/agentFleetRunway";
+import { useAgentFleetStatus } from "@/features/agents/lib/useAgentFleetStatus";
 import type { ManagedAgent } from "@/shared/api/types";
 
 /**
@@ -20,22 +14,5 @@ import type { ManagedAgent } from "@/shared/api/types";
 export function useAgentFleetRunwayBadges(
   agents: readonly ManagedAgent[],
 ): ReadonlyMap<string, AgentFleetRunwayBadge> {
-  const identityQuery = useIdentityQuery();
-  const currentPubkey = identityQuery.data?.pubkey;
-  const selfSpend = useNetworkSpend(true);
-  const selfBadge = React.useMemo(
-    () => deriveAgentFleetRunwayBadge(selfSpend.state),
-    [selfSpend.state],
-  );
-
-  return React.useMemo(() => {
-    const badgeByPubkey = new Map<string, AgentFleetRunwayBadge>();
-    for (const agent of agents) {
-      const isSelf =
-        currentPubkey !== undefined &&
-        agent.pubkey.toLowerCase() === currentPubkey.toLowerCase();
-      badgeByPubkey.set(agent.pubkey, isSelf ? selfBadge : null);
-    }
-    return badgeByPubkey;
-  }, [agents, currentPubkey, selfBadge]);
+  return useAgentFleetStatus(agents).runwayBadges;
 }
