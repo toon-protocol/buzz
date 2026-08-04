@@ -52,6 +52,25 @@ export function SpendAttributionSection({
     );
   }
 
+  if (attribution.isError) {
+    return (
+      <section
+        className="space-y-2"
+        data-testid="user-profile-money-spend-attribution"
+      >
+        <h3 className="px-1 text-sm font-semibold text-foreground">
+          Spend by channel
+        </h3>
+        <p
+          className="px-1 text-sm text-muted-foreground"
+          data-testid="user-profile-money-spend-attribution-error"
+        >
+          Spend attribution couldn't be loaded.
+        </p>
+      </section>
+    );
+  }
+
   if (!attribution.breakdown || !attribution.reconciliation) return null;
 
   const { breakdown, reconciliation } = attribution;
