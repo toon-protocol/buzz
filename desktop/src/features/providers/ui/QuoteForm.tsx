@@ -17,10 +17,13 @@ import { Input } from "@/shared/ui/input";
 type IncrementRow = { id: number; milestone: string; priceInput: string };
 
 export function QuoteForm({
+  canQuote,
   jobId,
   transport,
   onQuoted,
 }: {
+  /** Whether this agent's connector session is confirmed reachable — see `ProviderJobsPanel`. */
+  canQuote: boolean;
   jobId: string;
   transport: ToonEventTransport;
   onQuoted: (event: RelayEvent) => void;
@@ -50,7 +53,7 @@ export function QuoteForm({
     return parsed.length > 0 ? parsed : null;
   })();
 
-  const canSend = parsedIncrements !== null && !sending;
+  const canSend = parsedIncrements !== null && !sending && canQuote;
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -132,6 +135,12 @@ export function QuoteForm({
         </Button>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
       </div>
+      {!canQuote ? (
+        <p className="text-xs text-destructive">
+          This agent's connector session is not currently reachable — sending a
+          quote now would likely be rejected.
+        </p>
+      ) : null}
       <Button disabled={!canSend} size="sm" type="submit">
         {sending ? "Sending…" : "Send quote"}
       </Button>

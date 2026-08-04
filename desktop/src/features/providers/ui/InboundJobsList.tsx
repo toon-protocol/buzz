@@ -14,10 +14,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/card";
  * is nothing more to a quote than the schedule itself.
  */
 export function InboundJobsList({
+  canQuote,
   jobs,
   transport,
   onQuoted,
 }: {
+  /** Whether this agent's connector session is confirmed reachable — see `ProviderJobsPanel`. */
+  canQuote: boolean;
   jobs: InboundFactoryJob[];
   transport: ToonEventTransport;
   onQuoted: (jobId: string) => void;
@@ -56,6 +59,7 @@ export function InboundJobsList({
               </div>
               {expandedJobId === job.eventId ? (
                 <QuoteForm
+                  canQuote={canQuote}
                   jobId={job.eventId}
                   onQuoted={() => {
                     setExpandedJobId(null);
@@ -65,7 +69,8 @@ export function InboundJobsList({
                 />
               ) : (
                 <button
-                  className="w-fit text-xs text-primary hover:underline"
+                  className="w-fit text-xs text-primary hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground disabled:no-underline"
+                  disabled={!canQuote}
                   onClick={() => setExpandedJobId(job.eventId)}
                   type="button"
                 >

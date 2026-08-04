@@ -328,7 +328,7 @@
 
 /* The mobile sidebar is portaled outside the app surface. */
 :root[data-buzz-sidebar]:not(.dark)
-  [data-sidebar="sidebar"][data-mobile="true"].bg-sidebar {
+[data-sidebar="sidebar"][data-mobile="true"].bg-sidebar {
   background-color: transparent;
   background-image: linear-gradient(
     to bottom,
