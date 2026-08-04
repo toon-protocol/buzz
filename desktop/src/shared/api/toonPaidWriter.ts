@@ -1,4 +1,5 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
+import type { ClaimStateResult } from "@toon-protocol/client";
 
 import {
   clearPersistedChannel,
@@ -43,14 +44,22 @@ export type PaidWriteListener = (receipt: PaidWriteReceipt) => void;
 
 /**
  * What {@link ToonPaidWriter.getNetworkFlowStatus} reads for one channel —
- * deposit and cumulative-claimed, tagged with where the read came from
- * (`"claim-state"` when the connector verified it, `"local"` for this
+ * deposit, cumulative-claimed, and credited, tagged with where the read came
+ * from (`"claim-state"` when the connector verified it, `"local"` for this
  * client's own tracked watermark).
  */
 export type RawNetworkFlowStatus = {
   channelId: string;
   depositTotalBaseUnits: bigint;
   cumulativeClaimedBaseUnits: bigint;
+  /**
+   * Earned credit netted into this SAME channel's claim watermark — never a
+   * separate ledger (`@toon-protocol/client`'s "Earning" docs, toon-meta#262
+   * decision 9). Always `0n` for `source: "local"`: this client's own
+   * tracked watermark only knows what IT spent, not a credit the connector
+   * applied — see {@link ToonPaidWriter.tryClaimState}.
+   */
+  creditedBaseUnits: bigint;
   source: "claim-state" | "local";
 };
 
@@ -100,25 +109,6 @@ export class ToonPaidWriteError extends Error {
     this.name = "ToonPaidWriteError";
   }
 }
-
-/**
- * The one shape `getNetworkFlowStatus` reads off a connector claim-state
- * answer, as `ToonClient.getClaimState` (toon-client#494) returns it — hand-
- * rolled rather than imported from `@toon-protocol/client`'s own
- * `ClaimStateResult` type, same reason every other `PaidClient` method
- * below is a hand-written subset: `getClaimState` ships in
- * `@toon-protocol/client@0.26.0`, and buzz is still pinned to `^0.25.1`
- * (toon-client#494 is not vendored yet — see `getNetworkFlowStatus`'s doc).
- * Only the fields this module reads are named.
- */
-type ClaimStateReadResult =
-  | {
-      ok: true;
-      /** `null` for a channel the connector only declared, never funded. */
-      depositTotal: string | null;
-      cumulativeClaimed: string;
-    }
-  | { ok: false };
 
 /**
  * A signed balance proof, as `ToonClient.signBalanceProof` returns it —
@@ -231,19 +221,19 @@ type PaidClient = {
   getSettleableAt(channelId: string): bigint | undefined;
   /**
    * Connector-verified deposit/cumulative-claimed for tracked channels
-   * (toon-client#494) — the runway source of truth (toon-meta#261 decision
-   * 5), correct even when this client's own local watermark has drifted.
-   * Optional: buzz's pinned `@toon-protocol/client@^0.25.1` predates
-   * toon-client#494 (it lands in 0.26.0), so no real client build supplies
-   * this yet — callers fall back to the locally-tracked
-   * `getChannelDepositTotal`/`getChannelCumulativeAmount` until the pin
-   * bumps. Kept on the interface (and wired below) so that bump is the only
-   * remaining step once it's unblocked; see `getNetworkFlowStatus`.
+   * (toon-client#494, live since `@toon-protocol/client@0.26.0`) — the
+   * runway source of truth (toon-meta#261 decision 5), correct even when
+   * this client's own local watermark has drifted. Optional rather than
+   * required only so `scriptedClient()` test doubles that omit it still
+   * satisfy this interface — every real build supplies it; a real client
+   * that ever didn't (or an unreachable connector) falls back to the
+   * locally-tracked `getChannelDepositTotal`/`getChannelCumulativeAmount`,
+   * see `getNetworkFlowStatus`.
    */
   getClaimState?(
     channelIds?: string[],
     opts?: { expiresInSeconds?: number },
-  ): Promise<ClaimStateReadResult[]>;
+  ): Promise<ClaimStateResult[]>;
   /** Add collateral to an open channel. `amount` is the delta, base units. */
   depositToChannel(
     channelId: string,
@@ -712,6 +702,7 @@ export class ToonPaidWriter {
       source: "local",
       depositTotalBaseUnits: client.getChannelDepositTotal(channelId),
       cumulativeClaimedBaseUnits: client.getChannelCumulativeAmount(channelId),
+      creditedBaseUnits: 0n,
     };
   }
 
@@ -721,6 +712,15 @@ export class ToonPaidWriter {
    * connector, or a challenge the connector could not verify) reads as "no
    * verified answer", which {@link getNetworkFlowStatus} treats as a signal
    * to fall back to the local read, not as an error to surface.
+   *
+   * `cumulativeClaimed` is the connector's NETTED watermark for this one
+   * channel (`@toon-protocol/client`'s "Earning" docs — earnings net
+   * off-chain on the same channel a client spends from, there is no
+   * separate earned ledger), so it can read below zero once this identity
+   * has been credited more than it has spent. Split that signed watermark
+   * into the two non-negative buckets {@link RawNetworkFlowStatus} carries
+   * (`spendable = deposit − owed + credited`, toon-meta#262 decision 9)
+   * rather than handing callers a watermark they'd each have to re-interpret.
    */
   private async tryClaimState(
     client: PaidClient,
@@ -728,14 +728,18 @@ export class ToonPaidWriter {
   ): Promise<{
     depositTotalBaseUnits: bigint;
     cumulativeClaimedBaseUnits: bigint;
+    creditedBaseUnits: bigint;
   } | null> {
     if (!client.getClaimState) return null;
     try {
       const [result] = await client.getClaimState([channelId]);
       if (!result?.ok || result.depositTotal === null) return null;
+      const cumulativeClaimed = BigInt(result.cumulativeClaimed);
       return {
         depositTotalBaseUnits: BigInt(result.depositTotal),
-        cumulativeClaimedBaseUnits: BigInt(result.cumulativeClaimed),
+        cumulativeClaimedBaseUnits:
+          cumulativeClaimed > 0n ? cumulativeClaimed : 0n,
+        creditedBaseUnits: cumulativeClaimed < 0n ? -cumulativeClaimed : 0n,
       };
     } catch (error) {
       console.warn(

@@ -375,6 +375,31 @@ test("getNetworkFlowStatus prefers a verified claim-state read over the local wa
   assert.equal(status.source, "claim-state");
   assert.equal(status.depositTotalBaseUnits, 10_000_000n);
   assert.equal(status.cumulativeClaimedBaseUnits, 4_000_000n);
+  assert.equal(status.creditedBaseUnits, 0n);
+});
+
+test("getNetworkFlowStatus splits a negative claim-state watermark into a credited amount (buzz#108)", async () => {
+  // A watermark below zero is the connector's netted signal that this
+  // identity has been credited more than it has spent on this channel
+  // (@toon-protocol/client's "Earning" docs, toon-meta#262 decision 9).
+  const client = scriptedClient({
+    getClaimState: (channelIds) =>
+      Promise.resolve(
+        channelIds.map(() => ({
+          ok: true,
+          depositTotal: "10000000",
+          cumulativeClaimed: "-1500000",
+        })),
+      ),
+  });
+  const writer = writerOver(client);
+  await writer.publish(EVENT);
+
+  const status = await writer.getNetworkFlowStatus();
+  assert.equal(status.source, "claim-state");
+  assert.equal(status.depositTotalBaseUnits, 10_000_000n);
+  assert.equal(status.cumulativeClaimedBaseUnits, 0n);
+  assert.equal(status.creditedBaseUnits, 1_500_000n);
 });
 
 test("getNetworkFlowStatus falls back to the local watermark when the client has no getClaimState", async () => {
@@ -389,6 +414,7 @@ test("getNetworkFlowStatus falls back to the local watermark when the client has
   assert.equal(status.source, "local");
   assert.equal(status.depositTotalBaseUnits, 5_000_000n);
   assert.equal(status.cumulativeClaimedBaseUnits, 1_000_000n);
+  assert.equal(status.creditedBaseUnits, 0n);
 });
 
 test("getNetworkFlowStatus falls back to the local watermark when claim-state is unreachable", async () => {
