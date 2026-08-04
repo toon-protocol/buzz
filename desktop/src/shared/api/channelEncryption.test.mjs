@@ -62,13 +62,20 @@ test("content round-trips through the same key", () => {
 
 test("the ciphertext leaks neither the plaintext nor its length", () => {
   const key = generateChannelKey();
-  const short = encryptChannelContent("hi", key);
-  const alsoShort = encryptChannelContent("bye", key);
+  // Distinctive, 20+ character plaintexts: a base64 payload has ~100+
+  // characters drawn from a 64-symbol alphabet, so a short/common substring
+  // like "hi" has a real chance (~2%) of appearing by coincidence. A unique
+  // string this long does not (buzz#110).
+  const plaintextA = "zQ7mK2xR9vL4nP8wT3yB";
+  const plaintextB = "hJ5cN0dF6sG1kM9oV2eZ";
+  const ciphertextA = encryptChannelContent(plaintextA, key);
+  const ciphertextB = encryptChannelContent(plaintextB, key);
 
-  assert.ok(!short.includes("hi"));
-  // NIP-44 pads to a bucket, so two short messages are the same size on the
-  // wire — the property the padding exists for.
-  assert.equal(short.length, alsoShort.length);
+  assert.ok(!ciphertextA.includes(plaintextA));
+  // NIP-44 pads to a bucket, so two short messages (both well under the
+  // 32-byte first bucket) are the same size on the wire — the property the
+  // padding exists for.
+  assert.equal(ciphertextA.length, ciphertextB.length);
 });
 
 test("the same plaintext encrypts differently every time", () => {
