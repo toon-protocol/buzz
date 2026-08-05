@@ -26,7 +26,6 @@ const RAW = {
 test("not on TOON transport reads as relay, regardless of anything else", () => {
   const state = deriveNetworkSpendState({
     isToon: false,
-    isSelf: true,
     raw: RAW,
     live: NO_LIVE,
   });
@@ -34,20 +33,9 @@ test("not on TOON transport reads as relay, regardless of anything else", () => 
   assert.equal(canRefillNetworkSpend(state), false);
 });
 
-test("TOON active but viewing another agent — no per-agent read exists, so unavailable", () => {
-  const state = deriveNetworkSpendState({
-    isToon: true,
-    isSelf: false,
-    raw: RAW,
-    live: NO_LIVE,
-  });
-  assert.deepEqual(state, { kind: "unavailable" });
-});
-
 test("read in flight reports pending", () => {
   const state = deriveNetworkSpendState({
     isToon: true,
-    isSelf: true,
     raw: "pending",
     live: NO_LIVE,
   });
@@ -55,10 +43,9 @@ test("read in flight reports pending", () => {
   assert.equal(canRefillNetworkSpend(state), false);
 });
 
-test("no channel ever opened for this identity reports unavailable, never blank", () => {
+test("no channel ever opened (or discovered) for this identity reports unavailable, never blank (buzz#109)", () => {
   const state = deriveNetworkSpendState({
     isToon: true,
-    isSelf: true,
     raw: null,
     live: NO_LIVE,
   });
@@ -68,7 +55,6 @@ test("no channel ever opened for this identity reports unavailable, never blank"
 test("a real read quotes the block and carries its source through", () => {
   const state = deriveNetworkSpendState({
     isToon: true,
-    isSelf: true,
     raw: RAW,
     live: { burnRateBaseUnitsPerSec: 2, hasSample: true },
   });
@@ -86,7 +72,6 @@ test("a real read quotes the block and carries its source through", () => {
 test("a credited amount on the claim-state read feeds straight into the quoted state (buzz#108)", () => {
   const state = deriveNetworkSpendState({
     isToon: true,
-    isSelf: true,
     raw: { ...RAW, creditedBaseUnits: 2_000_000n },
     live: NO_LIVE,
   });
@@ -98,7 +83,6 @@ test("a credited amount on the claim-state read feeds straight into the quoted s
 test("a claim-state failure degrades to the local source, still quoted, never blank", () => {
   const state = deriveNetworkSpendState({
     isToon: true,
-    isSelf: true,
     raw: { ...RAW, source: "local" },
     live: NO_LIVE,
   });

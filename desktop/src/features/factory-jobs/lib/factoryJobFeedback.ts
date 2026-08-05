@@ -40,8 +40,10 @@ export type FactoryJobQuote = FeedbackCommon & {
 
 export type FactoryJobIncrementOffer = FeedbackCommon & {
   status: "partial";
-  /** The quote (increment 1) or previous increment's offer (increment ≥ 2). */
-  parentEventId: string | null;
+  /** The quote (increment 1) or previous increment's offer (increment ≥ 2). Required per §4.1. */
+  parentEventId: string;
+  /** The buyer's pubkey — required per §4.1's `p` tag. */
+  buyerPubkey: string;
   increment: { n: number; of: number };
   artifactUrl: string;
   artifactHash: string | null;
@@ -190,8 +192,17 @@ export function parseFactoryJobFeedback(event: {
     );
     const amountTag = firstTag(event.tags, "amount");
     const conditionTag = firstTag(event.tags, "condition");
+    const parentEventId = eTag(event.tags, "reply");
+    const buyerPubkey = firstTag(event.tags, "p")?.[1];
 
-    if (!incrementTag || !artifactTag || !amountTag || !conditionTag) {
+    if (
+      !incrementTag ||
+      !artifactTag ||
+      !amountTag ||
+      !conditionTag ||
+      !parentEventId ||
+      !buyerPubkey
+    ) {
       return malformed(event.id, "partial offer missing a required tag");
     }
 
@@ -216,7 +227,8 @@ export function parseFactoryJobFeedback(event: {
     return {
       ...common,
       status: "partial",
-      parentEventId: eTag(event.tags, "reply") ?? null,
+      parentEventId,
+      buyerPubkey,
       increment: { n, of },
       artifactUrl: artifactTag[1] ?? "",
       artifactHash: hashTag?.[1] ?? null,

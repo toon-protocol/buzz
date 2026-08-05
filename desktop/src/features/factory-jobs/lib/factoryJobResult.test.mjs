@@ -5,6 +5,8 @@ import { parseFactoryJobResult } from "./factoryJobResult.ts";
 
 const ROOT_ID = "job-request-id";
 
+const REQUEST_JSON = JSON.stringify({ id: ROOT_ID, kind: 5097 });
+
 test("a completed job carries the final artifact", () => {
   const parsed = parseFactoryJobResult({
     id: "result-id",
@@ -15,6 +17,7 @@ test("a completed job carries the final artifact", () => {
       ["e", ROOT_ID, "", "root"],
       ["e", "last-offer-id", "", "reply"],
       ["p", "buyer-pubkey"],
+      ["request", REQUEST_JSON],
       ["outcome", "completed"],
       ["increment", "3", "3"],
       ["i", "final-arweave-tx", "url"],
@@ -40,6 +43,7 @@ test("an abandoned-provider result has no final artifact even if an i tag were p
     kind: 6097,
     tags: [
       ["e", ROOT_ID, "", "root"],
+      ["request", REQUEST_JSON],
       ["outcome", "abandoned-provider"],
       ["increment", "1", "3"],
       ["i", "should-be-ignored", "url"],
@@ -60,8 +64,46 @@ test("an unrecognized outcome value is rejected", () => {
       kind: 6097,
       tags: [
         ["e", ROOT_ID, "", "root"],
+        ["request", REQUEST_JSON],
         ["outcome", "cancelled"],
         ["increment", "1", "1"],
+      ],
+    }),
+    null,
+  );
+});
+
+test("a result missing the request tag is rejected (§5.1 Required)", () => {
+  assert.equal(
+    parseFactoryJobResult({
+      id: "result-id",
+      pubkey: "provider-pubkey",
+      created_at: 0,
+      kind: 6097,
+      tags: [
+        ["e", ROOT_ID, "", "root"],
+        ["outcome", "completed"],
+        ["increment", "1", "1"],
+        ["i", "final-arweave-tx", "url"],
+      ],
+    }),
+    null,
+  );
+});
+
+test("a completed outcome whose reached increment does not equal the total is rejected", () => {
+  assert.equal(
+    parseFactoryJobResult({
+      id: "result-id",
+      pubkey: "provider-pubkey",
+      created_at: 0,
+      kind: 6097,
+      tags: [
+        ["e", ROOT_ID, "", "root"],
+        ["request", REQUEST_JSON],
+        ["outcome", "completed"],
+        ["increment", "2", "3"],
+        ["i", "final-arweave-tx", "url"],
       ],
     }),
     null,

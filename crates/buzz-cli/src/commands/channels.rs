@@ -223,22 +223,49 @@ fn name_matches(name: &str, needle_lower: &str, exact: bool) -> bool {
 
 pub async fn cmd_get_channel(client: &BuzzClient, channel_id: &str) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
+    let events = fetch_channel_metadata_events(client, channel_id).await?;
+    let normalized = resolve_channel_get(&events, channel_id)?;
+    println!("{normalized}");
+    Ok(())
+}
+
+/// Query kind:39000 channel metadata by `#d = [channel_id]`. The relay's
+/// access control already scopes this to channels the caller can see, so an
+/// empty result means "no such channel" and "exists but invisible to the
+/// caller" alike — callers can't tell the two apart from this alone.
+async fn fetch_channel_metadata_events(
+    client: &BuzzClient,
+    channel_id: &str,
+) -> Result<Vec<serde_json::Value>, CliError> {
     let filter = serde_json::json!({
         "kinds": [39000],
         "#d": [channel_id],
         "limit": 1
     });
     let resp = client.query(&filter).await?;
-    let events: Vec<serde_json::Value> = serde_json::from_str(&resp).unwrap_or_default();
-    if let Some(e) = events.first() {
-        let mut normalized = extract_channel_metadata(e);
-        normalized["pubkey"] =
-            serde_json::json!(e.get("pubkey").and_then(|v| v.as_str()).unwrap_or(""));
-        println!("{normalized}");
-    } else {
-        println!("null");
-    }
-    Ok(())
+    Ok(serde_json::from_str(&resp).unwrap_or_default())
+}
+
+fn channel_not_found_error(channel_id: &str) -> CliError {
+    CliError::NotFound(format!("channel not found or not visible: {channel_id}"))
+}
+
+/// Pure core of [`cmd_get_channel`]: an empty `events` (see
+/// [`fetch_channel_metadata_events`]) must surface as a `NotFound` error
+/// (JSON on stderr, nonzero exit), never a bare `null` on stdout with exit 0,
+/// which a script or agent parsing the output can't distinguish from a real
+/// (if unnamed) channel.
+fn resolve_channel_get(
+    events: &[serde_json::Value],
+    channel_id: &str,
+) -> Result<serde_json::Value, CliError> {
+    let Some(e) = events.first() else {
+        return Err(channel_not_found_error(channel_id));
+    };
+    let mut normalized = extract_channel_metadata(e);
+    normalized["pubkey"] =
+        serde_json::json!(e.get("pubkey").and_then(|v| v.as_str()).unwrap_or(""));
+    Ok(normalized)
 }
 
 pub async fn cmd_list_channel_members(
@@ -273,8 +300,31 @@ pub async fn cmd_get_canvas(client: &BuzzClient, channel_id: &str) -> Result<(),
         .and_then(|c| c.as_str())
     {
         println!("{content}");
-    } else {
-        println!("null");
+        return Ok(());
+    }
+
+    // No canvas event, but that alone is ambiguous: it's the normal state of
+    // a visible channel that never had `canvas set` run (legitimate `null`),
+    // and it's also what an invisible/unknown channel's scoped `#h` query
+    // returns. Only a channel-visibility check breaks the tie, so — unlike
+    // the "not found" case elsewhere — this one extra query keeps the
+    // legitimate-empty-canvas case a true no-op (unchanged `null`/exit 0).
+    let channel_events = fetch_channel_metadata_events(client, channel_id).await?;
+    ensure_channel_visible_for_empty_canvas(&channel_events, channel_id)?;
+    println!("null");
+    Ok(())
+}
+
+/// Pure core of [`cmd_get_canvas`]'s disambiguation: errors when the
+/// fallback channel-visibility query also came back empty (channel doesn't
+/// exist or isn't visible to the caller), otherwise a no-op — the channel is
+/// real and visible, it simply has no canvas set yet.
+fn ensure_channel_visible_for_empty_canvas(
+    channel_events: &[serde_json::Value],
+    channel_id: &str,
+) -> Result<(), CliError> {
+    if channel_events.is_empty() {
+        return Err(channel_not_found_error(channel_id));
     }
     Ok(())
 }
@@ -1177,9 +1227,9 @@ pub async fn dispatch_canvas(cmd: crate::CanvasCmd, client: &BuzzClient) -> Resu
 mod tests {
     use super::{
         apply_cardinality_rule, build_template_report, cmd_set_add_policy,
-        finalize_roster_resolution, name_matches, resolve_roster_with_archive_filter,
-        validate_ttl_seconds, ArchivedExclusion, ChannelSummary, ResolvedAgent, RosterResolution,
-        SkippedSlug,
+        ensure_channel_visible_for_empty_canvas, finalize_roster_resolution, name_matches,
+        resolve_channel_get, resolve_roster_with_archive_filter, validate_ttl_seconds,
+        ArchivedExclusion, ChannelSummary, ResolvedAgent, RosterResolution, SkippedSlug,
     };
     use crate::client::BuzzClient;
     use crate::CliError;
@@ -1709,5 +1759,68 @@ mod tests {
             report.get("archive_state_warning").is_none(),
             "no warning key expected: {report}"
         );
+    }
+
+    // --- buzz#130: `channels get` / `canvas get` must not print a bare
+    // `null` with exit 0 for an invisible or unknown channel. ---
+
+    #[test]
+    fn resolve_channel_get_errors_not_found_on_empty_result() {
+        // Covers both "channel does not exist" and "channel exists but is
+        // invisible to the caller" — the relay's `#d` query already scopes
+        // to visible channels, so the two cases are indistinguishable here
+        // and both must be a `NotFound` error, never a printed `null`.
+        let id = "00000000-0000-0000-0000-000000000000";
+        let err = resolve_channel_get(&[], id).unwrap_err();
+        assert!(matches!(err, CliError::NotFound(_)));
+        assert!(err.to_string().contains(id));
+    }
+
+    #[test]
+    fn resolve_channel_get_returns_normalized_metadata_when_visible() {
+        let ev = event_with_pubkey(
+            json!([
+                ["d", "11111111-1111-1111-1111-111111111111"],
+                ["name", "general"],
+                ["about", "General discussion"],
+            ]),
+            "abc123",
+        );
+        let normalized = resolve_channel_get(&[ev], "11111111-1111-1111-1111-111111111111")
+            .expect("visible channel resolves");
+        assert_eq!(
+            normalized["channel_id"],
+            "11111111-1111-1111-1111-111111111111"
+        );
+        assert_eq!(normalized["name"], "general");
+        assert_eq!(normalized["description"], "General discussion");
+        assert_eq!(normalized["pubkey"], "abc123");
+    }
+
+    fn event_with_pubkey(tags: serde_json::Value, pubkey: &str) -> serde_json::Value {
+        json!({ "tags": tags, "pubkey": pubkey, "created_at": 0 })
+    }
+
+    #[test]
+    fn ensure_channel_visible_for_empty_canvas_errors_when_channel_missing() {
+        let id = "00000000-0000-0000-0000-000000000000";
+        let err = ensure_channel_visible_for_empty_canvas(&[], id).unwrap_err();
+        assert!(matches!(err, CliError::NotFound(_)));
+        assert!(err.to_string().contains(id));
+    }
+
+    #[test]
+    fn ensure_channel_visible_for_empty_canvas_is_a_noop_when_channel_visible() {
+        // A visible channel with no canvas ever set is a legitimate empty
+        // state, not an error — the fix must not turn this into a NotFound.
+        let ev = event(json!([
+            ["d", "11111111-1111-1111-1111-111111111111"],
+            ["name", "general"],
+        ]));
+        assert!(ensure_channel_visible_for_empty_canvas(
+            &[ev],
+            "11111111-1111-1111-1111-111111111111"
+        )
+        .is_ok());
     }
 }

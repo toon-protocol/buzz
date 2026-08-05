@@ -6,7 +6,10 @@ import {
   parseFactoryJobRequest,
 } from "@/features/factory-jobs/lib/factoryJobRequest";
 import type { ProviderCapabilitySettings } from "@/features/providers/lib/providerCapabilitySettings";
-import { matchesProviderCapability } from "@/features/providers/lib/providerJobMatch";
+import {
+  isOwnFactoryJob,
+  matchesProviderCapability,
+} from "@/features/providers/lib/providerJobMatch";
 import { unwrapFactoryJobRequestGift } from "@/features/providers/lib/unwrapFactoryJobRequest";
 import { getIdentitySecretKey } from "@/shared/api/identitySecretKey";
 import type { ToonEventTransport } from "@/shared/api/toonEventTransport";
@@ -27,10 +30,11 @@ import {
  * — the factory job market lives on the open relay, not the membership-
  * gated one). No filter is applied at the relay for job type or repo: there
  * is only one job kind today (decision 4 of toon-meta#262), so the query is
- * unscoped by author, and `matchesProviderCapability` narrows it
- * client-side to what this agent has opted into — advertising off hides
- * everything, since quoting costs money and nothing should look quotable
- * until the owner opts in.
+ * unscoped by author, and two client-side filters narrow it: `isOwnFactoryJob`
+ * drops a brief this agent posted itself as a buyer — it can never quote its
+ * own job — and `matchesProviderCapability` narrows to what the owner has
+ * opted into (advertising off hides everything, since quoting costs money
+ * and nothing should look quotable until the owner opts in).
  */
 
 export type InboundFactoryJob = FactoryJobRequest & {
@@ -154,6 +158,7 @@ export function useInboundFactoryJobs(
   return React.useMemo(
     () =>
       [...entriesById.values()]
+        .filter((entry) => !isOwnFactoryJob(entry.request, myPubkey))
         .filter((entry) => matchesProviderCapability(entry.request, settings))
         .map((entry) => ({
           ...entry.request,
@@ -161,6 +166,6 @@ export function useInboundFactoryJobs(
           alreadyQuoted: quotedRootIds.has(entry.request.eventId),
         }))
         .sort((a, b) => b.createdAt - a.createdAt),
-    [entriesById, quotedRootIds, settings],
+    [entriesById, quotedRootIds, settings, myPubkey],
   );
 }

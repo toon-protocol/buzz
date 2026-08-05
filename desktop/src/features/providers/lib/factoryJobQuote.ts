@@ -32,10 +32,15 @@ export type FactoryJobQuoteTemplate = {
 export function buildFactoryJobQuote(input: {
   /** The `kind:5097` job request this quote answers. */
   rootJobId: string;
+  /** The job request's author — carried as the spec-Required buyer `p` tag (§3.1). */
+  buyerPubkey: string;
   increments: FactoryJobQuoteIncrementInput[];
 }): FactoryJobQuoteTemplate {
   if (!input.rootJobId.trim()) {
     throw new Error("A quote needs the job it is answering.");
+  }
+  if (!input.buyerPubkey.trim()) {
+    throw new Error("A quote needs the buyer it is answering.");
   }
   if (input.increments.length === 0) {
     throw new Error("A quote needs at least one increment.");
@@ -65,6 +70,7 @@ export function buildFactoryJobQuote(input: {
     tags: [
       ["status", "quote"],
       ["e", input.rootJobId, "", "root"],
+      ["p", input.buyerPubkey],
     ],
   };
 }

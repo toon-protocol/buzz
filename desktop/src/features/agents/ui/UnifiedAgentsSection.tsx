@@ -6,6 +6,7 @@ import {
   ChevronRight,
   RefreshCw,
   TrendingUp,
+  WalletMinimal,
 } from "lucide-react";
 
 import { resolveAgentCardModelLabel } from "@/features/agents/lib/agentCardModelLabel";
@@ -116,7 +117,8 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     () => buildUnifiedGroups(personas, agents),
     [personas, agents],
   );
-  const { runwayBadges, earningPubkeys } = useAgentFleetStatus(agents);
+  const { runwayBadges, earningPubkeys, unprovisionedPubkeys } =
+    useAgentFleetStatus(agents);
   const runwayBadgeForAgent = React.useCallback(
     (agent: ManagedAgent | undefined): AgentFleetRunwayBadge =>
       agent ? (runwayBadges.get(agent.pubkey) ?? null) : null,
@@ -126,6 +128,11 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
     (agent: ManagedAgent | undefined): boolean =>
       agent ? earningPubkeys.has(agent.pubkey) : false,
     [earningPubkeys],
+  );
+  const isAgentUnprovisioned = React.useCallback(
+    (agent: ManagedAgent | undefined): boolean =>
+      agent ? unprovisionedPubkeys.has(agent.pubkey) : false,
+    [unprovisionedPubkeys],
   );
   // Starving agents rise to the top of the grid (buzz#76's fleet glance).
   const groups = React.useMemo(
@@ -216,6 +223,7 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
                   agent={profileAgent}
                   defaultModel={defaultModel}
                   isEarning={isAgentEarning(profileAgent)}
+                  isUnprovisioned={isAgentUnprovisioned(profileAgent)}
                   key={group.persona.id}
                   persona={group.persona}
                   runwayBadge={runwayBadgeForAgent(profileAgent)}
@@ -243,6 +251,7 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
               defaultModel={defaultModel}
               groupKey="__unknown__"
               isAgentEarning={isAgentEarning}
+              isAgentUnprovisioned={isAgentUnprovisioned}
               label="Unknown agents"
               runwayBadgeForAgent={runwayBadgeForAgent}
               startingAgentPubkey={startingAgentPubkey}
@@ -258,6 +267,7 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
               defaultModel={defaultModel}
               groupKey="__ungrouped__"
               isAgentEarning={isAgentEarning}
+              isAgentUnprovisioned={isAgentUnprovisioned}
               label="Custom agents"
               runwayBadgeForAgent={runwayBadgeForAgent}
               startingAgentPubkey={startingAgentPubkey}
@@ -287,14 +297,16 @@ export function UnifiedAgentsSection(props: UnifiedAgentsSectionProps) {
   );
 }
 
-/** The `statusBadge` slot's single warning, in priority order — operational issues before a low-funds runway warning before the earning indicator, never more than one at a time. */
+/** The `statusBadge` slot's single warning, in priority order — operational issues, then an unprovisioned wallet, then a low-funds runway warning, then the earning indicator, never more than one at a time. */
 function AgentStatusBadge({
   agent,
   isEarning,
+  isUnprovisioned,
   runwayBadge,
 }: {
   agent: ManagedAgent | undefined;
   isEarning: boolean;
+  isUnprovisioned: boolean;
   runwayBadge: AgentFleetRunwayBadge;
 }) {
   if (agent?.personaOrphaned) {
@@ -310,6 +322,18 @@ function AgentStatusBadge({
       <Badge className="gap-1" variant="warning">
         <RefreshCw className="h-3 w-3" />
         Restart required
+      </Badge>
+    );
+  }
+  if (isUnprovisioned) {
+    return (
+      <Badge
+        className="gap-1"
+        data-testid="agent-unprovisioned-badge"
+        variant="warning"
+      >
+        <WalletMinimal className="h-3 w-3" />
+        Wallet not set up
       </Badge>
     );
   }
@@ -345,6 +369,7 @@ function AgentPersonaCard({
   agent,
   defaultModel,
   isEarning,
+  isUnprovisioned,
   persona,
   runwayBadge,
   startingAgentPubkey,
@@ -361,6 +386,7 @@ function AgentPersonaCard({
   agent: ManagedAgent | undefined;
   defaultModel: string;
   isEarning: boolean;
+  isUnprovisioned: boolean;
   persona: AgentPersona;
   runwayBadge: AgentFleetRunwayBadge;
   startingAgentPubkey: string | null;
@@ -442,6 +468,7 @@ function AgentPersonaCard({
         <AgentStatusBadge
           agent={agent}
           isEarning={isEarning}
+          isUnprovisioned={isUnprovisioned}
           runwayBadge={runwayBadge}
         />
       }
@@ -453,6 +480,7 @@ function StandaloneAgentCard({
   agent,
   defaultModel,
   isEarning,
+  isUnprovisioned,
   runwayBadge,
   startingAgentPubkey,
   onOpenAgentProfile,
@@ -461,6 +489,7 @@ function StandaloneAgentCard({
   agent: ManagedAgent;
   defaultModel: string;
   isEarning: boolean;
+  isUnprovisioned: boolean;
   runwayBadge: AgentFleetRunwayBadge;
   startingAgentPubkey: string | null;
   onOpenAgentProfile: (
@@ -515,6 +544,7 @@ function StandaloneAgentCard({
         <AgentStatusBadge
           agent={agent}
           isEarning={isEarning}
+          isUnprovisioned={isUnprovisioned}
           runwayBadge={runwayBadge}
         />
       }
@@ -596,6 +626,7 @@ function CollapsibleAgentGroup({
   collapsed,
   defaultModel,
   isAgentEarning,
+  isAgentUnprovisioned,
   runwayBadgeForAgent,
   startingAgentPubkey,
   onToggle,
@@ -608,6 +639,7 @@ function CollapsibleAgentGroup({
   collapsed: ReadonlySet<string>;
   defaultModel: string;
   isAgentEarning: (agent: ManagedAgent | undefined) => boolean;
+  isAgentUnprovisioned: (agent: ManagedAgent | undefined) => boolean;
   runwayBadgeForAgent: (
     agent: ManagedAgent | undefined,
   ) => AgentFleetRunwayBadge;
@@ -642,6 +674,7 @@ function CollapsibleAgentGroup({
               agent={agent}
               defaultModel={defaultModel}
               isEarning={isAgentEarning(agent)}
+              isUnprovisioned={isAgentUnprovisioned(agent)}
               key={agent.pubkey}
               runwayBadge={runwayBadgeForAgent(agent)}
               startingAgentPubkey={startingAgentPubkey}

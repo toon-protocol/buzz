@@ -1,10 +1,7 @@
 import * as React from "react";
 
 import { providerAvailabilityCaption } from "@/features/providers/lib/providerAvailability";
-import {
-  getProviderCapabilitySettings,
-  subscribeToProviderCapabilitySettings,
-} from "@/features/providers/lib/providerCapabilitySettings";
+import { useProviderCapabilitySettings } from "@/features/providers/lib/providerCapabilitySettings";
 import { useInboundFactoryJobs } from "@/features/providers/lib/useInboundFactoryJobs";
 import { useProviderAvailability } from "@/features/providers/lib/useProviderAvailability";
 import { ProviderCapabilityToggle } from "@/features/providers/ui/ProviderCapabilityToggle";
@@ -42,10 +39,7 @@ export function ProviderJobsPanel({
   transport: ToonEventTransport;
   myPubkey: string;
 }) {
-  const settings = React.useSyncExternalStore(
-    subscribeToProviderCapabilitySettings,
-    () => getProviderCapabilitySettings(myPubkey),
-  );
+  const settings = useProviderCapabilitySettings(myPubkey);
   const [quotedCount, setQuotedCount] = React.useState(0);
 
   const jobs = useInboundFactoryJobs(transport, myPubkey, settings);
