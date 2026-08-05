@@ -1083,3 +1083,208 @@ jobs:
           LLAMA_STAGE_BACKEND: metal
           LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.cache/mesh-llama/build-stage-abi-metal
           SKIPPY_LLAMA_AUTO_BUILD: "0"
+
+  # ===========================================================================
+  # Aggregate required status check (toon-meta#279, epic toon-meta#270).
+  #
+  # Branch protection requires exactly ONE check from this workflow: "CI OK".
+  # Every other job feeds into it via `needs`. It exists because almost every
+  # job above is paths-filtered through the `changes` job: on a PR touching
+  # none of a job's paths the job reports 'skipped', and GitHub branch
+  # protection counts a skipped required check as passing. Requiring jobs
+  # individually therefore cannot distinguish "legitimately skipped (paths
+  # untouched)" from "wrongly skipped" — this job can, because it re-evaluates
+  # each job's trigger condition from the same detect outputs.
+  #
+  # Verdict logic — three cases per needed job:
+  #   1. Must-always-run jobs (`changes`, `dead-token-guard` — the only
+  #      unconditional jobs in this workflow): anything but 'success' fails.
+  #   2. Paths-filtered jobs: 'success' passes; 'skipped' passes ONLY IF the
+  #      job's own `if:` condition — mirrored below from the exact same
+  #      `needs.changes.outputs.*` flags the job consumes — evaluates false.
+  #      If the flags say the job SHOULD have run but it is 'skipped', that is
+  #      "expected but did not run" and the aggregate fails.
+  #   3. 'failure' / 'cancelled' always fail.
+  #
+  # Matrix jobs (desktop-smoke-e2e, desktop-e2e-integration-shard,
+  # server-cross-compile) surface here as one collapsed `needs.<job>.result`
+  # — 'success' only when every leg succeeded — so matrix legs are never
+  # required individually.
+  #
+  # MAINTENANCE CONTRACT: adding/removing a job in this workflow, or editing
+  # any job's `if:` condition, requires updating BOTH the `needs` list and the
+  # mirrored condition table in the step below. Mirrors must stay faithful to
+  # the jobs' own conditions.
+  # ===========================================================================
+  ci-ok:
+    name: CI OK
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # always(): this job must produce a real verdict no matter what happened
+    # upstream — a docs-only PR must end with a green "CI OK" (legit skips),
+    # and a red or cancelled upstream job must yield a red "CI OK". Never a
+    # missing or indefinitely-pending check.
+    if: always()
+    needs:
+      - changes
+      - rust-lint
+      - unit-tests
+      - desktop-core
+      - desktop-smoke-e2e
+      - desktop
+      - desktop-e2e-relay
+      - desktop-e2e-integration-shard
+      - desktop-e2e-integration
+      - backend-integration
+      - relay-e2e
+      - web
+      - mobile
+      - security
+      - dead-token-guard
+      - server-cross-compile
+      - windows-rust
+      - desktop-build-macos
+    permissions: {}
+    steps:
+      - name: Compute verdict
+        env:
+          # Everything from the workflow context is interpolated ONCE, here,
+          # into env vars; the script below is pure bash over those values.
+          EVENT_NAME: ${{ github.event_name }}
+          # The same detect outputs the gated jobs consume in their `if:`.
+          # If `changes` itself failed or was skipped these are empty, every
+          # condition below evaluates false, and the must-run check on
+          # `changes` is what fails the run.
+          OUT_RUST: ${{ needs.changes.outputs.rust }}
+          OUT_DESKTOP: ${{ needs.changes.outputs.desktop }}
+          OUT_DESKTOP_RUST: ${{ needs.changes.outputs.desktop-rust }}
+          OUT_WEB: ${{ needs.changes.outputs.web }}
+          OUT_MOBILE: ${{ needs.changes.outputs.mobile }}
+          # Collapsed per-job results (matrix jobs collapse to one result).
+          RES_CHANGES: ${{ needs.changes.result }}
+          RES_RUST_LINT: ${{ needs.rust-lint.result }}
+          RES_UNIT_TESTS: ${{ needs.unit-tests.result }}
+          RES_DESKTOP_CORE: ${{ needs.desktop-core.result }}
+          RES_DESKTOP_SMOKE_E2E: ${{ needs.desktop-smoke-e2e.result }}
+          RES_DESKTOP: ${{ needs.desktop.result }}
+          RES_DESKTOP_E2E_RELAY: ${{ needs.desktop-e2e-relay.result }}
+          RES_DESKTOP_E2E_INTEGRATION_SHARD: ${{ needs.desktop-e2e-integration-shard.result }}
+          RES_DESKTOP_E2E_INTEGRATION: ${{ needs.desktop-e2e-integration.result }}
+          RES_BACKEND_INTEGRATION: ${{ needs.backend-integration.result }}
+          RES_RELAY_E2E: ${{ needs.relay-e2e.result }}
+          RES_WEB: ${{ needs.web.result }}
+          RES_MOBILE: ${{ needs.mobile.result }}
+          RES_SECURITY: ${{ needs.security.result }}
+          RES_DEAD_TOKEN_GUARD: ${{ needs.dead-token-guard.result }}
+          RES_SERVER_CROSS_COMPILE: ${{ needs.server-cross-compile.result }}
+          RES_WINDOWS_RUST: ${{ needs.windows-rust.result }}
+          RES_DESKTOP_BUILD_MACOS: ${{ needs.desktop-build-macos.result }}
+        run: |
+          set -euo pipefail
+
+          # ---- Mirror the detect flags -------------------------------------
+          # Gated jobs test these as string equality to 'true'; so do we.
+          flag() { if [ "${1:-}" = "true" ]; then echo true; else echo false; fi; }
+          push=false
+          if [ "$EVENT_NAME" = "push" ]; then push=true; fi
+          rust=$(flag "$OUT_RUST")
+          desktop=$(flag "$OUT_DESKTOP")
+          desktop_rust=$(flag "$OUT_DESKTOP_RUST")
+          web=$(flag "$OUT_WEB")
+          mobile=$(flag "$OUT_MOBILE")
+
+          # any <bool>... -> true if any argument is 'true' (mirrors `||`).
+          any() { local b; for b in "$@"; do if [ "$b" = "true" ]; then echo true; return; fi; done; echo false; }
+
+          # ---- One mirrored condition per distinct `if:` expression --------
+          # Each line reproduces, verbatim, the trigger expression of the jobs
+          # named in its comment (`always() && (...)` wrappers on the desktop
+          # and desktop-e2e-integration gate jobs only change WHEN the job
+          # runs relative to upstream failures, not WHETHER it is expected).
+          #
+          # push || rust || desktop-rust  -> rust-lint, windows-rust
+          cond_rust_or_desktop_rust=$(any "$push" "$rust" "$desktop_rust")
+          # push || rust                  -> unit-tests, backend-integration,
+          #                                  relay-e2e, security,
+          #                                  server-cross-compile
+          cond_rust=$(any "$push" "$rust")
+          # push || desktop || desktop-rust || rust
+          #                               -> desktop-core, desktop-smoke-e2e,
+          #                                  desktop, desktop-e2e-relay,
+          #                                  desktop-e2e-integration-shard,
+          #                                  desktop-e2e-integration,
+          #                                  desktop-build-macos
+          cond_desktop_family=$(any "$push" "$desktop" "$desktop_rust" "$rust")
+          # push || web                   -> web
+          cond_web=$(any "$push" "$web")
+          # push || mobile                -> mobile
+          cond_mobile=$(any "$push" "$mobile")
+
+          # ---- Verdict table -----------------------------------------------
+          # check <job-id> <needs-result> <expected>
+          #   expected: 'must-run' — unconditional job; anything but success fails
+          #             'true'    — mirrored if: is true; the job must have run and succeeded
+          #             'false'   — mirrored if: is false; 'skipped' is legitimate
+          #
+          # Note: a job skipped because an upstream `needs` dependency failed
+          # (e.g. desktop-e2e-integration-shard after a desktop-e2e-relay
+          # failure) also reports "expected but skipped" here. That is
+          # intentional: the upstream failure already makes the verdict red,
+          # and the extra error documents the collateral skip.
+          fail=0
+          check() {
+            local job="$1" result="$2" expected="$3"
+            printf '%-32s %-10s expected-to-run=%s\n' "$job" "$result" "$expected"
+            case "$result" in
+              success)
+                ;;
+              skipped)
+                case "$expected" in
+                  must-run)
+                    echo "::error::Unconditional job '$job' did not run — the required baseline is missing."
+                    fail=1
+                    ;;
+                  true)
+                    echo "::error::Job '$job' was expected to run (its trigger condition is true for this event) but was skipped."
+                    fail=1
+                    ;;
+                  false)
+                    : # legitimately skipped — its paths were not touched
+                    ;;
+                esac
+                ;;
+              *)
+                echo "::error::Job '$job' finished with result '$result'."
+                fail=1
+                ;;
+            esac
+          }
+
+          echo "event=$EVENT_NAME rust=$rust desktop=$desktop desktop-rust=$desktop_rust web=$web mobile=$mobile"
+          echo
+
+          check changes                       "$RES_CHANGES"                       must-run
+          check dead-token-guard              "$RES_DEAD_TOKEN_GUARD"              must-run
+          check rust-lint                     "$RES_RUST_LINT"                     "$cond_rust_or_desktop_rust"
+          check unit-tests                    "$RES_UNIT_TESTS"                    "$cond_rust"
+          check desktop-core                  "$RES_DESKTOP_CORE"                  "$cond_desktop_family"
+          check desktop-smoke-e2e             "$RES_DESKTOP_SMOKE_E2E"             "$cond_desktop_family"
+          check desktop                       "$RES_DESKTOP"                       "$cond_desktop_family"
+          check desktop-e2e-relay             "$RES_DESKTOP_E2E_RELAY"             "$cond_desktop_family"
+          check desktop-e2e-integration-shard "$RES_DESKTOP_E2E_INTEGRATION_SHARD" "$cond_desktop_family"
+          check desktop-e2e-integration       "$RES_DESKTOP_E2E_INTEGRATION"       "$cond_desktop_family"
+          check backend-integration           "$RES_BACKEND_INTEGRATION"           "$cond_rust"
+          check relay-e2e                     "$RES_RELAY_E2E"                     "$cond_rust"
+          check web                           "$RES_WEB"                           "$cond_web"
+          check mobile                        "$RES_MOBILE"                        "$cond_mobile"
+          check security                      "$RES_SECURITY"                      "$cond_rust"
+          check server-cross-compile          "$RES_SERVER_CROSS_COMPILE"          "$cond_rust"
+          check windows-rust                  "$RES_WINDOWS_RUST"                  "$cond_rust_or_desktop_rust"
+          check desktop-build-macos           "$RES_DESKTOP_BUILD_MACOS"           "$cond_desktop_family"
+
+          echo
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::CI OK verdict: FAIL — see errors above."
+            exit 1
+          fi
+          echo "CI OK verdict: PASS — every gating job succeeded or was legitimately skipped."
