@@ -35,7 +35,20 @@ BEGIN
 
     ALTER TABLE events DROP COLUMN search_tsv;
     EXECUTE format(
-        'ALTER TABLE events ADD COLUMN search_tsv TSVECTOR GENERATED ALWAYS AS (CASE WHEN edit_content IS NOT NULL THEN to_tsvector(''simple'', edit_content) ELSE (%s) END) STORED',
+        -- The edit branch is guarded on the CAPTURED expression being non-NULL,
+        -- not placed ahead of it. That ordering is load-bearing: the captured
+        -- expression yields NULL exactly for the kinds that must never be
+        -- discoverable through NIP-50 search (gift wraps, p-gated membership
+        -- notices, NIP-AM metrics — see schema/schema.sql's note on the same
+        -- column). Putting `edit_content IS NOT NULL` first would let any
+        -- excluded-kind row with an edit become searchable, since
+        -- `set_edit_content` updates by id alone and applies no kind filter.
+        --
+        -- Evaluating the captured expression twice is fine for a generated
+        -- column, and it keeps this composing with whatever allowlist an
+        -- installation is currently on (the reason 0014's capture trick is
+        -- reused) while leaving the exclusion unconditional.
+        'ALTER TABLE events ADD COLUMN search_tsv TSVECTOR GENERATED ALWAYS AS (CASE WHEN (%1$s) IS NULL THEN NULL::tsvector WHEN edit_content IS NOT NULL THEN to_tsvector(''simple'', edit_content) ELSE (%1$s) END) STORED',
         existing_expression
     );
     CREATE INDEX idx_events_search_tsv ON events USING GIN (search_tsv);
