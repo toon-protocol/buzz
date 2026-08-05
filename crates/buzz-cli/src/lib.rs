@@ -592,7 +592,8 @@ pub enum MessagesCmd {
         /// Message text — supports @mentions and markdown. Use '-' to read from stdin.
         #[arg(long)]
         content: String,
-        /// Nostr event kind (default: channel default)
+        /// Nostr event kind (default: channel default — 45001/45003 forum post/comment
+        /// in forum channels, 9 chat message elsewhere)
         #[arg(long)]
         kind: Option<u16>,
         /// Event ID to reply to (creates a thread)
