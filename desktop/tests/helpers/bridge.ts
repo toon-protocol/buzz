@@ -726,7 +726,7 @@ async function stubToonChainRpc(page: Page) {
 
       // 32-byte word holding 1000 USDC at 6 decimals, the shape an ERC-20
       // `balanceOf` returns. Any positive value satisfies `fundedForToken`.
-      const TOKEN_BALANCE_WORD = `0x${(1_000_000_000n).toString(16).padStart(64, "0")}`;
+      const TOKEN_BALANCE_WORD = `0x${1_000_000_000n.toString(16).padStart(64, "0")}`;
       // 0.05 ETH in wei — `hasNativeGas` only needs > 0, but a plausible
       // figure keeps the wizard's own copy sensible if it ever renders.
       const NATIVE_BALANCE = `0x${(50_000_000_000_000_000n).toString(16)}`;
