@@ -223,32 +223,44 @@ fn name_matches(name: &str, needle_lower: &str, exact: bool) -> bool {
 
 pub async fn cmd_get_channel(client: &BuzzClient, channel_id: &str) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
+    let events = fetch_channel_metadata_events(client, channel_id).await?;
+    let normalized = resolve_channel_get(&events, channel_id)?;
+    println!("{normalized}");
+    Ok(())
+}
+
+/// Query kind:39000 channel metadata by `#d = [channel_id]`. The relay's
+/// access control already scopes this to channels the caller can see, so an
+/// empty result means "no such channel" and "exists but invisible to the
+/// caller" alike — callers can't tell the two apart from this alone.
+async fn fetch_channel_metadata_events(
+    client: &BuzzClient,
+    channel_id: &str,
+) -> Result<Vec<serde_json::Value>, CliError> {
     let filter = serde_json::json!({
         "kinds": [39000],
         "#d": [channel_id],
         "limit": 1
     });
     let resp = client.query(&filter).await?;
-    let events: Vec<serde_json::Value> = serde_json::from_str(&resp).unwrap_or_default();
-    let normalized = resolve_channel_get(&events, channel_id)?;
-    println!("{normalized}");
-    Ok(())
+    Ok(serde_json::from_str(&resp).unwrap_or_default())
 }
 
-/// Pure core of [`cmd_get_channel`]: the relay's access control already
-/// scopes the `#d` query to channels the caller can see, so an empty result
-/// means "no such channel" and "exists but invisible to the caller" alike —
-/// both must surface as a `NotFound` error (JSON on stderr, nonzero exit),
-/// never a bare `null` on stdout with exit 0, which a script or agent
-/// parsing the output can't distinguish from a real (if unnamed) channel.
+fn channel_not_found_error(channel_id: &str) -> CliError {
+    CliError::NotFound(format!("channel not found or not visible: {channel_id}"))
+}
+
+/// Pure core of [`cmd_get_channel`]: an empty `events` (see
+/// [`fetch_channel_metadata_events`]) must surface as a `NotFound` error
+/// (JSON on stderr, nonzero exit), never a bare `null` on stdout with exit 0,
+/// which a script or agent parsing the output can't distinguish from a real
+/// (if unnamed) channel.
 fn resolve_channel_get(
     events: &[serde_json::Value],
     channel_id: &str,
 ) -> Result<serde_json::Value, CliError> {
     let Some(e) = events.first() else {
-        return Err(CliError::NotFound(format!(
-            "channel not found or not visible: {channel_id}"
-        )));
+        return Err(channel_not_found_error(channel_id));
     };
     let mut normalized = extract_channel_metadata(e);
     normalized["pubkey"] =
@@ -297,14 +309,7 @@ pub async fn cmd_get_canvas(client: &BuzzClient, channel_id: &str) -> Result<(),
     // returns. Only a channel-visibility check breaks the tie, so — unlike
     // the "not found" case elsewhere — this one extra query keeps the
     // legitimate-empty-canvas case a true no-op (unchanged `null`/exit 0).
-    let channel_filter = serde_json::json!({
-        "kinds": [39000],
-        "#d": [channel_id],
-        "limit": 1
-    });
-    let channel_resp = client.query(&channel_filter).await?;
-    let channel_events: Vec<serde_json::Value> =
-        serde_json::from_str(&channel_resp).unwrap_or_default();
+    let channel_events = fetch_channel_metadata_events(client, channel_id).await?;
     ensure_channel_visible_for_empty_canvas(&channel_events, channel_id)?;
     println!("null");
     Ok(())
@@ -319,9 +324,7 @@ fn ensure_channel_visible_for_empty_canvas(
     channel_id: &str,
 ) -> Result<(), CliError> {
     if channel_events.is_empty() {
-        return Err(CliError::NotFound(format!(
-            "channel not found or not visible: {channel_id}"
-        )));
+        return Err(channel_not_found_error(channel_id));
     }
     Ok(())
 }
