@@ -853,6 +853,21 @@ async fn validate_edit_ownership(
     Ok(())
 }
 
+/// A forum channel's votable content is exactly kind:45001 (post) and
+/// kind:45003 (comment) — see [`validate_forum_vote_target`]. A chat message
+/// (kind:9 / kind:40002) accepted into a forum channel would therefore be
+/// permanently unvotable, so forum channels refuse these kinds outright
+/// rather than let any client (buggy or otherwise) recreate that state.
+fn reject_chat_kind_in_forum_channel(channel_type: &str, kind_u32: u32) -> Result<(), IngestError> {
+    let is_chat_kind = kind_u32 == KIND_STREAM_MESSAGE || kind_u32 == KIND_STREAM_MESSAGE_V2;
+    if channel_type == "forum" && is_chat_kind {
+        return Err(IngestError::Rejected(
+            "restricted: forum channels do not accept chat messages (kind 9/40002) — send a forum post (kind 45001) or comment (kind 45003) instead".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Validate kind:45002 vote targets a forum post (45001) or comment (45003).
 async fn validate_forum_vote_target(
     community_id: CommunityId,
@@ -1977,12 +1992,11 @@ async fn ingest_event_inner(
                 parts.len() >= 2 && parts[0] == "archived" && parts[1] == "false"
             });
 
-        if !is_unarchive {
-            if let Some(channel) = &channel_row {
-                if channel.archived_at.is_some() {
-                    return Err(IngestError::Rejected("invalid: channel is archived".into()));
-                }
+        if let Some(channel) = &channel_row {
+            if !is_unarchive && channel.archived_at.is_some() {
+                return Err(IngestError::Rejected("invalid: channel is archived".into()));
             }
+            reject_chat_kind_in_forum_channel(&channel.channel_type, kind_u32)?;
         }
     }
 
@@ -2562,7 +2576,7 @@ mod tests {
     use buzz_core::kind::{
         KIND_CANVAS, KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_FORUM_VOTE, KIND_LONG_FORM,
         KIND_MANAGED_AGENT, KIND_PERSONA, KIND_PRESENCE_UPDATE, KIND_STREAM_MESSAGE,
-        KIND_STREAM_MESSAGE_DIFF, KIND_TEAM, KIND_USER_STATUS,
+        KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_V2, KIND_TEAM, KIND_USER_STATUS,
     };
     use nostr::{EventBuilder, Kind};
 
@@ -2697,6 +2711,42 @@ mod tests {
                 requires_h_channel_scope(kind),
                 "kind {kind} should require h"
             );
+        }
+    }
+
+    #[test]
+    fn forum_channel_rejects_chat_kinds() {
+        for kind in [KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2] {
+            let err = reject_chat_kind_in_forum_channel("forum", kind)
+                .expect_err("chat kind must be rejected in a forum channel");
+            match err {
+                IngestError::Rejected(msg) => {
+                    assert!(
+                        msg.starts_with("restricted:"),
+                        "expected a restriction error, got {msg:?}"
+                    );
+                }
+                other => panic!("expected Rejected, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn forum_channel_allows_forum_kinds() {
+        for kind in [KIND_FORUM_POST, KIND_FORUM_COMMENT, KIND_FORUM_VOTE] {
+            assert!(reject_chat_kind_in_forum_channel("forum", kind).is_ok());
+        }
+    }
+
+    #[test]
+    fn non_forum_channels_still_accept_chat_kinds() {
+        for channel_type in ["stream", "dm", "workflow"] {
+            for kind in [KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2] {
+                assert!(
+                    reject_chat_kind_in_forum_channel(channel_type, kind).is_ok(),
+                    "channel_type {channel_type} must still accept kind {kind}"
+                );
+            }
         }
     }
 
