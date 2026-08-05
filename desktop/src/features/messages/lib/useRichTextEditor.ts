@@ -34,8 +34,8 @@ import {
   handleCodeFenceEnter,
   insertNewlineInCodeBlock,
 } from "./codeBlockExtensions";
+import { MarkdownTextWithoutHtmlEscaping } from "./markdownTextNode";
 import { SpoilerMark } from "./spoilerMark";
-import { unescapeSerializedMarkdownHtmlEntities } from "./serializedMarkdownEntities";
 
 function hardBreakLineBounds($from: ResolvedPos) {
   const parentStart = $from.start();
@@ -235,6 +235,7 @@ export function useRichTextEditor({
   const editor = useEditor(
     {
       extensions: [
+        MarkdownTextWithoutHtmlEscaping,
         StarterKit.configure({
           // Use hard breaks (Shift+Enter) — Enter submits the message.
           hardBreak: {
@@ -244,6 +245,9 @@ export function useRichTextEditor({
           // should keep the literal "#", not convert to a heading node.
           // Users type #channel-name and the "#" would get eaten otherwise.
           heading: false,
+          // Replaced below by MarkdownTextWithoutHtmlEscaping (buzz#123) — same
+          // pattern as `link: false` + a separately configured Link.
+          text: false,
           // Suppress spellcheck inside inline code spans — code identifiers
           // are not natural language and should not show red squiggles.
           code: {
@@ -924,9 +928,6 @@ function getMarkdownFromEditor(editor: Editor): string {
     // formatting. Since our messages ARE rendered as markdown, we want to
     // preserve the user's original characters so code fences, bold, etc. work.
     md = md.replace(/\\([`*\\~[\]_])/g, "$1");
-    // See serializedMarkdownEntities.ts for why tiptap-markdown's HTML
-    // escaping of `<`/`>` needs reversing before this reaches the wire.
-    md = unescapeSerializedMarkdownHtmlEntities(md);
     return md;
   }
   // Fallback: plain text
