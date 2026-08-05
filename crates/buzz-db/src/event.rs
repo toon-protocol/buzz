@@ -755,6 +755,36 @@ pub(crate) async fn count_events_on(conn: &mut sqlx::PgConnection, q: &EventQuer
     Ok(cnt)
 }
 
+/// Mirror a validated kind:40003 edit's new text into its target message's
+/// `edit_content` column, so full-text search reflects the edit (migration
+/// 0027 makes `search_tsv` prefer `edit_content` over `content` when set).
+///
+/// This never touches the target's signed `content` column — mutating that
+/// would invalidate the event's signature and break the aux-closure overlay
+/// design (clients still fetch the original event plus the kind:40003 edit
+/// and render the edit's content themselves). `edit_content` is a plain,
+/// out-of-band search mirror.
+///
+/// Returns `Ok(true)` if the target row was found and updated, `Ok(false)` if
+/// no live (non-deleted) row matched.
+pub async fn set_edit_content(
+    pool: &PgPool,
+    community_id: CommunityId,
+    target_event_id: &[u8],
+    new_content: &str,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE events SET edit_content = $1 WHERE community_id = $2 AND id = $3 AND deleted_at IS NULL",
+    )
+    .bind(new_content)
+    .bind(community_id.as_uuid())
+    .bind(target_event_id)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 /// Soft-delete an event by setting `deleted_at = NOW()`.
 ///
 /// Returns `Ok(true)` if the event was deleted, `Ok(false)` if already deleted
