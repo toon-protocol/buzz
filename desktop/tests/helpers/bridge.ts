@@ -538,6 +538,13 @@ type BridgeOptions = {
 const WELCOME_CHANNEL_ENSURED_STORAGE_KEY_PREFIX =
   "buzz-welcome-channel-ensured.v2:";
 const ONBOARDING_COMPLETION_STORAGE_KEY_PREFIX = "buzz-onboarding-complete.v1:";
+// The TOON *payments* wizard's own store (`toonOnboardingStore.ts`), which is a
+// single key rather than one per pubkey. Distinct from the buzz onboarding
+// completion flag above: on relay transport it is never read, so nothing needed
+// to seed it until `transportEnv` could turn TOON on (buzz#131). Left unseeded,
+// every bridged TOON run stops on `ToonOnboardingGate`'s "Set up payments"
+// screen and no TOON surface is reachable.
+const TOON_ONBOARDING_STORAGE_KEY = "buzz-toon-onboarding.v1";
 const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
 // The relay HTTP/WS URLs follow BUZZ_E2E_RELAY_URL (same env var seed.ts reads),
 // so a suite pointed at an isolated relay (e.g. the read-model harness on :3030)
@@ -683,6 +690,36 @@ async function seedOnboardingCompletionForKnownIdentities(
   );
 }
 
+/**
+ * Mark the TOON payments wizard already completed (buzz#131).
+ *
+ * `toonOnboardingState.ts` derives its step purely from the three stored
+ * facts — no wallet -> wallet step, no confirmed channel -> channel step, no
+ * first message -> message step, otherwise `"done"` — and `ToonOnboardingGate`
+ * renders nothing once the step is `"done"`. Seeding all three is therefore
+ * what makes a bridged TOON run land in the app rather than the wizard.
+ *
+ * The mnemonic is a fixed BIP-39 test vector, never a real wallet: the fake
+ * `PaidClientFactory` (`e2eBridgeToon.ts`) answers every payment call, so
+ * nothing derives a key from it — it only has to be non-null for `hasWallet`.
+ */
+async function seedToonOnboardingCompletion(page: Page) {
+  await page.addInitScript(
+    ({ key, state }) => {
+      window.localStorage.setItem(key, JSON.stringify(state));
+    },
+    {
+      key: TOON_ONBOARDING_STORAGE_KEY,
+      state: {
+        mnemonic:
+          "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        channelConfirmed: true,
+        firstMessageSent: true,
+      },
+    },
+  );
+}
+
 async function seedDefaultCommunity(
   page: Page,
   fallbackPubkey: string,
@@ -766,6 +803,16 @@ export async function installBridge(page: Page, options: BridgeOptions) {
   }
   if (!options.skipOnboardingSeed) {
     await seedOnboardingCompletionForKnownIdentities(page, options.relayWsUrl);
+    // Only when the spec actually asked for TOON: on relay transport the
+    // payments wizard never renders, so seeding it would assert nothing and
+    // would quietly hide a regression in the gate itself.
+    //
+    // `transportEnv` lives on `MockBridgeOptions` (the `mock` argument), not
+    // on `BridgeOptions` — `installMockBridge(page, {transportEnv})` passes it
+    // positionally as `mock`, so it is reached through `options.mock`.
+    if (options.mock?.transportEnv?.BUZZ_TRANSPORT === "toon") {
+      await seedToonOnboardingCompletion(page);
+    }
   }
   // Default to opting every preview feature in. Specs that exercise the
   // Experiments toggle UI itself pass `seedPreviewFeatures: false`.
