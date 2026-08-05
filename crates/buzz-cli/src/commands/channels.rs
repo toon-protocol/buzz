@@ -246,6 +246,31 @@ async fn fetch_channel_metadata_events(
     Ok(serde_json::from_str(&resp).unwrap_or_default())
 }
 
+/// Resolve a channel's `channel_type` (e.g. `"forum"`, `"stream"`) from its
+/// kind:39000 metadata event, for callers that need to pick a per-channel
+/// default (e.g. `messages send` resolving the default event kind). Returns
+/// `None` if the channel has no metadata event or no `t` tag.
+///
+/// Deliberately `Option` rather than the `NotFound` error `cmd_get_channel`
+/// raises (buzz#130): this is a *default-picking* read, and an unreadable
+/// channel type should fall back to the wire default and let the relay refuse
+/// the write on its own terms, rather than failing the send before it is
+/// attempted with a different error than the one the relay would give.
+pub async fn resolve_channel_type(
+    client: &BuzzClient,
+    channel_id: &str,
+) -> Result<Option<String>, CliError> {
+    let events = fetch_channel_metadata_events(client, channel_id).await?;
+    Ok(events.first().and_then(|e| {
+        let t = extract_tag_value(e, "t");
+        if t.is_empty() {
+            None
+        } else {
+            Some(t)
+        }
+    }))
+}
+
 fn channel_not_found_error(channel_id: &str) -> CliError {
     CliError::NotFound(format!("channel not found or not visible: {channel_id}"))
 }
