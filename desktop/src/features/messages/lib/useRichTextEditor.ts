@@ -35,6 +35,7 @@ import {
   insertNewlineInCodeBlock,
 } from "./codeBlockExtensions";
 import { SpoilerMark } from "./spoilerMark";
+import { unescapeSerializedMarkdownHtmlEntities } from "./serializedMarkdownEntities";
 
 function hardBreakLineBounds($from: ResolvedPos) {
   const parentStart = $from.start();
@@ -923,6 +924,11 @@ function getMarkdownFromEditor(editor: Editor): string {
     // formatting. Since our messages ARE rendered as markdown, we want to
     // preserve the user's original characters so code fences, bold, etc. work.
     md = md.replace(/\\([`*\\~[\]_])/g, "$1");
+    // tiptap-markdown's Text node serializer HTML-escapes `<`/`>` in every
+    // text node regardless of the `html: false` config option (see
+    // serializedMarkdownEntities.ts). Reverse it so the published event
+    // content carries the user's raw characters, not HTML entities.
+    md = unescapeSerializedMarkdownHtmlEntities(md);
     return md;
   }
   // Fallback: plain text
