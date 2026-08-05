@@ -84,6 +84,18 @@ function getToonE2eTestOverrides(): ToonE2eTestOverrides | undefined {
   ).__BUZZ_E2E_TOON_TEST_OVERRIDES__;
 }
 
+/** `ToonEventTransport`'s constructor parts for the e2e test overrides, or undefined so it builds its real defaults. */
+function toonTransportPartsFor(
+  config: TransportSelection["config"],
+  overrides: ToonE2eTestOverrides | undefined,
+): ConstructorParameters<typeof ToonEventTransport>[1] {
+  if (!overrides) return undefined;
+  return {
+    writer: new ToonPaidWriter(config, overrides.paidClientFactory),
+    reader: new ToonRelayReader(config.relayUrl, overrides.socketFactory),
+  };
+}
+
 /** The transport this run installed, so a later caller (the onboarding wizard) can reach it without a second resolve. */
 let activeToonTransport: ToonEventTransport | null = null;
 let activeSelection: TransportSelection | null = null;
@@ -133,21 +145,9 @@ export async function installSelectedTransport(): Promise<TransportSelection> {
   }
 
   try {
-    const overrides = getToonE2eTestOverrides();
     const transport = new ToonEventTransport(
       selection.config,
-      overrides
-        ? {
-            writer: new ToonPaidWriter(
-              selection.config,
-              overrides.paidClientFactory,
-            ),
-            reader: new ToonRelayReader(
-              selection.config.relayUrl,
-              overrides.socketFactory,
-            ),
-          }
-        : undefined,
+      toonTransportPartsFor(selection.config, getToonE2eTestOverrides()),
     );
     setEventTransport(transport);
     setArweaveGateways(selection.config.arweaveGateways);

@@ -63,6 +63,7 @@ import type {
   RawInstallRuntimeResult,
   RuntimeFileConfigSubset,
 } from "@/shared/api/tauri";
+import { savePersistedChannel } from "@/shared/api/toonChannelResumeStore";
 import type { ToonE2eTestOverrides } from "@/shared/api/transportSelection";
 import { resolveToonTransportConfig } from "@/shared/api/toonTransportConfig";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -9459,18 +9460,16 @@ function disconnectMockSocket(id: number) {
 }
 
 /**
- * Seed a resumable TOON payment channel (buzz#131) at the exact
- * `toonChannelResumeStore` localStorage key `installSelectedTransport` will
- * resolve to for this run's transport env, so `ToonPaidWriter.hasChannel()`
- * is satisfied without a real on-chain open. Only meaningful when the mocked
- * `get_transport_env` reports `BUZZ_TRANSPORT=toon` — a relay-mode run never
- * calls this.
+ * Seed a resumable TOON payment channel (buzz#131) via `toonChannelResumeStore`,
+ * keyed the same way `installSelectedTransport` will resolve it for this
+ * run's transport env, so `ToonPaidWriter.hasChannel()` is satisfied without a
+ * real on-chain open. Only meaningful when the mocked `get_transport_env`
+ * reports `BUZZ_TRANSPORT=toon` — a relay-mode run never calls this.
  */
 function seedMockToonPersistedChannel(transportEnv: Record<string, string>) {
   const toonConfig = resolveToonTransportConfig(transportEnv);
   const [chainType, chainIdRaw] = toonConfig.chain.split(":");
-  const key = `buzz-toon-channel.v1:${toonConfig.destination}|${toonConfig.chain}`;
-  const record = {
+  savePersistedChannel(toonConfig.destination, toonConfig.chain, {
     channelId: MOCK_TOON_CHANNEL_ID,
     context: {
       chainType: chainType ?? "evm",
@@ -9480,8 +9479,7 @@ function seedMockToonPersistedChannel(transportEnv: Record<string, string>) {
     },
     nonce: 0,
     cumulativeAmount: "0",
-  };
-  window.localStorage.setItem(key, JSON.stringify(record));
+  });
 }
 
 export function maybeInstallE2eTauriMocks() {
