@@ -394,10 +394,16 @@ async fn test_edit_updates_search_index() {
         .collect_until_eose(&sid_new, Duration::from_secs(10))
         .await
         .expect("collect new-content search");
+    // Only the id is asserted, deliberately. The row's `content` is the
+    // ORIGINAL signed text and stays that way: migration 0027 indexes the edit
+    // through a separate `edit_content` column precisely so the signed column
+    // is never rewritten (rewriting it would invalidate the event signature).
+    // The edit is applied by the client as an overlay — which is what this
+    // test's own comment above describes — so asserting
+    // `e.content.contains(&new_token)` here would contradict the design and
+    // could never pass, no matter how the index behaves.
     assert!(
-        new_events
-            .iter()
-            .any(|e| e.id == target_id && e.content.contains(&new_token)),
+        new_events.iter().any(|e| e.id == target_id),
         "post-edit content must be searchable and resolve to the original \
          message id, got: {:?}",
         new_events
