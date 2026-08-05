@@ -6,6 +6,15 @@ import { deriveFactoryJobCard } from "./factoryJobCard.ts";
 const ROOT_ID = "a".repeat(64);
 const PROVIDER_PUBKEY = "b".repeat(64);
 const BUYER_PUBKEY = "c".repeat(64);
+// The quote this branch's partial offer replies to (§4.1 Required `reply`
+// e-tag). buzz#126 made the parsers reject spec-Required omissions, so a
+// fixture missing this — or the buyer `p` tag, or 6097's `request` tag —
+// now parses as malformed and renders "unrecognized" rather than its card.
+const QUOTE_ID = "f".repeat(64);
+const REQUEST_JSON = JSON.stringify({
+  repo: "toon-protocol/buzz",
+  brief: "fixture request",
+});
 
 function baseEvent(overrides) {
   return {
@@ -52,6 +61,7 @@ test("6097 result: completed outcome renders a labeled result card", () => {
         ["outcome", "completed"],
         ["increment", "3", "3"],
         ["i", "https://arweave.net/abc", "url"],
+        ["request", REQUEST_JSON],
       ],
     }),
   );
@@ -70,6 +80,7 @@ test("6097 result: abandoned-provider outcome renders distinctly from completed"
         ["e", ROOT_ID, "", "root"],
         ["outcome", "abandoned-provider"],
         ["increment", "1", "3"],
+        ["request", REQUEST_JSON],
       ],
     }),
   );
@@ -115,11 +126,13 @@ test("7000 feedback: partial increment offer renders a labeled increment card", 
       pubkey: PROVIDER_PUBKEY,
       tags: [
         ["e", ROOT_ID, "", "root"],
+        ["e", QUOTE_ID, "", "reply"],
         ["status", "partial"],
         ["increment", "1", "2"],
         ["i", "https://arweave.net/xyz", "url"],
         ["amount", "1000000"],
         ["condition", "e".repeat(64)],
+        ["p", BUYER_PUBKEY],
       ],
     }),
   );
