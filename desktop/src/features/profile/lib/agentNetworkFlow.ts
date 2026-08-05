@@ -12,15 +12,17 @@ import { formatUsdcBaseUnits } from "@/features/onboarding/toon/toonOnboardingFo
  * stayed pure by design (mirrors `paymentsOverview.ts`'s
  * pure-derivation-first idiom) — the connector claim-state read it feeds
  * from (toon-client#494's `getClaimState()`) now IS live, wired through
- * `ToonPaidWriter.getNetworkFlowStatus()` and `networkSpendState.ts`
- * (buzz#80, buzz#108), for the identity this desktop process pays as. The
- * `creditedBaseUnits` half of a `NetworkFlowRead` comes straight from that
- * read; `incomeRateBaseUnitsPerSec`/`incomeSampleCount` remain unwired —
- * no live event feed exists for inbound payments (only
- * `networkSpendLiveStore.ts`'s outbound `onPaidWrite`) — so runway still
- * degrades to burn-only until that lands. A per-agent read for any identity
- * other than `isSelf` is still absent (buzz#79's ADR 0006 — no
- * `toon-clientd` spawn/lifecycle for managed agents yet).
+ * `ToonPaidWriter.getNetworkFlowStatus()` for the identity this desktop
+ * process pays as, and through `agentClaimStateRead.ts`'s no-daemon batched
+ * read (buzz#109, `docs/adr/0007`) for every other managed agent — both feed
+ * `networkSpendState.ts` (buzz#80, buzz#108). The `creditedBaseUnits` half
+ * of a `NetworkFlowRead` comes straight from that read;
+ * `incomeRateBaseUnitsPerSec`/`incomeSampleCount` remain unwired — no live
+ * event feed exists for inbound payments (only `networkSpendLiveStore.ts`'s
+ * outbound `onPaidWrite`, itself `isSelf`-only) — so runway still degrades
+ * to burn-only until that lands, and a non-`isSelf` agent's runway never has
+ * a burn sample at all (nothing observes another identity's writes from
+ * this process).
  *
  * Per the Gotchas, income here is never read from a self-reported
  * money-report event — only from `NetworkFlowRead`, the shape a connector
