@@ -133,7 +133,8 @@ buzz channels list --member | jq .
 
 # channels get
 buzz channels get --channel "$CHANNEL_ID" | jq .
-# Expected: {"channel_id":"...","name":"...","description":"...","created_at":N,"pubkey":"..."} or null
+# Expected: {"channel_id":"...","name":"...","description":"...","created_at":N,"pubkey":"..."}
+# Unknown/invisible channel: JSON error on stderr, exit 1 — see § 7.
 
 # channels update
 buzz channels update --channel "$CHANNEL_ID" --name "test-cli-updated" \
@@ -183,7 +184,8 @@ echo "# Canvas from stdin" | buzz canvas set --channel "$CHANNEL_ID" --content -
 
 # canvas get
 buzz canvas get --channel "$CHANNEL_ID"
-# Expected: raw markdown string, or: null
+# Expected: raw markdown string, or: null (channel visible, canvas never set)
+# Unknown/invisible channel: JSON error on stderr, exit 1 — see § 7.
 ```
 
 ### 6.3 Messages
@@ -387,7 +389,8 @@ buzz workflows list --channel "$CHANNEL_ID" | jq .
 
 # workflows get
 buzz workflows get --workflow "$WF_ID" | jq .
-# Expected: {"workflow_id":"...","content":"<yaml>","created_at":N,"pubkey":"..."} or null
+# Expected: {"workflow_id":"...","content":"<yaml>","created_at":N,"pubkey":"..."}
+# Unknown/invisible workflow: JSON error on stderr, exit 1 — see § 7.
 
 # workflows update (requires --channel)
 buzz workflows update --channel "$CHANNEL_ID" --workflow "$WF_ID" \
@@ -519,10 +522,22 @@ env -u BUZZ_PRIVATE_KEY \
 # stderr: {"error":"auth_error","message":"auth error: BUZZ_PRIVATE_KEY is required (use --private-key or set env var)"}
 # exit: 3
 
-# Not-found returns null, not an error (exit 0)
-buzz channels get --channel "00000000-0000-0000-0000-000000000000"
-# stdout: null
-# exit: 0
+# Exit 1: unknown/invisible channel — JSON error, not a bare `null` (buzz#130)
+buzz channels get --channel "00000000-0000-0000-0000-000000000000" 2>&1; echo "exit: $?"
+# stderr: {"error":"not_found","message":"channel not found or not visible: 00000000-0000-0000-0000-000000000000","retryable":false}
+# exit: 1
+
+# Exit 1: same fix applied to `workflows get` (buzz#130)
+buzz workflows get --workflow "00000000-0000-0000-0000-000000000000" 2>&1; echo "exit: $?"
+# stderr: {"error":"not_found","message":"workflow not found or not visible: 00000000-0000-0000-0000-000000000000","retryable":false}
+# exit: 1
+
+# `canvas get` for an unknown/invisible channel is the same NotFound error —
+# but a *visible* channel with no canvas ever set still prints `null`/exit 0,
+# since that's a legitimate empty state, not a missing/invisible resource.
+buzz canvas get --channel "00000000-0000-0000-0000-000000000000" 2>&1; echo "exit: $?"
+# stderr: {"error":"not_found","message":"channel not found or not visible: 00000000-0000-0000-0000-000000000000","retryable":false}
+# exit: 1
 ```
 
 ---
