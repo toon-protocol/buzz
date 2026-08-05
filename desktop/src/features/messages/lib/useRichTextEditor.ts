@@ -34,6 +34,7 @@ import {
   handleCodeFenceEnter,
   insertNewlineInCodeBlock,
 } from "./codeBlockExtensions";
+import { MarkdownTextWithoutHtmlEscaping } from "./markdownTextNode";
 import { SpoilerMark } from "./spoilerMark";
 
 function hardBreakLineBounds($from: ResolvedPos) {
@@ -234,6 +235,7 @@ export function useRichTextEditor({
   const editor = useEditor(
     {
       extensions: [
+        MarkdownTextWithoutHtmlEscaping,
         StarterKit.configure({
           // Use hard breaks (Shift+Enter) — Enter submits the message.
           hardBreak: {
@@ -243,6 +245,9 @@ export function useRichTextEditor({
           // should keep the literal "#", not convert to a heading node.
           // Users type #channel-name and the "#" would get eaten otherwise.
           heading: false,
+          // Replaced below by MarkdownTextWithoutHtmlEscaping (buzz#123) — same
+          // pattern as `link: false` + a separately configured Link.
+          text: false,
           // Suppress spellcheck inside inline code spans — code identifiers
           // are not natural language and should not show red squiggles.
           code: {
