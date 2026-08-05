@@ -8,6 +8,7 @@ import { AddAgentToChannelDialog } from "./AddAgentToChannelDialog";
 import { AddTeamToChannelDialog } from "./AddTeamToChannelDialog";
 import { AgentDefaultsDialog } from "./AgentDefaultsDialog";
 import { AgentDialog } from "./AgentDialog";
+import { AgentProvisioningDialog } from "./AgentProvisioningDialog";
 import { PersonaCatalogDialog } from "./PersonaCatalogDialog";
 import { PersonaDeleteDialog } from "./PersonaDeleteDialog";
 import { PersonaShareDialog } from "./PersonaShareDialog";
@@ -24,6 +25,7 @@ import { UnifiedAgentsSection } from "./UnifiedAgentsSection";
 import { useManagedAgentActions } from "./useManagedAgentActions";
 import { usePersonaActions } from "./usePersonaActions";
 import { useTeamActions } from "./useTeamActions";
+import { useAgentProvisioningHandoff } from "@/features/agents/useAgentProvisioningHandoff";
 import { useProfilePanel } from "@/shared/context/ProfilePanelContext";
 import { useBakedBuildEnvQuery } from "@/features/agents/hooks";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
@@ -53,6 +55,22 @@ export function AgentsView() {
   // Exclusivity: create never sets `personaDialogState` (edit/dup/import do),
   // so the create-mode and definition-edit AgentDialog mounts never coexist.
   const [isCreateDialogOpen, setIsCreateDialogOpen] = React.useState(false);
+
+  // Hand off to wallet provisioning (buzz#74/buzz#122) once secret-reveal
+  // closes for a successfully created agent — this page has two surfaces
+  // that mint a new managed agent (the create/duplicate flow's
+  // `personas.createdAgent`, and "start this persona now"'s
+  // `agents.createdAgent`), so both are watched; only one is ever set at a
+  // time since they come from mutually exclusive user actions.
+  const personaProvisioning = useAgentProvisioningHandoff(
+    personas.createdAgent,
+  );
+  const managedAgentProvisioning = useAgentProvisioningHandoff(
+    agents.createdAgent,
+  );
+  const provisioningAgent =
+    personaProvisioning.provisioningAgent ??
+    managedAgentProvisioning.provisioningAgent;
 
   function openUnifiedCreate() {
     personas.prepareCreate();
@@ -352,6 +370,13 @@ export function AgentsView() {
           }}
         />
       ) : null}
+      <AgentProvisioningDialog
+        agent={provisioningAgent}
+        onDismiss={() => {
+          personaProvisioning.dismissProvisioning();
+          managedAgentProvisioning.dismissProvisioning();
+        }}
+      />
       {personas.personaDialogState ? (
         <AgentDialog
           description={personas.personaDialogState.description}

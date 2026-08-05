@@ -1,4 +1,5 @@
 import { agentProvisioningStepNumber } from "@/features/agents/lib/agentProvisioningState";
+import { setAgentProvisioningDeclined } from "@/features/agents/lib/agentProvisioningStore";
 import { useAgentProvisioning } from "@/features/agents/useAgentProvisioning";
 import { formatUsdcBaseUnits } from "@/features/onboarding/toon/toonOnboardingFormat";
 import { Alert, AlertDescription } from "@/shared/ui/alert";
@@ -24,7 +25,10 @@ import { StepProgress } from "@/shared/ui/step-progress";
  * (`agentProvisioningState.ts`) rather than a stored counter, so reopening
  * this dialog for an agent that is already partway funded resumes correctly.
  * Renders nothing once TOON is not the active transport, or once the agent
- * is fully provisioned.
+ * is fully provisioned. Declining ("Do this later" or closing any other way)
+ * persists a declined flag (`agentProvisioningStore.ts`) so the Agents grid
+ * can show a visible "Wallet not set up" indicator instead of silently
+ * leaving the agent with no wallet or channel (buzz#122 AC2).
  */
 export function AgentProvisioningDialog({
   agent,
@@ -39,8 +43,16 @@ export function AgentProvisioningDialog({
     provisioning.active &&
     provisioning.status.step !== "done";
 
+  // Declining (button or closing the dialog any other way) leaves a visible
+  // "unprovisioned" indicator on the agent's card (buzz#122 AC2) instead of
+  // silently dropping back to no wallet/channel with no trace.
+  function decline() {
+    if (agent) setAgentProvisioningDeclined(agent.pubkey, true);
+    onDismiss();
+  }
+
   return (
-    <Dialog onOpenChange={(next) => !next && onDismiss()} open={open}>
+    <Dialog onOpenChange={(next) => !next && decline()} open={open}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>
@@ -69,7 +81,7 @@ export function AgentProvisioningDialog({
         </div>
 
         <div className="mt-4 flex justify-end">
-          <Button onClick={onDismiss} type="button" variant="ghost">
+          <Button onClick={decline} type="button" variant="ghost">
             Do this later
           </Button>
         </div>

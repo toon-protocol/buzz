@@ -55,7 +55,7 @@ function QuoteCard({ row, selected, onSelect }: QuoteCardProps) {
         </ul>
         <p className="text-xs text-muted-foreground">
           {row.reputation
-            ? `${row.reputation.jobsCompleted} job${row.reputation.jobsCompleted === 1 ? "" : "s"} completed · ${gatePassRateLabel(row.reputation.gatePassRate)}`
+            ? `${row.reputation.jobsCompleted} job${row.reputation.jobsCompleted === 1 ? "" : "s"} completed · ${gatePassRateLabel(row.reputation.gatePassRate, row.reputation.jobsCompleted)}`
             : "New provider — no job history yet"}
         </p>
       </CardContent>
