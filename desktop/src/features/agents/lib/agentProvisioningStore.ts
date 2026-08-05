@@ -55,6 +55,7 @@ function defaultStorage(): AgentProvisioningStorage {
 
 let storage: AgentProvisioningStorage = defaultStorage();
 const listeners = new Set<() => void>();
+let version = 0;
 
 /** Swap the backing store. For tests and for a future keychain backend. */
 export function setAgentProvisioningStorage(
@@ -73,7 +74,18 @@ function declinedStorageKey(pubkey: string): string {
 }
 
 function notify(): void {
+  version++;
   for (const listener of listeners) listener();
+}
+
+/**
+ * Bumped on every write. Lets `useSyncExternalStore` consumers that derive
+ * from many pubkeys at once (e.g. {@link subscribeToAgentProvisioningState}'s
+ * fleet-wide readers) invalidate a single memo instead of subscribing per
+ * pubkey.
+ */
+export function getAgentProvisioningVersion(): number {
+  return version;
 }
 
 /** Whether this flow has already confirmed `pubkey`'s channel is open. */

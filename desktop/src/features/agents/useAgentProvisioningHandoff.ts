@@ -3,9 +3,10 @@ import * as React from "react";
 import {
   shouldHandoffToProvisioning,
   type CreatedAgentForHandoff,
+  type ProvisioningHandoffAgent,
 } from "./lib/agentProvisioningHandoff";
 
-export type ProvisioningHandoffAgent = { pubkey: string; name: string };
+export type { ProvisioningHandoffAgent };
 
 /**
  * Hand off to `AgentProvisioningDialog` (buzz#74) once a create flow's own

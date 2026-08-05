@@ -9,8 +9,10 @@
  * agent actually spawned (no `spawnError`) rather than failing to start.
  */
 
+export type ProvisioningHandoffAgent = { pubkey: string; name: string };
+
 export type CreatedAgentForHandoff = {
-  agent: { pubkey: string; name: string };
+  agent: ProvisioningHandoffAgent;
   spawnError?: string | null;
 };
 

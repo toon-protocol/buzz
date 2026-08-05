@@ -7,6 +7,7 @@ import {
 } from "@/features/agents/lib/agentFleetRunway";
 import { isAgentProvisioningUnprovisioned } from "@/features/agents/lib/agentProvisioningBadge";
 import {
+  getAgentProvisioningVersion,
   isAgentChannelConfirmed,
   isAgentProvisioningDeclined,
   subscribeToAgentProvisioningState,
@@ -52,19 +53,16 @@ export function useAgentFleetStatus(
   // The provisioning declined/channel-confirmed flags are client-local
   // (buzz#122), unlike the network-derived runway/earning state above, so
   // every agent can read its own — not just the identity this process pays
-  // as. Re-render on any change to either flag by bumping a counter; the
-  // memo below re-reads the flags directly rather than caching them.
-  const [provisioningVersion, bumpProvisioningVersion] = React.useReducer(
-    (count: number) => count + 1,
-    0,
-  );
-  React.useEffect(
-    () => subscribeToAgentProvisioningState(bumpProvisioningVersion),
-    [],
+  // as. The memo below re-reads them directly per agent rather than caching
+  // them, so it only needs to know that *something* changed; the store's
+  // version counter is a cheap stand-in for reading every agent's flags.
+  const provisioningVersion = React.useSyncExternalStore(
+    subscribeToAgentProvisioningState,
+    getAgentProvisioningVersion,
   );
   const toonActive = getActiveTransportSelection()?.mode === "toon";
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: provisioningVersion is never read in the body — it's a version bump that forces this memo to re-read the mutable agentProvisioningStore.ts flags below on any change
+  // biome-ignore lint/correctness/useExhaustiveDependencies: provisioningVersion is never read in the body — it's a useSyncExternalStore snapshot that forces this memo to re-read the mutable agentProvisioningStore.ts flags below on any change
   return React.useMemo(() => {
     const runwayBadges = new Map<string, AgentFleetRunwayBadge>();
     const earningPubkeys = new Set<string>();
