@@ -924,10 +924,8 @@ function getMarkdownFromEditor(editor: Editor): string {
     // formatting. Since our messages ARE rendered as markdown, we want to
     // preserve the user's original characters so code fences, bold, etc. work.
     md = md.replace(/\\([`*\\~[\]_])/g, "$1");
-    // tiptap-markdown's Text node serializer HTML-escapes `<`/`>` in every
-    // text node regardless of the `html: false` config option (see
-    // serializedMarkdownEntities.ts). Reverse it so the published event
-    // content carries the user's raw characters, not HTML entities.
+    // See serializedMarkdownEntities.ts for why tiptap-markdown's HTML
+    // escaping of `<`/`>` needs reversing before this reaches the wire.
     md = unescapeSerializedMarkdownHtmlEntities(md);
     return md;
   }
