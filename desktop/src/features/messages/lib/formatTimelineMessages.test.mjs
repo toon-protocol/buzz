@@ -12,6 +12,9 @@ import {
 import {
   CHANNEL_AUX_EVENT_KINDS,
   CHANNEL_TIMELINE_CONTENT_KINDS,
+  KIND_FACTORY_JOB_FEEDBACK,
+  KIND_FACTORY_JOB_REQUEST,
+  KIND_FACTORY_JOB_RESULT,
   KIND_HUDDLE_ENDED,
   KIND_HUDDLE_STARTED,
 } from "@/shared/constants/kinds";
@@ -83,6 +86,62 @@ function huddleStarted(overrides = {}) {
       ephemeral_channel_id: "8d764100-fd8f-44cf-9c98-6d8fbd739b8c",
     }),
     tags: [["h", CHANNEL_ID]],
+    sig: "sig",
+    ...overrides,
+  };
+}
+
+// buzz#125: NIP-90 factory job events (5097 request / 6097 result / 7000
+// feedback) — already timeline content kinds, but with no renderer until this
+// ticket. These fixtures cover empty-content events too, since that's the
+// real on-wire shape for 5097/6097 (see factoryJob{Request,Result}.ts).
+function factoryJobRequest(overrides = {}) {
+  return {
+    id: HEX64_B,
+    pubkey: PUBKEY_A,
+    kind: KIND_FACTORY_JOB_REQUEST,
+    created_at: 1_700_000_001,
+    content: "",
+    tags: [
+      ["h", CHANNEL_ID],
+      ["i", "Refactor the auth module", "text"],
+      ["bid", "5000000", "usdc"],
+    ],
+    sig: "sig",
+    ...overrides,
+  };
+}
+
+function factoryJobResult(overrides = {}) {
+  return {
+    id: HEX64_B,
+    pubkey: PUBKEY_A,
+    kind: KIND_FACTORY_JOB_RESULT,
+    created_at: 1_700_000_001,
+    content: "",
+    tags: [
+      ["h", CHANNEL_ID],
+      ["e", HEX64_A, "", "root"],
+      ["outcome", "completed"],
+      ["increment", "3", "3"],
+    ],
+    sig: "sig",
+    ...overrides,
+  };
+}
+
+function factoryJobFeedback(overrides = {}) {
+  return {
+    id: HEX64_B,
+    pubkey: PUBKEY_A,
+    kind: KIND_FACTORY_JOB_FEEDBACK,
+    created_at: 1_700_000_001,
+    content: "Running the test suite now",
+    tags: [
+      ["h", CHANNEL_ID],
+      ["e", HEX64_A, "", "root"],
+      ["status", "processing"],
+    ],
     sig: "sig",
     ...overrides,
   };
@@ -334,6 +393,59 @@ test("huddle start renders as a timeline row", () => {
   const out = formatTimelineMessages([huddleStarted()], null, undefined, null);
   assert.equal(out.length, 1);
   assert.equal(out[0].kind, KIND_HUDDLE_STARTED);
+});
+
+test("5097 factory job request renders as a timeline row with empty body", () => {
+  const out = formatTimelineMessages(
+    [factoryJobRequest()],
+    null,
+    undefined,
+    null,
+  );
+  assert.equal(out.length, 1);
+  assert.equal(out[0].kind, KIND_FACTORY_JOB_REQUEST);
+  assert.equal(out[0].body, "", "the brief lives on tags, not content");
+  assert.ok(out[0].tags.some((tag) => tag[0] === "i"));
+});
+
+test("6097 factory job result renders as a timeline row with empty body", () => {
+  const out = formatTimelineMessages(
+    [factoryJobResult()],
+    null,
+    undefined,
+    null,
+  );
+  assert.equal(out.length, 1);
+  assert.equal(out[0].kind, KIND_FACTORY_JOB_RESULT);
+  assert.equal(out[0].body, "");
+  assert.ok(out[0].tags.some((tag) => tag[0] === "outcome"));
+});
+
+test("7000 factory job feedback renders as a timeline row carrying its narration", () => {
+  const out = formatTimelineMessages(
+    [factoryJobFeedback()],
+    null,
+    undefined,
+    null,
+  );
+  assert.equal(out.length, 1);
+  assert.equal(out[0].kind, KIND_FACTORY_JOB_FEEDBACK);
+  assert.equal(out[0].body, "Running the test suite now");
+});
+
+test("6097 factory job result with no tags still renders as a timeline row (empty-content event)", () => {
+  const out = formatTimelineMessages(
+    [factoryJobResult({ tags: [["h", CHANNEL_ID]], content: "" })],
+    null,
+    undefined,
+    null,
+  );
+  assert.equal(
+    out.length,
+    1,
+    "a malformed/empty factory-job event must still occupy a visible row",
+  );
+  assert.equal(out[0].kind, KIND_FACTORY_JOB_RESULT);
 });
 
 test("deletion target with non-hex `e` tag value is ignored", () => {

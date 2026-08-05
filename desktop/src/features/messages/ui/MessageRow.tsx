@@ -9,6 +9,7 @@ import {
 } from "@/features/messages/lib/messageRowEquality";
 import type { TimelineMessage } from "@/features/messages/types";
 import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
+import { FactoryJobCard } from "@/features/factory-jobs/ui/FactoryJobCard";
 import { HuddleAttachment } from "@/features/huddle/components/HuddleAttachment";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
@@ -25,6 +26,9 @@ import {
   THREAD_REPLY_LINE_WIDTH_REM,
 } from "@/features/messages/lib/threadTreeLayout";
 import {
+  KIND_FACTORY_JOB_FEEDBACK,
+  KIND_FACTORY_JOB_REQUEST,
+  KIND_FACTORY_JOB_RESULT,
   KIND_HUDDLE_STARTED,
   KIND_STREAM_MESSAGE_DIFF,
 } from "@/shared/constants/kinds";
@@ -337,6 +341,10 @@ export const MessageRow = React.memo(
               onOpenThread={onReply}
             />
           );
+        case KIND_FACTORY_JOB_REQUEST:
+        case KIND_FACTORY_JOB_RESULT:
+        case KIND_FACTORY_JOB_FEEDBACK:
+          return <FactoryJobCard message={message} onOpenThread={onReply} />;
         default:
           {
             const waveMessage = parseWaveMessageContent(message.body);
