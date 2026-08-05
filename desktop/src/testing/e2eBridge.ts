@@ -8,6 +8,12 @@ import {
   handleSaveCustomHarness,
   handleDeleteCustomHarness,
 } from "./e2eBridgeCustomHarnesses.ts";
+import {
+  createE2eToonPaidClient,
+  createE2eToonSocketFactory,
+  MOCK_TOON_CHANNEL_ID,
+  type MockToonClaimStateFixtureKind,
+} from "./e2eBridgeToon.ts";
 
 import { relayClient } from "@/shared/api/relayClient";
 import type { ConnectionState } from "@/shared/api/relayClientShared";
@@ -57,6 +63,8 @@ import type {
   RawInstallRuntimeResult,
   RuntimeFileConfigSubset,
 } from "@/shared/api/tauri";
+import type { ToonE2eTestOverrides } from "@/shared/api/transportSelection";
+import { resolveToonTransportConfig } from "@/shared/api/toonTransportConfig";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 
 type TestIdentity = {
@@ -88,6 +96,8 @@ type MockManagedAgentSeed = {
   autoRestartOnConfigChange?: boolean;
   respondTo?: RawManagedAgent["respond_to"];
   respondToAllowlist?: string[];
+  /** Backs the mocked `get_managed_agent_account_index` command (buzz#131). */
+  accountIndex?: number | null;
 };
 
 type MockManagedAgentRuntimeSeed = {
@@ -146,6 +156,22 @@ type MockSearchProfileSeed = {
 type E2eConfig = {
   mode?: "mock" | "relay";
   mock?: {
+    /**
+     * Answers the mocked `get_transport_env` command (buzz#131) — the same
+     * closed key set `transport::transport_env()` returns in Rust. Set
+     * `{BUZZ_TRANSPORT: "toon"}` to run a bridged spec on the TOON transport
+     * against the fake payment client this bridge installs (see
+     * `e2eBridgeToon.ts`) instead of a real connector. Omitted/absent keys
+     * mean "unset", same as the real command.
+     */
+    transportEnv?: Record<string, string>;
+    /**
+     * Selects the canned `getClaimState` answer the fake TOON payment client
+     * returns (buzz#131 AC2) — read live on every `useNetworkSpend` refresh,
+     * so a spec can change it mid-test via `window.__BUZZ_E2E__.mock`.
+     * Defaults to `"funded"` when transport mode is `toon` and this is unset.
+     */
+    toonClaimState?: MockToonClaimStateFixtureKind;
     /** Advertised HEAD for the first mock project without adding that branch. */
     projectHeadBranch?: string;
     /** Builderlab account returned by hosted-community onboarding. Null/omitted = signed out. */
@@ -1001,6 +1027,8 @@ function updateMockRelayMembershipFromAdminEvent(event: RelayEvent): boolean {
 declare global {
   interface Window {
     __BUZZ_E2E__?: E2eConfig;
+    /** The fake TOON payment client/socket factories `transportSelection.ts` swaps in — see `e2eBridgeToon.ts`. */
+    __BUZZ_E2E_TOON_TEST_OVERRIDES__?: ToonE2eTestOverrides;
     __BUZZ_E2E_COMMANDS__?: string[];
     __BUZZ_E2E_COMMAND_PAYLOADS__?: Array<{
       command: string;
@@ -9430,6 +9458,32 @@ function disconnectMockSocket(id: number) {
   sendWsClose(socket.handler);
 }
 
+/**
+ * Seed a resumable TOON payment channel (buzz#131) at the exact
+ * `toonChannelResumeStore` localStorage key `installSelectedTransport` will
+ * resolve to for this run's transport env, so `ToonPaidWriter.hasChannel()`
+ * is satisfied without a real on-chain open. Only meaningful when the mocked
+ * `get_transport_env` reports `BUZZ_TRANSPORT=toon` — a relay-mode run never
+ * calls this.
+ */
+function seedMockToonPersistedChannel(transportEnv: Record<string, string>) {
+  const toonConfig = resolveToonTransportConfig(transportEnv);
+  const [chainType, chainIdRaw] = toonConfig.chain.split(":");
+  const key = `buzz-toon-channel.v1:${toonConfig.destination}|${toonConfig.chain}`;
+  const record = {
+    channelId: MOCK_TOON_CHANNEL_ID,
+    context: {
+      chainType: chainType ?? "evm",
+      chainId: Number.parseInt(chainIdRaw ?? "", 10) || 0,
+      tokenNetworkAddress: toonConfig.tokenNetwork,
+      tokenAddress: toonConfig.preferredToken,
+    },
+    nonce: 0,
+    cumulativeAmount: "0",
+  };
+  window.localStorage.setItem(key, JSON.stringify(record));
+}
+
 export function maybeInstallE2eTauriMocks() {
   if (installed) {
     return;
@@ -9458,6 +9512,18 @@ export function maybeInstallE2eTauriMocks() {
   resetMockPersonaCatalogEvents(config);
   resetMockSaveSubscriptions(config);
   resetMockPendingCommunityDeepLinks(config);
+  // TOON transport test double (buzz#131) — installed unconditionally
+  // (harmless when the run stays on relay mode) so `transportSelection.ts`
+  // finds it as soon as `get_transport_env` reports `BUZZ_TRANSPORT=toon`.
+  window.__BUZZ_E2E_TOON_TEST_OVERRIDES__ = {
+    paidClientFactory: createE2eToonPaidClient(
+      () => getConfig()?.mock?.toonClaimState,
+    ),
+    socketFactory: createE2eToonSocketFactory(),
+  };
+  if (config.mock?.transportEnv?.BUZZ_TRANSPORT === "toon") {
+    seedMockToonPersistedChannel(config.mock.transportEnv);
+  }
   mockWebsocketSendMutexWedged = false;
   mockWindows("main");
   window.__BUZZ_E2E_COMMANDS__ = [];
@@ -10549,6 +10615,20 @@ export function maybeInstallE2eTauriMocks() {
         return getRelayHttpUrl(activeConfig);
       case "relay_requires_membership":
         return activeConfig?.mock?.relayRequiresMembership ?? false;
+      case "get_transport_env":
+        // Mirrors `transport::transport_env()`'s closed key set (buzz#131) —
+        // omitted keys mean "unset", same as the real Rust command.
+        return activeConfig?.mock?.transportEnv ?? {};
+      case "get_managed_agent_account_index": {
+        // Mocks `find_account_index` (buzz#131 AC3) so
+        // `useAgentProvisioning`'s "key" step can resolve without a real
+        // Rust-side account-index registry.
+        const { pubkey } = payload as { pubkey: string };
+        const seed = activeConfig?.mock?.managedAgents?.find(
+          (agent) => agent.pubkey === pubkey,
+        );
+        return seed?.accountIndex ?? null;
+      }
       case "discover_acp_providers":
         return handleDiscoverAcpRuntimes(activeConfig);
       case "save_custom_harness":

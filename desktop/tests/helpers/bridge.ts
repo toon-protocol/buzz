@@ -59,6 +59,8 @@ type MockManagedAgentSeed = {
   autoRestartOnConfigChange?: boolean;
   respondTo?: "owner-only" | "allowlist" | "anyone";
   respondToAllowlist?: string[];
+  /** Backs the mocked `get_managed_agent_account_index` command (buzz#131). */
+  accountIndex?: number | null;
 };
 
 type MockSearchProfileSeed = {
@@ -132,6 +134,21 @@ export type MockAgentMemoryListing = {
 };
 
 type MockBridgeOptions = {
+  /**
+   * Answers the mocked `get_transport_env` command (buzz#131). Set
+   * `{BUZZ_TRANSPORT: "toon"}` to run the spec on the TOON transport against
+   * the bridge's fake payment client (`e2eBridgeToon.ts`) instead of a real
+   * connector — no other TOON env keys need setting, since the fake client
+   * never reads them.
+   */
+  transportEnv?: Record<string, string>;
+  /**
+   * Selects the fake TOON payment client's canned `getClaimState` answer
+   * (buzz#131 AC2): a healthy balance, a near-exhausted one, or a lease the
+   * connector no longer honors. Defaults to `"funded"` when transport mode
+   * is `toon` and this is unset.
+   */
+  toonClaimState?: "funded" | "low-runway" | "stale-lease";
   /** Advertised HEAD for the first mock project without adding that branch. */
   projectHeadBranch?: string;
   /** Relay NIP-11 identity used to sign authoritative repository state. */
