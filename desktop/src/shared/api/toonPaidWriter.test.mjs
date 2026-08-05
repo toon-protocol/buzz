@@ -348,6 +348,52 @@ test("payFactoryJobIncrement throws when accepted but no fulfillment came back â
   );
 });
 
+test("payFactoryJobIncrement turns a raw connector negotiation failure into a human sentence, keeping the raw error as cause", async () => {
+  const rawError = new Error(
+    'No negotiation metadata for peer "abc" â€” was bootstrap completed? (and the route\'s x402 greeting carried no settlement facts to bootstrap from)',
+  );
+  const client = scriptedClient({
+    openChannel: () => Promise.reject(rawError),
+  });
+  const writer = writerOver(client);
+
+  await assert.rejects(
+    writer.payFactoryJobIncrement({
+      destination: "g.toon.provider-xyz",
+      amountBaseUnits: 1n,
+      conditionHex: "ab".repeat(32),
+      jobEventId: "offer-event-id",
+    }),
+    (error) => {
+      assert.doesNotMatch(error.message, /negotiation metadata/i);
+      assert.match(error.message, /payment session|not ready|try again/i);
+      assert.equal(error.cause, rawError);
+      return true;
+    },
+  );
+});
+
+test("payFactoryJobIncrement humanizes any other thrown setup failure without leaking the raw message", async () => {
+  const client = scriptedClient({
+    signBalanceProof: () => Promise.reject(new Error("boom, internal detail")),
+  });
+  const writer = writerOver(client);
+
+  await assert.rejects(
+    writer.payFactoryJobIncrement({
+      destination: "g.toon.provider-xyz",
+      amountBaseUnits: 1n,
+      conditionHex: "ab".repeat(32),
+      jobEventId: "offer-event-id",
+    }),
+    (error) => {
+      assert.doesNotMatch(error.message, /boom/);
+      assert.match(error.message, /try again/i);
+      return true;
+    },
+  );
+});
+
 test("getNetworkFlowStatus returns null when no channel has ever opened", async () => {
   const client = scriptedClient();
   const writer = writerOver(client);
