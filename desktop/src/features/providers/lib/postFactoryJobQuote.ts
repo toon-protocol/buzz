@@ -20,6 +20,7 @@ import type { RelayEvent } from "@/shared/api/types";
 export async function postFactoryJobQuote(
   input: {
     rootJobId: string;
+    buyerPubkey: string;
     increments: FactoryJobQuoteIncrementInput[];
   },
   transport: ToonEventTransport,
