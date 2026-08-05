@@ -122,7 +122,19 @@ jobs:
     needs: guard
     if: needs.guard.outputs.proceed == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 60 # real backstop; the implementer allows up to 100 iters
+    # WALL-CLOCK vs maxIterations, reconciled (toon-meta#278): the implementer's
+    # maxIterations: 100 is a runaway-loop guard, not a time budget — an
+    # iteration has no fixed duration, so no iteration count can "fit" a wall
+    # clock. The wall clock is the real budget, and it is deliberately split:
+    # the runner STEP below gets timeout-minutes: 50 so an overlong run dies
+    # as an ordinary step FAILURE, leaving the rest of the job budget for the
+    # always() forensics steps (redact + upload) — a job-level kill would take
+    # those down with it. The job stays at 60 (NOT raised to connector's 180)
+    # because this repo still pushes with the App token minted at job start,
+    # which expires ONE HOUR in (connector#462): with a longer clock a run
+    # would finish its work and still lose the push. Raise to 180/170 only
+    # when the mid-run token mint is ported here (toon-meta#248).
+    timeout-minutes: 60
     concurrency:
       group: agent-implement-issue-${{ github.event.issue.number }}
       cancel-in-progress: false
@@ -158,6 +170,9 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Run sandcastle implement runner
+        # Step-level timeout (toon-meta#278): below the job's, so a wall-clock
+        # kill is a step failure and the always() forensics steps still run.
+        timeout-minutes: 50
         env:
           SANDCASTLE_ISSUE_NUMBER: ${{ github.event.issue.number }}
           # PR mode (default). To re-enable auto-merge later, uncomment:
@@ -175,10 +190,9 @@ jobs:
       # environment (`env`, `git config --list`, a verbose curl) would put a live
       # credential into the log we are about to publish.
       #
-      # Ported from connector's proven agent-implement.yml (the #462 sweep), with
-      # one buzz-specific addition: Nostr secret keys (`nsec1...`) are redacted in
-      # the shape pass — buzz agents handle Nostr identities, and a bech32 nsec in
-      # a log is a live credential just like a token.
+      # This is the org-uniform pattern (toon-meta#278): connector's proven
+      # #462-sweep redaction plus buzz's nsec addition, extended to also sweep
+      # any worktree a killed run left behind.
       #
       # Three passes, because no one of them is sufficient:
       #   1. Exact values of the secrets this job holds — reliable, catches any
@@ -190,12 +204,12 @@ jobs:
       # Secrets are passed via env and never echoed.
       #
       # RESIDUAL GAP, stated rather than hidden: a raw 32-byte private key is
-      # 64 hex chars, indistinguishable in shape from an event id or hash.
-      # Redacting that shape unconditionally would strip the ids that make a log
-      # worth reading, so pass 3 only redacts it when it appears against a key-ish
-      # label (`privateKey`, `secret_key`, ...). An unlabelled bare hex key would
-      # survive. Do not treat these artifacts as safe to publish a secret through;
-      # the label gate is the real control, and this is defence in depth.
+      # 64 hex chars, indistinguishable in shape from a hash or event id.
+      # Redacting that shape unconditionally would strip the hashes that make a
+      # log worth reading, so pass 3 only redacts it when it appears against a
+      # key-ish label (`privateKey`, `secret_key`, ...). An unlabelled bare hex
+      # key would survive. Do not treat these artifacts as safe to publish a
+      # secret through; this is defence in depth.
       - name: Redact credentials from agent logs
         if: always()
         env:
@@ -204,7 +218,7 @@ jobs:
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          [ -d .sandcastle/logs ] || { echo "No logs directory — nothing to redact."; exit 0; }
+          [ -d .sandcastle ] || { echo "No .sandcastle directory — nothing to redact."; exit 0; }
           python3 - <<'PY'
           import os, pathlib, re
 
@@ -227,8 +241,8 @@ jobs:
               (re.compile(r"nsec1[a-z0-9]{20,}"), "***REDACTED***"),
               (re.compile(r"-----BEGIN[^-]*PRIVATE KEY-----.*?-----END[^-]*PRIVATE KEY-----",
                           re.DOTALL), "***REDACTED***"),
-              # Pass 3b — a raw private key is 64 hex chars, the same shape as an
-              # event id, so it is redacted only next to a key-ish label, and the
+              # Pass 3b — a raw private key is 64 hex chars, the same shape as a
+              # hash, so it is redacted only next to a key-ish label, and the
               # label is kept so the log still reads. See the residual gap noted
               # on this step.
               (re.compile(
@@ -254,32 +268,43 @@ jobs:
                   "***REDACTED***",
               ))
 
+          # Redact every log root the upload step publishes: the engine's own
+          # logs, plus any worktree left behind by a killed run — that is where
+          # a not-yet-pushed handoff note (.sandcastle/logs/handoff-<id>.md,
+          # per the ~200k context-budget policy) lives when the run died before
+          # its push.
+          roots = [pathlib.Path(".sandcastle/logs"),
+                   *pathlib.Path(".sandcastle/worktrees").glob("*/.sandcastle/logs")]
+
           hits = 0
-          for path in pathlib.Path(".sandcastle/logs").rglob("*"):
-              if not path.is_file():
+          for root in roots:
+              if not root.is_dir():
                   continue
-              raw = path.read_text(encoding="utf-8", errors="replace")
-              out = raw
-              for value in exact:
-                  for form in {value, value.strip(), value.replace("\n", "\\n")}:
-                      if form and form in out:
-                          out = out.replace(form, "***REDACTED***")
-              for pat, repl in patterns:
-                  out = pat.sub(repl, out)
-              if out != raw:
-                  hits += 1
-                  path.write_text(out, encoding="utf-8")
+              for path in root.rglob("*"):
+                  if not path.is_file():
+                      continue
+                  raw = path.read_text(encoding="utf-8", errors="replace")
+                  out = raw
+                  for value in exact:
+                      for form in {value, value.strip(), value.replace("\n", "\\n")}:
+                          if form and form in out:
+                              out = out.replace(form, "***REDACTED***")
+                  for pat, repl in patterns:
+                      out = pat.sub(repl, out)
+                  if out != raw:
+                      hits += 1
+                      path.write_text(out, encoding="utf-8")
           # Count only — never print what was found.
           print(f"Redaction complete. Files modified: {hits}")
           PY
 
-      # The agent's own reasoning is written to .sandcastle/logs/, NOT to the step
-      # output — the step log only says "Started on branch ..." and then, minutes
-      # later, the outcome. When a run ends with the fail-loud "open-pr reported
-      # COMPLETE but no PR exists" (exactly what happened on this repo's first
-      # live run, issue #56) there is otherwise NOTHING to diagnose from: the
-      # open-pr transcript dies with the runner. Upload it so a failed or empty
-      # run is explicable.
+      # The agent's own reasoning is written to .sandcastle/logs/, NOT to the
+      # step output — when a run fails, times out, or produces no commits there
+      # is otherwise NOTHING to diagnose from: the log dies with the runner.
+      # Upload it so a failed or empty run is explicable. The worktree glob
+      # additionally captures the committed-but-never-pushed handoff note a
+      # killed run leaves behind (toon-meta#278 acceptance: a deliberately
+      # killed run must leave a recoverable handoff note).
       #
       # `if: always()` because the interesting cases are exactly the ones where
       # the previous step failed.
@@ -290,5 +315,6 @@ jobs:
           name: sandcastle-implement-logs-issue-${{ github.event.issue.number }}
           path: |
             .sandcastle/logs/
+            .sandcastle/worktrees/*/.sandcastle/logs/
           if-no-files-found: warn
           retention-days: 14
