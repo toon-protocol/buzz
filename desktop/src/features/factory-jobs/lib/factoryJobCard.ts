@@ -44,6 +44,18 @@ function truncate(text: string, max: number) {
   return `${trimmed.slice(0, max - 1)}…`;
 }
 
+/** Maps the card's camelCase event shape to the snake_case shape the factory-job parsers expect. */
+function toParserEvent(event: FactoryJobCardEvent) {
+  return {
+    id: event.id,
+    pubkey: event.pubkey,
+    created_at: event.createdAt,
+    kind: event.kind,
+    content: event.content,
+    tags: event.tags,
+  };
+}
+
 function outcomeLabel(
   outcome: "completed" | "abandoned-provider" | "abandoned-buyer",
 ) {
@@ -58,13 +70,7 @@ function outcomeLabel(
 }
 
 function deriveRequestCard(event: FactoryJobCardEvent): FactoryJobCardContent {
-  const parsed = parseFactoryJobRequest({
-    id: event.id,
-    pubkey: event.pubkey,
-    created_at: event.createdAt,
-    kind: event.kind,
-    tags: event.tags,
-  });
+  const parsed = parseFactoryJobRequest(toParserEvent(event));
   if (!parsed) {
     return {
       variant: "unrecognized",
@@ -80,13 +86,7 @@ function deriveRequestCard(event: FactoryJobCardEvent): FactoryJobCardContent {
 }
 
 function deriveResultCard(event: FactoryJobCardEvent): FactoryJobCardContent {
-  const parsed = parseFactoryJobResult({
-    id: event.id,
-    pubkey: event.pubkey,
-    created_at: event.createdAt,
-    kind: event.kind,
-    tags: event.tags,
-  });
+  const parsed = parseFactoryJobResult(toParserEvent(event));
   if (!parsed) {
     return {
       variant: "unrecognized",
@@ -103,14 +103,7 @@ function deriveResultCard(event: FactoryJobCardEvent): FactoryJobCardContent {
 }
 
 function deriveFeedbackCard(event: FactoryJobCardEvent): FactoryJobCardContent {
-  const parsed = parseFactoryJobFeedback({
-    id: event.id,
-    pubkey: event.pubkey,
-    created_at: event.createdAt,
-    kind: event.kind,
-    content: event.content,
-    tags: event.tags,
-  });
+  const parsed = parseFactoryJobFeedback(toParserEvent(event));
   if (!parsed || parsed.status === "malformed") {
     return {
       variant: "unrecognized",
