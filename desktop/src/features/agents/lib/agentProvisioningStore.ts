@@ -17,6 +17,7 @@ import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota"
  */
 
 const STORAGE_PREFIX = "buzz-agent-provisioning.v1";
+const DECLINED_STORAGE_PREFIX = "buzz-agent-provisioning-declined.v1";
 
 export type AgentProvisioningStorage = {
   getItem(key: string): string | null;
@@ -67,6 +68,10 @@ function storageKey(pubkey: string): string {
   return `${STORAGE_PREFIX}:${pubkey}`;
 }
 
+function declinedStorageKey(pubkey: string): string {
+  return `${DECLINED_STORAGE_PREFIX}:${pubkey}`;
+}
+
 function notify(): void {
   for (const listener of listeners) listener();
 }
@@ -97,6 +102,44 @@ export function setAgentChannelConfirmed(
   } catch (error) {
     console.warn(
       "[agent-provisioning] could not persist the channel-confirmed flag",
+      error,
+    );
+  }
+  notify();
+}
+
+/**
+ * Whether the operator has ever dismissed `AgentProvisioningDialog` for
+ * `pubkey` without finishing it (buzz#122 AC2 — "Do this later" must leave a
+ * visible unprovisioned indicator, not silence). Sticky once set: it only
+ * matters in combination with {@link isAgentChannelConfirmed} being false, so
+ * there is no need to clear it once the channel actually opens.
+ */
+export function isAgentProvisioningDeclined(pubkey: string): boolean {
+  try {
+    return storage.getItem(declinedStorageKey(pubkey)) === "true";
+  } catch (error) {
+    console.warn(
+      "[agent-provisioning] could not read the declined flag",
+      error,
+    );
+    return false;
+  }
+}
+
+export function setAgentProvisioningDeclined(
+  pubkey: string,
+  declined: boolean,
+): void {
+  try {
+    if (declined) {
+      storage.setItem(declinedStorageKey(pubkey), "true");
+    } else {
+      storage.removeItem(declinedStorageKey(pubkey));
+    }
+  } catch (error) {
+    console.warn(
+      "[agent-provisioning] could not persist the declined flag",
       error,
     );
   }
