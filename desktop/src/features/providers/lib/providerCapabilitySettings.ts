@@ -86,8 +86,7 @@ const listeners = new Set<() => void>();
 // call, so it cannot be used directly as a `useSyncExternalStore` snapshot —
 // the identity change on every render trips React's "getSnapshot must be
 // cached" loop guard (error #185). This cache gives each pubkey a
-// referentially stable snapshot between writes; `notify()` drops the whole
-// cache so the next read re-parses.
+// referentially stable snapshot between writes.
 const snapshotCache = new Map<string, ProviderCapabilitySettings>();
 
 /** Swap the backing store. For tests and for a future keychain backend. */
@@ -102,8 +101,13 @@ function storageKey(pubkey: string): string {
   return `${STORAGE_PREFIX}:${pubkey}`;
 }
 
-function notify(): void {
-  snapshotCache.clear();
+/** Invalidate one pubkey's cached snapshot, or all of them when swapping stores. */
+function notify(pubkey?: string): void {
+  if (pubkey) {
+    snapshotCache.delete(pubkey);
+  } else {
+    snapshotCache.clear();
+  }
   for (const listener of listeners) listener();
 }
 
@@ -145,7 +149,7 @@ export function setProviderCapabilitySettings(
   } catch (error) {
     console.warn("[provider-capability] could not persist settings", error);
   }
-  notify();
+  notify(pubkey);
 }
 
 /** Observe any change — the provider settings UI re-renders from this. */
@@ -159,9 +163,9 @@ export function subscribeToProviderCapabilitySettings(
 }
 
 /**
- * The cached, referentially-stable read `useProviderCapabilitySettings` uses
- * as its `useSyncExternalStore` snapshot. Exported for direct assertions in
- * tests; production code should prefer the hook.
+ * The cached, referentially-stable read behind `useProviderCapabilitySettings`
+ * (see `snapshotCache` above). Exported for direct assertions in tests;
+ * production code should prefer the hook.
  */
 export function getProviderCapabilitySettingsSnapshot(
   pubkey: string,
@@ -174,12 +178,12 @@ export function getProviderCapabilitySettingsSnapshot(
 }
 
 /**
- * This agent's provider capability settings, reactively. Unlike calling
- * `getProviderCapabilitySettings` directly inside `useSyncExternalStore`
- * (the buzz#121 crash: a fresh parsed object every render trips React's
- * getSnapshot-must-be-cached loop guard, error #185), this reads through
- * the cached snapshot so identity only changes when the underlying settings
- * actually do.
+ * This agent's provider capability settings, reactively. Fixes buzz#121: a
+ * `useSyncExternalStore` snapshot reading `getProviderCapabilitySettings`
+ * directly changed identity every render (it parses a fresh object each
+ * call), tripping React's getSnapshot-must-be-cached loop guard (error
+ * #185). Reading through the cached snapshot instead keeps identity stable
+ * between writes.
  */
 export function useProviderCapabilitySettings(
   pubkey: string,
