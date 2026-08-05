@@ -10,6 +10,7 @@ import {
   type NetworkSpendState,
 } from "@/features/profile/lib/networkSpendState";
 import {
+  EMPTY_SNAPSHOT,
   useNetworkSpendLive,
   type LiveSpendSnapshot,
 } from "@/features/profile/lib/networkSpendLiveStore";
@@ -48,9 +49,7 @@ export function useNetworkSpend(agentPubkey: string, isSelf: boolean) {
   const isToon = selection?.mode === "toon";
   const config = selection?.config ?? null;
   const selfLive = useNetworkSpendLive();
-  const live: LiveSpendSnapshot = isSelf
-    ? selfLive
-    : { burnRateBaseUnitsPerSec: 0, hasSample: false };
+  const live: LiveSpendSnapshot = isSelf ? selfLive : EMPTY_SNAPSHOT;
 
   const [raw, setRaw] = React.useState<RawNetworkFlowStatus | null | "pending">(
     "pending",

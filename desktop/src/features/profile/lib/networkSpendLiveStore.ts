@@ -27,7 +27,8 @@ export type LiveSpendSnapshot = {
   hasSample: boolean;
 };
 
-const EMPTY_SNAPSHOT: LiveSpendSnapshot = {
+/** The "nothing observed yet" snapshot — shared by any caller that needs a `LiveSpendSnapshot` without a live subscription (e.g. a non-`isSelf` read, which has no writes to observe from this process). */
+export const EMPTY_SNAPSHOT: LiveSpendSnapshot = {
   burnRateBaseUnitsPerSec: 0,
   hasSample: false,
 };

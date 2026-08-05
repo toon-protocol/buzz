@@ -6,6 +6,7 @@ import {
   type AgentFleetRunwayBadge,
 } from "@/features/agents/lib/agentFleetRunway";
 import { useAgentFleetMoneyReads } from "@/features/agents/lib/useAgentFleetMoneyReads";
+import { EMPTY_SNAPSHOT } from "@/features/profile/lib/networkSpendLiveStore";
 import {
   deriveNetworkSpendState,
   type NetworkSpendState,
@@ -19,9 +20,6 @@ export type AgentFleetStatus = {
   runwayBadges: ReadonlyMap<string, AgentFleetRunwayBadge>;
   earningPubkeys: ReadonlySet<string>;
 };
-
-/** No fleet agent's writes are observed from this process — see `useNetworkSpend.ts`'s module doc on why a non-`isSelf` read never has a burn-rate sample. */
-const NO_LIVE_SAMPLE = { burnRateBaseUnitsPerSec: 0, hasSample: false };
 
 function isSelfAgent(
   pubkey: string,
@@ -86,10 +84,13 @@ export function useAgentFleetStatus(
         if (selfIsEarning) earningPubkeys.add(agent.pubkey);
         continue;
       }
+      // No fleet agent's writes are observed from this process — see
+      // `useNetworkSpend.ts`'s module doc on why a non-`isSelf` read never
+      // has a burn-rate sample.
       const state: NetworkSpendState = deriveNetworkSpendState({
         isToon,
         raw: otherRaw.get(agent.pubkey) ?? null,
-        live: NO_LIVE_SAMPLE,
+        live: EMPTY_SNAPSHOT,
       });
       runwayBadges.set(agent.pubkey, deriveAgentFleetRunwayBadge(state));
       if (isAgentFleetEarning(state)) earningPubkeys.add(agent.pubkey);
