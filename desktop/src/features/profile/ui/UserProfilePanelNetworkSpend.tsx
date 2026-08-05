@@ -23,10 +23,12 @@ import { Input } from "@/shared/ui/input";
  * different physics, different verbs, and a refill would not help the
  * other one (see `UserProfilePanelMoneyTab.tsx`'s module doc).
  *
- * Only the identity this desktop process itself pays as (`isSelf`) has a
- * channel to read — see `networkSpendState.ts`'s module doc for the
- * architectural reason a managed agent's own spend cannot be read
- * remotely yet.
+ * Every managed agent has a channel to read (buzz#109 / `docs/adr/0007`),
+ * not only the identity this desktop process itself pays as (`isSelf`) —
+ * see `useNetworkSpend.ts`'s module doc for the two read paths. `isSelf`
+ * still matters here for copy (the two `unavailable` reasons read
+ * differently) and for gating the refill action, which only ever touches
+ * this process's own writer.
  *
  * `network` is passed in rather than read via its own `useNetworkSpend`
  * call: `UserProfilePanelMoneyTab.tsx` fetches it once and shares it with
@@ -104,7 +106,7 @@ function NetworkSpendBody({
         <NetworkSpendNotice testId="user-profile-money-network-spend-unavailable">
           {isSelf
             ? "No payment channel is open yet — it opens automatically on the first paid write."
-            : "This agent's network spend can't be read from this device yet — only your own wallet's channel is."}
+            : "No payment channel could be found for this agent yet."}
         </NetworkSpendNotice>
       );
     case "quoted":

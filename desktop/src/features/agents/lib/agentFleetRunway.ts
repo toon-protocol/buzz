@@ -29,11 +29,9 @@ export type AgentFleetRunwayBadge = {
 
 /**
  * Null covers every state that is not an actionable warning: healthy
- * runway, self-funding, and — for every agent but the identity this desktop
- * process itself pays as — `unavailable`. There is no per-agent channel
- * read yet (buzz#79's ADR 0006 gap, confirmed still open on this ticket),
- * so an absent read must never be dressed up as a healthy one; it shows
- * nothing, same as the card looks today.
+ * runway, self-funding, and `unavailable` (no channel ever discovered for
+ * that agent — buzz#109 / `docs/adr/0007`). An absent read must never be
+ * dressed up as a healthy one; it shows nothing, same as before this ticket.
  */
 export function deriveAgentFleetRunwayBadge(
   state: NetworkSpendState,
