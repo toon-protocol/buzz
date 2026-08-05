@@ -1,3 +1,5 @@
+import * as React from "react";
+
 import { setLocalStorageItemWithRecovery } from "@/shared/lib/localStorageQuota";
 
 /**
@@ -80,6 +82,14 @@ function defaultStorage(): ProviderCapabilityStorage {
 let storage: ProviderCapabilityStorage = defaultStorage();
 const listeners = new Set<() => void>();
 
+// `getProviderCapabilitySettings` parses a fresh object from storage on every
+// call, so it cannot be used directly as a `useSyncExternalStore` snapshot —
+// the identity change on every render trips React's "getSnapshot must be
+// cached" loop guard (error #185). This cache gives each pubkey a
+// referentially stable snapshot between writes; `notify()` drops the whole
+// cache so the next read re-parses.
+const snapshotCache = new Map<string, ProviderCapabilitySettings>();
+
 /** Swap the backing store. For tests and for a future keychain backend. */
 export function setProviderCapabilityStorage(
   next: ProviderCapabilityStorage | null,
@@ -93,6 +103,7 @@ function storageKey(pubkey: string): string {
 }
 
 function notify(): void {
+  snapshotCache.clear();
   for (const listener of listeners) listener();
 }
 
@@ -145,4 +156,35 @@ export function subscribeToProviderCapabilitySettings(
   return () => {
     listeners.delete(listener);
   };
+}
+
+/**
+ * The cached, referentially-stable read `useProviderCapabilitySettings` uses
+ * as its `useSyncExternalStore` snapshot. Exported for direct assertions in
+ * tests; production code should prefer the hook.
+ */
+export function getProviderCapabilitySettingsSnapshot(
+  pubkey: string,
+): ProviderCapabilitySettings {
+  const cached = snapshotCache.get(pubkey);
+  if (cached) return cached;
+  const settings = getProviderCapabilitySettings(pubkey);
+  snapshotCache.set(pubkey, settings);
+  return settings;
+}
+
+/**
+ * This agent's provider capability settings, reactively. Unlike calling
+ * `getProviderCapabilitySettings` directly inside `useSyncExternalStore`
+ * (the buzz#121 crash: a fresh parsed object every render trips React's
+ * getSnapshot-must-be-cached loop guard, error #185), this reads through
+ * the cached snapshot so identity only changes when the underlying settings
+ * actually do.
+ */
+export function useProviderCapabilitySettings(
+  pubkey: string,
+): ProviderCapabilitySettings {
+  return React.useSyncExternalStore(subscribeToProviderCapabilitySettings, () =>
+    getProviderCapabilitySettingsSnapshot(pubkey),
+  );
 }
