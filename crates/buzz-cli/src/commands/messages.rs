@@ -3,6 +3,7 @@ use nostr::PublicKey;
 use uuid::Uuid;
 
 use crate::client::{normalize_events, normalize_write_response, BuzzClient};
+use crate::commands::channels::resolve_channel_type;
 use crate::error::CliError;
 use crate::validate::{
     infer_language, parse_event_id, parse_uuid, read_or_stdin, truncate_diff,
@@ -11,6 +12,26 @@ use crate::validate::{
 use buzz_sdk::mentions::{
     extract_at_mentions_with_known, extract_nostr_uris, strip_code_regions, MENTION_CAP,
 };
+
+/// Resolve the event kind `messages send` should use when `--kind` was not
+/// given explicitly, based on the target channel's `channel_type`. Forum
+/// channels only accept votable content (kind:45001 posts, kind:45003
+/// comments — see the relay's `reject_chat_kind_in_forum_channel`), so a
+/// forum-channel default must never fall back to the plain chat kind (9).
+/// A reply resolves to a comment on its parent post; a top-level send
+/// resolves to a new post. Every other channel type keeps the historical
+/// chat-message default.
+fn default_kind_for_channel(channel_type: Option<&str>, has_reply_to: bool) -> u16 {
+    if channel_type == Some("forum") {
+        if has_reply_to {
+            45003
+        } else {
+            45001
+        }
+    } else {
+        9
+    }
+}
 
 /// Extract the thread root event ID from a Nostr tag array.
 ///
@@ -643,12 +664,20 @@ pub async fn cmd_send_message(
 
     let mention_refs: Vec<&str> = mention_pubkeys.iter().map(String::as_str).collect();
 
-    let builder = match p.kind {
-        Some(45001) => {
+    let resolved_kind: u16 = match p.kind {
+        Some(k) => k,
+        None => {
+            let channel_type = resolve_channel_type(client, &p.channel_id).await?;
+            default_kind_for_channel(channel_type.as_deref(), p.reply_to.is_some())
+        }
+    };
+
+    let builder = match resolved_kind {
+        45001 => {
             buzz_sdk::build_forum_post(channel_uuid, &final_content, &mention_refs, &media_tags)
                 .map_err(|e| CliError::Other(format!("build_forum_post failed: {e}")))?
         }
-        Some(45003) => {
+        45003 => {
             let tr = thread_ref.as_ref().ok_or_else(|| {
                 CliError::Usage("--reply-to is required for forum comments (kind 45003)".into())
             })?;
@@ -661,7 +690,7 @@ pub async fn cmd_send_message(
             )
             .map_err(|e| CliError::Other(format!("build_forum_comment failed: {e}")))?
         }
-        None | Some(9) => buzz_sdk::build_message(
+        9 => buzz_sdk::build_message(
             channel_uuid,
             &final_content,
             thread_ref.as_ref(),
@@ -670,7 +699,7 @@ pub async fn cmd_send_message(
             &media_tags,
         )
         .map_err(|e| CliError::Other(format!("build_message failed: {e}")))?,
-        Some(k) => {
+        k => {
             return Err(CliError::Usage(format!(
                 "--kind {k} is not supported (use 9, 45001, or 45003)"
             )))
@@ -993,9 +1022,9 @@ pub async fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::{
-        event_mention_pubkeys, find_root_from_tags, match_profiles_by_name, merge_message_mentions,
-        missing_members, normalize_explicit_mentions, parse_member_pubkeys,
-        resolve_names_to_pubkeys,
+        default_kind_for_channel, event_mention_pubkeys, find_root_from_tags,
+        match_profiles_by_name, merge_message_mentions, missing_members,
+        normalize_explicit_mentions, parse_member_pubkeys, resolve_names_to_pubkeys,
     };
     use buzz_sdk::mentions::{
         extract_at_mentions_with_known, extract_at_names, match_names_to_profiles, MentionProfile,
@@ -1011,6 +1040,27 @@ mod tests {
     const PK_VALID_A: &str = "35c18ae273fccfaf80d629e20e7f8721b90499379addff533054acc2504c12b4";
     const PK_VALID_B: &str = "c6237ef84fa537c78dcee78efd2d4e59f728859c7f194da42ac51ededfa0be05";
     const PK_VALID_C: &str = "f4a42a97e594b77bdbd8ee35191c8b28a94a4cb871d96f32921558275421fb68";
+
+    #[test]
+    fn default_kind_is_forum_post_for_forum_channel_top_level_send() {
+        assert_eq!(default_kind_for_channel(Some("forum"), false), 45001);
+    }
+
+    #[test]
+    fn default_kind_is_forum_comment_for_forum_channel_reply() {
+        assert_eq!(default_kind_for_channel(Some("forum"), true), 45003);
+    }
+
+    #[test]
+    fn default_kind_is_chat_message_for_stream_channel() {
+        assert_eq!(default_kind_for_channel(Some("stream"), false), 9);
+        assert_eq!(default_kind_for_channel(Some("stream"), true), 9);
+    }
+
+    #[test]
+    fn default_kind_is_chat_message_when_channel_type_unknown() {
+        assert_eq!(default_kind_for_channel(None, false), 9);
+    }
 
     #[test]
     fn root_marker_wins_over_reply_marker() {

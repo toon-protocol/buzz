@@ -221,6 +221,31 @@ fn name_matches(name: &str, needle_lower: &str, exact: bool) -> bool {
     }
 }
 
+/// Resolve a channel's `channel_type` (e.g. `"forum"`, `"stream"`) from its
+/// kind:39000 metadata event, for callers that need to pick a per-channel
+/// default (e.g. `messages send` resolving the default event kind). Returns
+/// `None` if the channel has no metadata event or no `t` tag.
+pub async fn resolve_channel_type(
+    client: &BuzzClient,
+    channel_id: &str,
+) -> Result<Option<String>, CliError> {
+    let filter = serde_json::json!({
+        "kinds": [39000],
+        "#d": [channel_id],
+        "limit": 1
+    });
+    let resp = client.query(&filter).await?;
+    let events: Vec<serde_json::Value> = serde_json::from_str(&resp).unwrap_or_default();
+    Ok(events.first().and_then(|e| {
+        let t = extract_tag_value(e, "t");
+        if t.is_empty() {
+            None
+        } else {
+            Some(t)
+        }
+    }))
+}
+
 pub async fn cmd_get_channel(client: &BuzzClient, channel_id: &str) -> Result<(), CliError> {
     validate_uuid(channel_id)?;
     let filter = serde_json::json!({
