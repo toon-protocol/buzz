@@ -1,0 +1,30 @@
+---
+status: accepted
+---
+
+# Per-agent money reads are no-daemon, owner-signed claim-state — never routed through the agent's own daemon
+
+Reading a managed agent's TOON balance/runway needs no `toon-clientd` and no running `buzz-acp` process. Every agent's payment key derives from the *owner's* seed (ADR 0006's account-index registry), which the desktop already holds from onboarding — so the desktop signs a `POST /ilp/claim-state` challenge as that agent itself and asks the connector directly. `desktop/src/features/profile/lib/agentClaimStateRead.ts` is where this lives: `findAgentEvmChannelId` discovers the agent's on-chain channel by scanning `ChannelOpened` logs for its derived address, and `readAgentsNetworkFlowStatus` batches every agent's signed challenge into one `ConnectorEdgeClient.getClaimState` request.
+
+This is buzz#109, the fleet-decomposition follow-up ADR 0006 and ADR 0005 both flagged as future work — "no toon-clientd spawn/lifecycle for managed agents, and no per-agent channel read" was the documented gap every money-reading surface since (buzz#76's runway badges, buzz#78's spend attribution, buzz#80/#108's Network spend block) built ahead of, gated on `isSelf`.
+
+**ADR 0005 is honoured, not revisited.** It governs how an agent *pays* (a `toon-clientd` sidecar per agent, holding that agent's own derived key) and stays exactly as written. This ADR only concerns how the desktop *reads*, which needs no custody of that key at all — only proof of control, which the owner's seed already gives it.
+
+## Considered options
+
+- **Reach the agent's own `toon-clientd` sidecar for the read** (e.g. a `GET /status` call to `TOON_DAEMON_URL`): rejected as the deciding case — it answers correctly only while the daemon is up, and the runway badge/low-funds alert this feeds exist specifically to warn *before* an agent runs out or after it has already stopped. A read that depends on the daemon being alive goes dark at exactly the moment the number matters. It would also mean "run N daemons" becomes a precondition for opening the Money tab, which no code in this repo does today (ADR 0005) and this ticket does not add.
+- **Instantiate N `ToonClient`s, one per agent, and call its single-identity `getClaimState`**: rejected — `ToonClient.getClaimState` requires `this.channelManager` (an `evmPrivateKey`-backed instance) and resolves each channel through `channelManager.getChannelContext`, so it only answers for channels *that instance already tracks*. Each one would need its own full bootstrap (channel resume/open) for what is meant to be a read, and still could not answer for a channel it had never opened itself.
+- **Resume the channel id from the agent's own daemon-local store** (`ChannelManager.resumeChannel`'s peer→channel binding): rejected — that binding is written by whichever process opened the channel, i.e. the agent's own daemon. Depending on it would reintroduce exactly the daemon dependency this ADR exists to avoid, and would fail outright for an agent that has never run on this desktop host.
+- **On-chain `ChannelOpened` log scan for the agent's derived address, batched into one `ConnectorEdgeClient.getClaimState` request per read** (chosen): the desktop cannot compute a channel id directly — `TokenNetwork.openChannel` derives it from a contract-global counter, not from the participants — so discovery has to be a log scan somewhere; doing it against the chain rather than a daemon keeps the read live even for a channel opened by a process that no longer exists. `ConnectorEdgeClient` (unlike `ToonClient`) takes a list of independently-signed entries, so every managed agent's challenge rides in the same `POST /ilp/claim-state` request — one connector round trip regardless of fleet size, which is also the one property `toon-clientd` sidecar reads over HTTP could never give (N daemons, N requests).
+
+## Consequences
+
+**EVM only.** Solana channels are accounts, discovered differently (no `ChannelOpened`-log equivalent), and `SolanaSigner.signClaimStateChallenge` exists in `@toon-protocol/client` for when that lands. A Solana-funded agent — or any agent whose `chain` is not `evm:*` — reads `unavailable` here, never a fabricated `0`; see `agentClaimStateRead.ts`'s module doc.
+
+The three honesty gates the epic built ahead of this ADR are replaced, not weakened: `networkSpendState.ts`'s `deriveNetworkSpendState` no longer takes an `isSelf` flag at all (`unavailable` now falls out of a `null` read, whichever of several honest reasons produced it); `useNetworkSpend.ts` still branches on `isSelf` — self keeps the existing live-writer path (with its local-watermark fallback when the connector is unreachable, and the only session with a live burn-rate sample), while every other agent goes through this ADR's one-shot batched read; `useAgentFleetStatus.ts` now derives a `NetworkSpendState` for every managed agent, not only `isSelf`, via `useAgentFleetMoneyReads`' one shared `getClaimState` request for the whole non-self fleet.
+
+The refill/deposit action stays `isSelf`-only regardless of this ADR: a deposit always lands on the owner's own writer's tracked channel, so enabling it for a non-`isSelf` read would silently fund the wrong channel while the panel displays a different agent's balance. Funding a specific agent's own wallet is buzz#74's provisioning flow, unaffected by this ADR.
+
+`eth_getLogs` here is unwindowed (`fromBlock: "0x0"` to `"latest"`) — some RPC providers cap the block range a single call may cover. Chunked/windowed scanning is a follow-up if that becomes a problem in practice against a real deployment; the devnet this epic targets has not needed it.
+
+Spend attribution's connector-total reconciliation (buzz#78, `useAgentSpendAttribution.ts`) stays `isSelf`-only after this ADR — that is now a deliberate scope boundary for that ticket's own follow-up, not the architectural gap it used to be, since a non-`isSelf` connector total is available the moment `network` (this ADR's read) reports one.

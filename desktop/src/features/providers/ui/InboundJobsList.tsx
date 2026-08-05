@@ -59,6 +59,7 @@ export function InboundJobsList({
               </div>
               {expandedJobId === job.eventId ? (
                 <QuoteForm
+                  buyerPubkey={job.buyerPubkey}
                   canQuote={canQuote}
                   jobId={job.eventId}
                   onQuoted={() => {

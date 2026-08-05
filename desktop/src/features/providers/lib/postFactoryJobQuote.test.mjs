@@ -37,6 +37,7 @@ test("signs the quote template and publishes it on the transport", async () => {
     const result = await postFactoryJobQuote(
       {
         rootJobId: "job-1",
+        buyerPubkey: "buyer-1",
         increments: [{ milestone: "plan", priceUsdcBaseUnits: 1_000_000n }],
       },
       /** @type {any} */ ({
@@ -55,6 +56,7 @@ test("signs the quote template and publishes it on the transport", async () => {
     assert.deepEqual(signArgs.tags, [
       ["status", "quote"],
       ["e", "job-1", "", "root"],
+      ["p", "buyer-1"],
     ]);
   } finally {
     teardownTauriStub();
@@ -66,7 +68,7 @@ test("an invalid quote (no increments) never reaches signing or publish", async 
   try {
     await assert.rejects(() =>
       postFactoryJobQuote(
-        { rootJobId: "job-1", increments: [] },
+        { rootJobId: "job-1", buyerPubkey: "buyer-1", increments: [] },
         /** @type {any} */ ({
           publish: () => assert.fail("must not publish"),
         }),

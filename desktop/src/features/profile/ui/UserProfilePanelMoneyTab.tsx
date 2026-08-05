@@ -34,7 +34,7 @@ export function ProfileMoneyTabContent({
   ownerPubkey: string | null;
 }) {
   const usageQuery = useAgentModelUsageQuery(agentPubkey, ownerPubkey);
-  const network = useNetworkSpend(isSelf);
+  const network = useNetworkSpend(agentPubkey, isSelf);
 
   return (
     <div className="space-y-4 pt-4" data-testid="user-profile-money-tab">

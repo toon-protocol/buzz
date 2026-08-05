@@ -31,12 +31,16 @@ import type { RelayEvent } from "@/shared/api/types";
  * `isSelf` — it is a plain author-scoped relay query, and the relay itself
  * already scopes results to channels the requester (the owner) is a member
  * of, which is exactly what makes an agent active in an owner-invisible
- * channel read as a genuine remainder rather than a wrong breakdown. Only the
- * connector total is `isSelf`-gated (buzz#79's ADR 0006 — no `toon-clientd`
- * spawn/lifecycle for managed agents, so no live claim-state read for any
- * identity but this desktop process's own) — an agent without one still gets
- * a real breakdown, just with `reconcileSpend`'s `"unverified"` state instead
- * of a fabricated remainder.
+ * channel read as a genuine remainder rather than a wrong breakdown.
+ * `reconcileSpend` itself is agent-agnostic too — it just takes whatever
+ * `connectorTotalBaseUnits` its caller passes, `null` or not. The caller
+ * (`useAgentSpendAttribution.ts`) currently only ever passes one for
+ * `isSelf`, a scope choice for this block specifically (see
+ * `UserProfilePanelSpendAttribution.tsx`'s module doc), not an
+ * architectural limit — a non-`isSelf` connector total is available since
+ * buzz#109 (`docs/adr/0007`). An agent without a connector total still gets
+ * a real breakdown, just with `reconcileSpend`'s `"unverified"` state
+ * instead of a fabricated remainder.
  */
 
 /** Kinds worth attributing: content an agent authors that costs a paid write. Ephemeral kinds (huddle audio, typing) are excluded because the relay never stores them — there is nothing to query historically, not a scoping choice. */

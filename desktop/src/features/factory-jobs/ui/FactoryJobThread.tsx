@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import {
+  checkOfferPayable,
   deriveFactoryJobExposure,
   factoryJobExposureCaption,
 } from "@/features/factory-jobs/lib/factoryJobExposure";
@@ -74,6 +75,59 @@ export function FactoryJobThread({
 
   const nextPayableIncrement = exposure.paidCount + 1;
 
+  function renderOfferAction(item: FactoryJobIncrementOffer) {
+    if (paidIncrementNumbers.has(item.increment.n)) {
+      return (
+        <div className="flex items-center gap-2">
+          <Badge variant="success">Paid</Badge>
+          <span className="font-mono text-xs text-muted-foreground">
+            key {fulfillmentByIncrement.get(item.increment.n)?.slice(0, 16)}…
+          </span>
+          <a
+            className="text-xs text-primary underline"
+            href={item.artifactUrl}
+            rel="noreferrer"
+            target="_blank"
+          >
+            artifact
+          </a>
+        </div>
+      );
+    }
+
+    if (item.increment.n !== nextPayableIncrement) {
+      return (
+        <span className="text-xs text-muted-foreground">
+          Waiting on increment {nextPayableIncrement} first — the key that pays
+          this one arrives at delivery, never before.
+        </span>
+      );
+    }
+
+    const payability = checkOfferPayable(item, schedule);
+    if (!payability.payable) {
+      return (
+        <p className="text-xs text-destructive">
+          Not payable — {payability.reason}
+        </p>
+      );
+    }
+
+    return (
+      <Button
+        disabled={payingIncrementNumber === item.increment.n}
+        onClick={() => onPayIncrement(item)}
+        size="sm"
+      >
+        {payingIncrementNumber === item.increment.n
+          ? "Paying…"
+          : item.increment.n === 1
+            ? "Pay & hire"
+            : "Pay this increment"}
+      </Button>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-3">
       <Card className="border-primary/30 bg-primary/5 p-3 text-sm font-medium">
@@ -96,43 +150,7 @@ export function FactoryJobThread({
                     {formatUsdcBaseUnits(item.amountBaseUnits)}
                   </span>
                 </div>
-                {paidIncrementNumbers.has(item.increment.n) ? (
-                  <div className="flex items-center gap-2">
-                    <Badge variant="success">Paid</Badge>
-                    <span className="font-mono text-xs text-muted-foreground">
-                      key{" "}
-                      {fulfillmentByIncrement
-                        .get(item.increment.n)
-                        ?.slice(0, 16)}
-                      …
-                    </span>
-                    <a
-                      className="text-xs text-primary underline"
-                      href={item.artifactUrl}
-                      rel="noreferrer"
-                      target="_blank"
-                    >
-                      artifact
-                    </a>
-                  </div>
-                ) : item.increment.n === nextPayableIncrement ? (
-                  <Button
-                    disabled={payingIncrementNumber === item.increment.n}
-                    onClick={() => onPayIncrement(item)}
-                    size="sm"
-                  >
-                    {payingIncrementNumber === item.increment.n
-                      ? "Paying…"
-                      : item.increment.n === 1
-                        ? "Pay & hire"
-                        : "Pay this increment"}
-                  </Button>
-                ) : (
-                  <span className="text-xs text-muted-foreground">
-                    Waiting on increment {nextPayableIncrement} first — the key
-                    that pays this one arrives at delivery, never before.
-                  </span>
-                )}
+                {renderOfferAction(item)}
               </Card>
             )}
           </li>

@@ -59,6 +59,37 @@ export function deriveFactoryJobExposure(
   };
 }
 
+export type FactoryJobOfferPayability =
+  | { payable: true }
+  | { payable: false; reason: string };
+
+/**
+ * §4.1 MUST: a partial offer's `amount` tag must match the quoted `priceUsdc`
+ * for that increment `n` (buzz#126). A provider that inflates an increment's
+ * price (or offers an increment never in the quoted schedule) must not be
+ * presented as payable — this is the check that catches it before the buyer
+ * ever sees a "Pay" button for it.
+ */
+export function checkOfferPayable(
+  offer: { increment: { n: number }; amountBaseUnits: bigint },
+  schedule: { n: number; priceUsdcBaseUnits: bigint }[],
+): FactoryJobOfferPayability {
+  const quoted = schedule.find((entry) => entry.n === offer.increment.n);
+  if (!quoted) {
+    return {
+      payable: false,
+      reason: `Increment ${offer.increment.n} was not in the quoted schedule.`,
+    };
+  }
+  if (offer.amountBaseUnits !== quoted.priceUsdcBaseUnits) {
+    return {
+      payable: false,
+      reason: `This offer asks for ${formatUsdcBaseUnits(offer.amountBaseUnits)}, but increment ${offer.increment.n} was quoted at ${formatUsdcBaseUnits(quoted.priceUsdcBaseUnits)}.`,
+    };
+  }
+  return { payable: true };
+}
+
 /**
  * The reassurance sentence itself. "Paid 3 of 7 increments; stopping now
  * costs nothing further" — the whole product, per the issue's gotcha.

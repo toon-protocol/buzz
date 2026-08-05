@@ -19,12 +19,14 @@ type IncrementRow = { id: number; milestone: string; priceInput: string };
 export function QuoteForm({
   canQuote,
   jobId,
+  buyerPubkey,
   transport,
   onQuoted,
 }: {
   /** Whether this agent's connector session is confirmed reachable — see `ProviderJobsPanel`. */
   canQuote: boolean;
   jobId: string;
+  buyerPubkey: string;
   transport: ToonEventTransport;
   onQuoted: (event: RelayEvent) => void;
 }) {
@@ -63,7 +65,7 @@ export function QuoteForm({
     setError(null);
     try {
       const posted = await postFactoryJobQuote(
-        { rootJobId: jobId, increments: parsedIncrements },
+        { rootJobId: jobId, buyerPubkey, increments: parsedIncrements },
         transport,
       );
       setRows([newRow()]);
