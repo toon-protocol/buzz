@@ -4,12 +4,11 @@ import type { ManagedAgent } from "@/shared/api/types";
 
 /**
  * Per-agent runway badges for the Agents grid + sidebar low-funds alert
- * (buzz#76). Only the identity this desktop process itself pays as
- * (account index 0) has a live channel read today — see
- * `networkSpendState.ts`'s module doc — so every other managed agent maps
- * to `null` (no badge) rather than a fabricated or stale figure. That is a
- * real, documented architectural gap (buzz#79's ADR 0006), not something
- * this hook works around.
+ * (buzz#76). Every managed agent gets a real channel read now (buzz#109 —
+ * see `useAgentFleetStatus.ts`'s module doc and `docs/adr/0007`), not only
+ * the identity this desktop process itself pays as — an agent with no
+ * discovered channel still maps to `null` (no badge), never a fabricated or
+ * stale figure.
  */
 export function useAgentFleetRunwayBadges(
   agents: readonly ManagedAgent[],

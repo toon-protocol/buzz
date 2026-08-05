@@ -24,10 +24,10 @@ export type NetworkSpendState =
   /** TOON is active; the channel read is in flight. */
   | { kind: "pending" }
   /**
-   * TOON is active but there is nothing to read: viewing an agent other
-   * than the identity this desktop process pays as (no per-agent channel
-   * read exists yet — see the module doc), or this identity has never
-   * opened a channel.
+   * TOON is active but there is nothing to read: this identity has never
+   * opened a channel, no channel was ever discovered for it (buzz#109 —
+   * `docs/adr/0007`), or (Solana) this agent's chain is out of this read
+   * path's scope.
    */
   | { kind: "unavailable" }
   | {
@@ -41,23 +41,20 @@ export type NetworkSpendState =
 
 /**
  * Combine a channel read with the live burn-rate snapshot into the block's
- * state. `isSelf` gates the whole per-agent read: this desktop process only
- * ever holds a live `ToonClient` for the identity it itself pays as (its own
- * wallet, account index 0) — a managed agent's own `toon-clientd` sidecar
- * tracks its channel independently, and nothing here can read that
- * remotely yet (no spawn/lifecycle for those daemons exists — buzz#79's ADR
- * 0006 — and no account-index lookup is exposed to the frontend). That is a
- * real architectural gap, not a state this function papers over: any other
- * agent honestly reads `unavailable`.
+ * state. `unavailable` now falls out of `raw === null` alone — the caller
+ * (`useNetworkSpend.ts`) is responsible for producing that `null` honestly,
+ * whether the reason is "not on TOON", "no channel for this identity yet",
+ * or (for a non-`isSelf` agent, buzz#109 / `docs/adr/0007`) "no channel was
+ * ever discovered for this agent's derived address" or "the connector could
+ * not verify this agent's challenge". This function does not need to know
+ * which — every one of those is the same honest non-answer.
  */
 export function deriveNetworkSpendState(input: {
   isToon: boolean;
-  isSelf: boolean;
   raw: RawNetworkFlowStatus | null | "pending";
   live: LiveSpendSnapshot;
 }): NetworkSpendState {
   if (!input.isToon) return { kind: "relay" };
-  if (!input.isSelf) return { kind: "unavailable" };
   if (input.raw === "pending") return { kind: "pending" };
   if (input.raw === null) return { kind: "unavailable" };
 
