@@ -691,6 +691,67 @@ async function seedOnboardingCompletionForKnownIdentities(
 }
 
 /**
+ * Answer the settlement chain's JSON-RPC from fixtures, so a bridged TOON run
+ * never reaches a real endpoint (buzz#131).
+ *
+ * The payments wizard's fund step is derived from LIVE balances, not from any
+ * stored flag (`toonOnboardingState.ts`: `!fundedForToken || !hasNativeGas`
+ * → `"fund"`), and `readToonOnboardingBalances` calls `readWalletBalances`
+ * from `@toon-protocol/client` against `config.chainRpcUrl` — by default
+ * `https://base-sepolia-rpc.publicnode.com`. So seeding localStorage alone
+ * cannot get past that step: without this stub the harness dials the public
+ * internet, and the run's outcome depends on the on-chain state of whatever
+ * wallet the seeded mnemonic derives.
+ *
+ * Deliberately answers by method rather than by exact call encoding, so it
+ * does not break if the client changes how it asks for a token balance:
+ * anything unrecognised returns `0x0` rather than erroring, which surfaces as
+ * an honest "unreadable" balance instead of a hang.
+ */
+async function stubToonChainRpc(page: Page) {
+  await page.route(
+    (url) => /base-sepolia-rpc\.publicnode\.com/.test(url.href),
+    async (route) => {
+      let method = "";
+      let id: unknown = 1;
+      try {
+        const body: unknown = route.request().postDataJSON();
+        if (body && typeof body === "object") {
+          method = String((body as Record<string, unknown>).method ?? "");
+          id = (body as Record<string, unknown>).id ?? 1;
+        }
+      } catch {
+        // Non-JSON body — fall through to the default answer below.
+      }
+
+      // 32-byte word holding 1000 USDC at 6 decimals, the shape an ERC-20
+      // `balanceOf` returns. Any positive value satisfies `fundedForToken`.
+      const TOKEN_BALANCE_WORD = `0x${(1_000_000_000n).toString(16).padStart(64, "0")}`;
+      // 0.05 ETH in wei — `hasNativeGas` only needs > 0, but a plausible
+      // figure keeps the wizard's own copy sensible if it ever renders.
+      const NATIVE_BALANCE = `0x${(50_000_000_000_000_000n).toString(16)}`;
+
+      const result =
+        method === "eth_getBalance"
+          ? NATIVE_BALANCE
+          : method === "eth_call"
+            ? TOKEN_BALANCE_WORD
+            : method === "eth_chainId"
+              ? "0x14a34" // 84532, Base Sepolia
+              : method === "eth_blockNumber"
+                ? "0x1"
+                : "0x0";
+
+      await route.fulfill({
+        contentType: "application/json",
+        status: 200,
+        body: JSON.stringify({ jsonrpc: "2.0", id, result }),
+      });
+    },
+  );
+}
+
+/**
  * Mark the TOON payments wizard already completed (buzz#131).
  *
  * `toonOnboardingState.ts` derives its step purely from the three stored
@@ -812,6 +873,7 @@ export async function installBridge(page: Page, options: BridgeOptions) {
     // positionally as `mock`, so it is reached through `options.mock`.
     if (options.mock?.transportEnv?.BUZZ_TRANSPORT === "toon") {
       await seedToonOnboardingCompletion(page);
+      await stubToonChainRpc(page);
     }
   }
   // Default to opting every preview feature in. Specs that exercise the
