@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  checkOfferPayable,
   deriveFactoryJobExposure,
   factoryJobExposureCaption,
 } from "./factoryJobExposure.ts";
@@ -65,4 +66,31 @@ test("no schedule yet: nothing to risk", () => {
   const exposure = deriveFactoryJobExposure([], new Set());
   assert.equal(exposure.totalCount, 0);
   assert.match(factoryJobExposureCaption(exposure), /nothing has been risked/);
+});
+
+test("checkOfferPayable: an offer matching the quoted increment price is payable", () => {
+  const result = checkOfferPayable(
+    { increment: { n: 2 }, amountBaseUnits: 4_000_000n },
+    SCHEDULE,
+  );
+  assert.deepEqual(result, { payable: true });
+});
+
+test("checkOfferPayable: a provider inflating an increment's price is not payable, and says why (§4.1 MUST)", () => {
+  const result = checkOfferPayable(
+    { increment: { n: 2 }, amountBaseUnits: 4_500_000n },
+    SCHEDULE,
+  );
+  assert.equal(result.payable, false);
+  assert.match(result.reason, /4\.50 USDC/);
+  assert.match(result.reason, /quoted at 4\.00 USDC/);
+});
+
+test("checkOfferPayable: an increment absent from the quoted schedule is not payable", () => {
+  const result = checkOfferPayable(
+    { increment: { n: 9 }, amountBaseUnits: 1n },
+    SCHEDULE,
+  );
+  assert.equal(result.payable, false);
+  assert.match(result.reason, /not in the quoted schedule/);
 });

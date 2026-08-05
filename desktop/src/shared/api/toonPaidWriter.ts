@@ -1,6 +1,7 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import type { ClaimStateResult } from "@toon-protocol/client";
 
+import { splitClaimStateWatermark } from "@/features/profile/lib/claimStateWatermark";
 import {
   clearPersistedChannel,
   hasPersistedChannel,
@@ -123,6 +124,23 @@ export class ToonPaidWriteError extends Error {
     super(message, options);
     this.name = "ToonPaidWriteError";
   }
+}
+
+/**
+ * Human copy for a THROWN (not merely refused) failure while setting up a
+ * factory job increment payment. `@toon-protocol/client` internals — e.g.
+ * `ToonClientError`'s "No negotiation metadata for peer…" when the
+ * connector's x402 greeting hasn't bootstrapped a route yet — are debugging
+ * detail, not something a buyer paying a provider should read raw. The raw
+ * error is preserved as `cause` (and console-logged by the caller) for
+ * anyone who needs it.
+ */
+function describeFactoryJobPaymentSetupError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  if (/negotiation metadata/i.test(raw)) {
+    return "This provider isn't ready to accept a payment session yet. Wait a moment and try again — if it keeps failing, the provider may be offline.";
+  }
+  return "Couldn't set up the payment for this increment. Check your connection and try again.";
 }
 
 /**
@@ -648,19 +666,27 @@ export class ToonPaidWriter {
     }
 
     const client = await this.ensureClient();
-    const channelId = await client.openChannel(params.destination);
-    const proof = await client.signBalanceProof(
-      channelId,
-      params.amountBaseUnits,
-    );
-
-    const result = await client.sendSwapPacket({
-      destination: params.destination,
-      amount: params.amountBaseUnits,
-      toonData: new TextEncoder().encode(params.jobEventId),
-      executionCondition: hexToBytes(params.conditionHex),
-      claim: proof,
-    });
+    let channelId: string;
+    let result: Awaited<ReturnType<PaidClient["sendSwapPacket"]>>;
+    try {
+      channelId = await client.openChannel(params.destination);
+      const proof = await client.signBalanceProof(
+        channelId,
+        params.amountBaseUnits,
+      );
+      result = await client.sendSwapPacket({
+        destination: params.destination,
+        amount: params.amountBaseUnits,
+        toonData: new TextEncoder().encode(params.jobEventId),
+        executionCondition: hexToBytes(params.conditionHex),
+        claim: proof,
+      });
+    } catch (error) {
+      console.error("Factory job increment payment failed", error);
+      throw new ToonPaidWriteError(describeFactoryJobPaymentSetupError(error), {
+        cause: error,
+      });
+    }
 
     if (!result.accepted) {
       const code = result.code ? ` [${result.code}]` : "";
@@ -800,14 +826,8 @@ export class ToonPaidWriter {
     if (!client.getClaimState) return null;
     try {
       const [result] = await client.getClaimState([channelId]);
-      if (!result?.ok || result.depositTotal === null) return null;
-      const cumulativeClaimed = BigInt(result.cumulativeClaimed);
-      return {
-        depositTotalBaseUnits: BigInt(result.depositTotal),
-        cumulativeClaimedBaseUnits:
-          cumulativeClaimed > 0n ? cumulativeClaimed : 0n,
-        creditedBaseUnits: cumulativeClaimed < 0n ? -cumulativeClaimed : 0n,
-      };
+      if (!result?.ok) return null;
+      return splitClaimStateWatermark(result);
     } catch (error) {
       console.warn(
         "[toon] claim-state read failed — falling back to the local channel record",

@@ -89,6 +89,7 @@ test("parses a per-increment offer — the relay/connector join", () => {
     rootJobId: ROOT_ID,
     status: "partial",
     parentEventId: "quote-event-id",
+    buyerPubkey: "buyer-pubkey",
     increment: { n: 1, of: 1 },
     artifactUrl: "arweave-tx-id",
     artifactHash: "ciphertext-hash",
@@ -101,10 +102,44 @@ test("a partial offer missing the condition tag is malformed, never treated as f
   const event = baseEvent({
     tags: [
       ["e", ROOT_ID, "", "root"],
+      ["e", "quote-event-id", "", "reply"],
+      ["p", "buyer-pubkey"],
       ["status", "partial"],
       ["increment", "1", "1"],
       ["i", "arweave-tx-id", "url"],
       ["amount", "5000000", "usdc"],
+    ],
+  });
+  const parsed = parseFactoryJobFeedback(event);
+  assert.equal(parsed.status, "malformed");
+});
+
+test("a partial offer missing the reply e-tag is malformed (§4.1 Required)", () => {
+  const event = baseEvent({
+    tags: [
+      ["e", ROOT_ID, "", "root"],
+      ["p", "buyer-pubkey"],
+      ["status", "partial"],
+      ["increment", "1", "1"],
+      ["i", "arweave-tx-id", "url"],
+      ["amount", "5000000", "usdc"],
+      ["condition", "a".repeat(64)],
+    ],
+  });
+  const parsed = parseFactoryJobFeedback(event);
+  assert.equal(parsed.status, "malformed");
+});
+
+test("a partial offer missing the buyer p tag is malformed (§4.1 Required)", () => {
+  const event = baseEvent({
+    tags: [
+      ["e", ROOT_ID, "", "root"],
+      ["e", "quote-event-id", "", "reply"],
+      ["status", "partial"],
+      ["increment", "1", "1"],
+      ["i", "arweave-tx-id", "url"],
+      ["amount", "5000000", "usdc"],
+      ["condition", "a".repeat(64)],
     ],
   });
   const parsed = parseFactoryJobFeedback(event);

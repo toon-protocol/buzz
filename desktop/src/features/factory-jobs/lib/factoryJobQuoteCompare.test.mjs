@@ -81,8 +81,15 @@ test("a schedule summing above the bid cap is flagged, not silently accepted", (
 
 test("gate-pass rate is always labelled as conformance, not quality", () => {
   assert.equal(
-    gatePassRateLabel(0.875),
+    gatePassRateLabel(0.875, 4),
     "88% gate-pass rate (conformance, not quality)",
   );
-  assert.equal(gatePassRateLabel(null), "No completed jobs yet");
+});
+
+test("a genuinely zero completed-job count says so", () => {
+  assert.equal(gatePassRateLabel(null, 0), "No completed jobs yet");
+});
+
+test("a null rate beside a nonzero completed-job count says the signal is missing, not that no jobs completed", () => {
+  assert.equal(gatePassRateLabel(null, 4), "No gate-pass data");
 });

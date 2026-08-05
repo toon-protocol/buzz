@@ -43,18 +43,32 @@ pub async fn cmd_get_workflow(client: &BuzzClient, workflow_id: &str) -> Result<
     });
     let resp = client.query(&filter).await?;
     let events: Vec<serde_json::Value> = serde_json::from_str(&resp).unwrap_or_default();
-    if let Some(e) = events.first() {
-        let normalized = serde_json::json!({
-            "workflow_id": extract_d_tag(e),
-            "content": e.get("content").and_then(|v| v.as_str()).unwrap_or(""),
-            "created_at": e.get("created_at").and_then(|v| v.as_u64()).unwrap_or(0),
-            "pubkey": e.get("pubkey").and_then(|v| v.as_str()).unwrap_or(""),
-        });
-        println!("{normalized}");
-    } else {
-        println!("null");
-    }
+    let normalized = resolve_workflow_get(&events, workflow_id)?;
+    println!("{normalized}");
     Ok(())
+}
+
+/// Pure core of [`cmd_get_workflow`]: same rationale as
+/// `channels::resolve_channel_get` (buzz#130) — the query is already scoped
+/// to channels the caller can see (kind:30620 is channel-`#h`-tagged), so an
+/// empty result means "no such workflow" and "workflow exists in a channel
+/// invisible to the caller" alike, and both must error rather than print a
+/// bare `null` on stdout with exit 0.
+fn resolve_workflow_get(
+    events: &[serde_json::Value],
+    workflow_id: &str,
+) -> Result<serde_json::Value, CliError> {
+    let Some(e) = events.first() else {
+        return Err(CliError::NotFound(format!(
+            "workflow not found or not visible: {workflow_id}"
+        )));
+    };
+    Ok(serde_json::json!({
+        "workflow_id": extract_d_tag(e),
+        "content": e.get("content").and_then(|v| v.as_str()).unwrap_or(""),
+        "created_at": e.get("created_at").and_then(|v| v.as_u64()).unwrap_or(0),
+        "pubkey": e.get("pubkey").and_then(|v| v.as_str()).unwrap_or(""),
+    }))
 }
 
 /// Get workflow run history — query kinds [46001, 46002, 46003].
@@ -239,5 +253,42 @@ pub async fn dispatch(cmd: crate::WorkflowsCmd, client: &BuzzClient) -> Result<(
             // approved is already a bool — no parse_bool_flag needed
             cmd_approve_step(client, &token, approved, note.as_deref()).await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_workflow_get;
+    use crate::CliError;
+    use serde_json::json;
+
+    // --- buzz#130: `workflows get` must not print a bare `null` with exit 0
+    // for a workflow that doesn't exist or lives in an invisible channel. ---
+
+    #[test]
+    fn resolve_workflow_get_errors_not_found_on_empty_result() {
+        let id = "00000000-0000-0000-0000-000000000000";
+        let err = resolve_workflow_get(&[], id).unwrap_err();
+        assert!(matches!(err, CliError::NotFound(_)));
+        assert!(err.to_string().contains(id));
+    }
+
+    #[test]
+    fn resolve_workflow_get_returns_normalized_definition_when_visible() {
+        let ev = json!({
+            "tags": [["d", "11111111-1111-1111-1111-111111111111"]],
+            "content": "steps: []",
+            "created_at": 42,
+            "pubkey": "abc123",
+        });
+        let normalized = resolve_workflow_get(&[ev], "11111111-1111-1111-1111-111111111111")
+            .expect("visible workflow resolves");
+        assert_eq!(
+            normalized["workflow_id"],
+            "11111111-1111-1111-1111-111111111111"
+        );
+        assert_eq!(normalized["content"], "steps: []");
+        assert_eq!(normalized["created_at"], 42);
+        assert_eq!(normalized["pubkey"], "abc123");
     }
 }

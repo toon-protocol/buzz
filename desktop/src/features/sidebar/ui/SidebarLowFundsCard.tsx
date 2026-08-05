@@ -15,8 +15,8 @@ type SidebarLowFundsCardProps = {
  * The fleet low-funds alert (buzz#76) — same `SidebarCompactActionCard`
  * idiom as `SidebarRelayConnectionCard`: icon, title, one action,
  * dismissible, `role=alert`. Appears only once at least one agent's runway
- * has crossed a warning threshold; see `agentFleetRunway.ts` for why that
- * is `0` for almost every agent today (no per-agent channel read yet).
+ * has crossed a warning threshold, from a real per-agent read for every
+ * managed agent (buzz#109 / `docs/adr/0007`) — see `agentFleetRunway.ts`.
  */
 export function SidebarLowFundsCard({ onOpenFleet }: SidebarLowFundsCardProps) {
   const agentsQuery = useManagedAgentsQuery();

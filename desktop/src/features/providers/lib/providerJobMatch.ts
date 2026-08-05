@@ -16,3 +16,11 @@ export function matchesProviderCapability(
   if (settings.repoFilter.length === 0) return true;
   return request.repo !== null && settings.repoFilter.includes(request.repo);
 }
+
+/** A brief this agent posted as a buyer is never a job it can quote as a provider. */
+export function isOwnFactoryJob(
+  request: FactoryJobRequest,
+  myPubkey: string | null,
+): boolean {
+  return myPubkey !== null && request.buyerPubkey === myPubkey;
+}

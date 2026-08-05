@@ -8,6 +8,7 @@ import {
   DEFAULT_AGENT_NATIVE_GAS_BASE_UNITS,
   deriveInitialAllowanceBaseUnits,
 } from "./lib/agentProvisioningAllowance";
+import { readAccountIndexWithTimeout } from "./lib/agentProvisioningKeyRead";
 import {
   deriveAgentProvisioningStatus,
   type AgentProvisioningStatus,
@@ -36,6 +37,13 @@ import {
  * live state on mount, so quitting mid-flow and reopening resumes correctly.
  */
 
+/**
+ * A stall beyond this reads as failed, not "still loading" — the account
+ * index is a fast local Tauri IPC read (buzz#128), so a hang this long means
+ * something is actually wrong, not that it just needs more time.
+ */
+export const ACCOUNT_INDEX_READ_TIMEOUT_MS = 15_000;
+
 export type AgentProvisioningBalanceState = {
   tokenBaseUnits: bigint | null;
   nativeBaseUnits: bigint | null;
@@ -51,6 +59,8 @@ export function useAgentProvisioning(pubkey: string) {
   const ownerMnemonic = config?.mnemonic ?? getStoredMnemonic();
 
   const [accountIndex, setAccountIndex] = React.useState<number | null>(null);
+  const [keyError, setKeyError] = React.useState<string | null>(null);
+  const [keyRetryCount, setKeyRetryCount] = React.useState(0);
   const [address, setAddress] = React.useState<string | null>(null);
   const [balances, setBalances] = React.useState<AgentProvisioningBalanceState>(
     {
@@ -74,27 +84,51 @@ export function useAgentProvisioning(pubkey: string) {
   // Resolve the account index once — `create_managed_agent` already assigns
   // it synchronously at creation (buzz#79), so this is a read, not a wait.
   // Skipped for an empty pubkey (no agent selected yet — `AgentProvisioningDialog`
-  // stays mounted with `agent: null` between creations).
+  // stays mounted with `agent: null` between creations). A failed or stalled
+  // read surfaces as `keyError` instead of leaving the dialog on an infinite
+  // "waiting" spinner (buzz#128) — `retryKeyRead` re-runs it on demand.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyRetryCount is an intentional retry trigger, not a value read by the effect body.
   React.useEffect(() => {
     if (!pubkey) {
       setAccountIndex(null);
+      setKeyError(null);
       return;
     }
     let cancelled = false;
-    getManagedAgentAccountIndex(pubkey)
-      .then((index) => {
-        if (!cancelled) setAccountIndex(index);
-      })
-      .catch((error: unknown) => {
-        console.error(
-          "[agent-provisioning] could not read the account index",
-          error,
+    setKeyError(null);
+    readAccountIndexWithTimeout({
+      read: () => getManagedAgentAccountIndex(pubkey),
+      scheduleTimeout: (onTimeout) => {
+        const timer = window.setTimeout(
+          onTimeout,
+          ACCOUNT_INDEX_READ_TIMEOUT_MS,
         );
-      });
+        return () => window.clearTimeout(timer);
+      },
+    }).then((outcome) => {
+      if (cancelled) return;
+      if (outcome.kind === "ok") {
+        setAccountIndex(outcome.accountIndex);
+        return;
+      }
+      const message =
+        outcome.kind === "timeout"
+          ? "Timed out waiting for the agent's payment key to be assigned."
+          : outcome.message;
+      console.error(
+        "[agent-provisioning] could not read the account index",
+        message,
+      );
+      setKeyError(message);
+    });
     return () => {
       cancelled = true;
     };
-  }, [pubkey]);
+  }, [pubkey, keyRetryCount]);
+
+  const retryKeyRead = React.useCallback(() => {
+    setKeyRetryCount((count) => count + 1);
+  }, []);
 
   // Derive the address whenever the owner mnemonic or index resolve — pure,
   // local, offline, so there is no reason to gate this behind a button.
@@ -231,6 +265,8 @@ export function useAgentProvisioning(pubkey: string) {
     active,
     config,
     status,
+    keyError,
+    retryKeyRead,
     address,
     balances,
     balancesLoading,
