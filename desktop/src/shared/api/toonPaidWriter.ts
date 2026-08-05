@@ -1,6 +1,7 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import type { ClaimStateResult } from "@toon-protocol/client";
 
+import { splitClaimStateWatermark } from "@/features/profile/lib/claimStateWatermark";
 import {
   clearPersistedChannel,
   hasPersistedChannel,
@@ -800,14 +801,8 @@ export class ToonPaidWriter {
     if (!client.getClaimState) return null;
     try {
       const [result] = await client.getClaimState([channelId]);
-      if (!result?.ok || result.depositTotal === null) return null;
-      const cumulativeClaimed = BigInt(result.cumulativeClaimed);
-      return {
-        depositTotalBaseUnits: BigInt(result.depositTotal),
-        cumulativeClaimedBaseUnits:
-          cumulativeClaimed > 0n ? cumulativeClaimed : 0n,
-        creditedBaseUnits: cumulativeClaimed < 0n ? -cumulativeClaimed : 0n,
-      };
+      if (!result?.ok) return null;
+      return splitClaimStateWatermark(result);
     } catch (error) {
       console.warn(
         "[toon] claim-state read failed — falling back to the local channel record",

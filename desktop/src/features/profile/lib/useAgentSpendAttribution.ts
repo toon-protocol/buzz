@@ -23,9 +23,11 @@ import {
  * agent (buzz#78).
  *
  * The connector total (needed for `reconcileSpend` and for recording a
- * history checkpoint) only exists for `isSelf` today — see
- * `networkSpendState.ts`'s module doc for why. `network` is the caller's
- * already-fetched `NetworkSpendState` (from `useNetworkSpend`), not a second
+ * history checkpoint) is read only for `isSelf` — a deliberate scope choice
+ * (see `UserProfilePanelSpendAttribution.tsx`'s module doc), not because a
+ * non-`isSelf` connector total is unavailable (it is, since buzz#109 /
+ * `docs/adr/0007`). `network` is the caller's already-fetched
+ * `NetworkSpendState` (from `useNetworkSpend`), not a second
  * independent read: `UserProfilePanelMoneyTab.tsx` fetches it once and
  * shares it with both the Network spend block and this hook, so viewing the
  * Money tab never asks the connector for the same channel's claim state

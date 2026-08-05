@@ -60,9 +60,7 @@ export function AgentProvisioningDialog({
 
         <div className="mt-4">
           {provisioning.status.step === "key" ? (
-            <p className="text-sm text-muted-foreground">
-              Waiting for the agent's payment key to be assigned…
-            </p>
+            <KeyStep provisioning={provisioning} />
           ) : provisioning.status.step === "fund" ? (
             <FundStep provisioning={provisioning} />
           ) : provisioning.status.step === "channel" ? (
@@ -77,6 +75,34 @@ export function AgentProvisioningDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function KeyStep({
+  provisioning,
+}: {
+  provisioning: ReturnType<typeof useAgentProvisioning>;
+}) {
+  if (provisioning.keyError) {
+    return (
+      <div className="flex flex-col gap-3">
+        <Alert variant="destructive">
+          <AlertDescription>{provisioning.keyError}</AlertDescription>
+        </Alert>
+        <Button
+          data-testid="agent-provisioning-key-retry"
+          onClick={provisioning.retryKeyRead}
+          type="button"
+        >
+          Retry
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <p className="text-sm text-muted-foreground">
+      Waiting for the agent's payment key to be assigned…
+    </p>
   );
 }
 

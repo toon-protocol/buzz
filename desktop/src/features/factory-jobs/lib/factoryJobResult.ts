@@ -48,7 +48,8 @@ export function parseFactoryJobResult(event: {
   const rootJobId = eTag(event.tags, "root");
   const outcomeRaw = firstTag(event.tags, "outcome")?.[1];
   const incrementTag = firstTag(event.tags, "increment");
-  if (!rootJobId || !outcomeRaw || !incrementTag) return null;
+  const requestJson = firstTag(event.tags, "request")?.[1];
+  if (!rootJobId || !outcomeRaw || !incrementTag || !requestJson) return null;
   if (!OUTCOMES.includes(outcomeRaw as FactoryJobOutcome)) return null;
 
   const reached = Number.parseInt(incrementTag[1] ?? "", 10);
@@ -56,6 +57,7 @@ export function parseFactoryJobResult(event: {
   if (!Number.isFinite(reached) || !Number.isFinite(of)) return null;
 
   const outcome = outcomeRaw as FactoryJobOutcome;
+  if (outcome === "completed" && reached !== of) return null;
   const artifactTag = event.tags.find(
     (tag) => tag[0] === "i" && tag[2] === "url",
   );

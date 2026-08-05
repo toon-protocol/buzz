@@ -16,6 +16,7 @@ import {
   resolveUserSecondaryLabel,
   type UserProfileLookup,
 } from "@/features/profile/lib/identity";
+import { describeSearchHitKind } from "@/features/search/lib/searchHitLabel";
 import type { Channel, SearchHit, UserSearchResult } from "@/shared/api/types";
 import { Badge } from "@/shared/ui/badge";
 import { UserAvatar } from "@/shared/ui/UserAvatar";
@@ -157,29 +158,6 @@ export function ChannelResultBody({ channel }: { channel: Channel }) {
   );
 }
 
-function describeSearchHit(hit: SearchHit) {
-  switch (hit.kind) {
-    case 1:
-      return "Note";
-    case 45001:
-      return "Forum post";
-    case 45003:
-      return "Forum reply";
-    case 43001:
-      return "Agent job";
-    case 43003:
-      return "Agent update";
-    case 5097:
-      return "Agent job";
-    case 7000:
-      return "Agent update";
-    case 46010:
-      return "Approval request";
-    default:
-      return "Message";
-  }
-}
-
 function truncateContent(content: string) {
   const trimmed = content.trim();
   if (trimmed.length === 0) {
@@ -244,7 +222,7 @@ export function MessageResultBody({
         <p className="text-sm font-semibold tracking-tight">
           {hit.channelName}
         </p>
-        <Badge variant="secondary">{describeSearchHit(hit)}</Badge>
+        <Badge variant="secondary">{describeSearchHitKind(hit.kind)}</Badge>
         <span className="flex items-center gap-1 text-xs text-muted-foreground">
           <UserAvatar
             avatarUrl={avatarUrl}

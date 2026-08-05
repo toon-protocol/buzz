@@ -11,14 +11,13 @@ import { useAgentSpendAttribution } from "@/features/profile/lib/useAgentSpendAt
  * redistributed across the breakdown (spend in channels the owner cannot
  * see is real and should read as real, not silently absorbed).
  *
- * `isSelf`-gated for the same reason `NetworkSpendSection` is: reconciling
- * needs a connector total, and only the identity this desktop process pays
- * as has one today (see `networkSpendState.ts`'s module doc). The
+ * `isSelf`-gated by deliberate scope choice, not the architectural gap
+ * `NetworkSpendSection` used to have: every managed agent now has a real
+ * connector total available (`network`, buzz#109 / `docs/adr/0007`), but
+ * wiring THIS block's reconciliation + persisted trend to a non-`isSelf`
+ * agent is its own follow-up, not part of that ticket's AC. The
  * channel/kind breakdown itself does not need `isSelf` — see
- * `agentSpendAttribution.ts`'s module doc — but without a total to
- * reconcile against there is nothing yet to call an "attribution" in the
- * sense this block promises, so it stays hidden rather than showing a
- * breakdown with no total behind it.
+ * `agentSpendAttribution.ts`'s module doc.
  */
 export function SpendAttributionSection({
   agentPubkey,
