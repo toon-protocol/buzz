@@ -139,3 +139,4 @@ if grep -q 'gh workflow run' "$auto_tag"; then
 fi
 
 echo "release ref contract passed"
+echo "deliberate red for toon-meta#272 enforcement proof"; exit 1
