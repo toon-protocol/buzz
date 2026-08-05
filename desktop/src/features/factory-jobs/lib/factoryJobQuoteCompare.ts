@@ -93,8 +93,20 @@ export function compareFactoryJobQuotes(
   return { established, coldStart };
 }
 
-/** The label every gate-pass figure must carry — conformance, not quality (buzz#85 gotcha). */
-export function gatePassRateLabel(rate: number | null): string {
-  if (rate === null) return "No completed jobs yet";
-  return `${Math.round(rate * 100)}% gate-pass rate (conformance, not quality)`;
+/**
+ * The label every gate-pass figure must carry — conformance, not quality
+ * (buzz#85 gotcha). `rate` is `null` in two genuinely different cases that
+ * must never share copy: nothing has completed yet, versus jobs completed
+ * but the wire carries no gate-pass signal for them (`useFactoryJobBuyer.ts`
+ * — no ticket has put one on kind:6097 yet). Conflating the two reads as "no
+ * completed jobs" next to a nonzero completed-job count, which is false.
+ */
+export function gatePassRateLabel(
+  rate: number | null,
+  jobsCompleted: number,
+): string {
+  if (rate !== null) {
+    return `${Math.round(rate * 100)}% gate-pass rate (conformance, not quality)`;
+  }
+  return jobsCompleted > 0 ? "No gate-pass data" : "No completed jobs yet";
 }

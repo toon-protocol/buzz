@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { matchesProviderCapability } from "./providerJobMatch.ts";
+import {
+  isOwnFactoryJob,
+  matchesProviderCapability,
+} from "./providerJobMatch.ts";
 
 function job(overrides = {}) {
   return {
@@ -48,4 +51,19 @@ test("a non-empty repo filter only matches a job naming a listed repo", () => {
     false,
   );
   assert.equal(matchesProviderCapability(job({ repo: null }), settings), false);
+});
+
+test("a job this agent posted itself is its own job", () => {
+  assert.equal(isOwnFactoryJob(job({ buyerPubkey: "me" }), "me"), true);
+});
+
+test("a job posted by someone else is not this agent's own job", () => {
+  assert.equal(
+    isOwnFactoryJob(job({ buyerPubkey: "someone-else" }), "me"),
+    false,
+  );
+});
+
+test("with no known identity yet, nothing is treated as this agent's own job", () => {
+  assert.equal(isOwnFactoryJob(job({ buyerPubkey: "me" }), null), false);
 });

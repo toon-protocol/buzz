@@ -126,6 +126,23 @@ export class ToonPaidWriteError extends Error {
 }
 
 /**
+ * Human copy for a THROWN (not merely refused) failure while setting up a
+ * factory job increment payment. `@toon-protocol/client` internals — e.g.
+ * `ToonClientError`'s "No negotiation metadata for peer…" when the
+ * connector's x402 greeting hasn't bootstrapped a route yet — are debugging
+ * detail, not something a buyer paying a provider should read raw. The raw
+ * error is preserved as `cause` (and console-logged by the caller) for
+ * anyone who needs it.
+ */
+function describeFactoryJobPaymentSetupError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  if (/negotiation metadata/i.test(raw)) {
+    return "This provider isn't ready to accept a payment session yet. Wait a moment and try again — if it keeps failing, the provider may be offline.";
+  }
+  return "Couldn't set up the payment for this increment. Check your connection and try again.";
+}
+
+/**
  * A signed balance proof, as `ToonClient.signBalanceProof` returns it —
  * carried through to `publishEvent`'s `claim` option unmodified. Only the
  * fields this module reads itself (to keep the resume watermark current) are
@@ -648,19 +665,27 @@ export class ToonPaidWriter {
     }
 
     const client = await this.ensureClient();
-    const channelId = await client.openChannel(params.destination);
-    const proof = await client.signBalanceProof(
-      channelId,
-      params.amountBaseUnits,
-    );
-
-    const result = await client.sendSwapPacket({
-      destination: params.destination,
-      amount: params.amountBaseUnits,
-      toonData: new TextEncoder().encode(params.jobEventId),
-      executionCondition: hexToBytes(params.conditionHex),
-      claim: proof,
-    });
+    let channelId: string;
+    let result: Awaited<ReturnType<PaidClient["sendSwapPacket"]>>;
+    try {
+      channelId = await client.openChannel(params.destination);
+      const proof = await client.signBalanceProof(
+        channelId,
+        params.amountBaseUnits,
+      );
+      result = await client.sendSwapPacket({
+        destination: params.destination,
+        amount: params.amountBaseUnits,
+        toonData: new TextEncoder().encode(params.jobEventId),
+        executionCondition: hexToBytes(params.conditionHex),
+        claim: proof,
+      });
+    } catch (error) {
+      console.error("Factory job increment payment failed", error);
+      throw new ToonPaidWriteError(describeFactoryJobPaymentSetupError(error), {
+        cause: error,
+      });
+    }
 
     if (!result.accepted) {
       const code = result.code ? ` [${result.code}]` : "";
