@@ -1992,15 +1992,10 @@ async fn ingest_event_inner(
                 parts.len() >= 2 && parts[0] == "archived" && parts[1] == "false"
             });
 
-        if !is_unarchive {
-            if let Some(channel) = &channel_row {
-                if channel.archived_at.is_some() {
-                    return Err(IngestError::Rejected("invalid: channel is archived".into()));
-                }
-            }
-        }
-
         if let Some(channel) = &channel_row {
+            if !is_unarchive && channel.archived_at.is_some() {
+                return Err(IngestError::Rejected("invalid: channel is archived".into()));
+            }
             reject_chat_kind_in_forum_channel(&channel.channel_type, kind_u32)?;
         }
     }
