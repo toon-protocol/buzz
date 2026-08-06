@@ -5,6 +5,14 @@ import { resetMediaUploader, setMediaUploader } from "@/shared/api/mediaUpload";
 import { StoreMediaUploader } from "@/shared/api/storeMediaUploader";
 import { getTransportEnv } from "@/shared/api/tauriTransport";
 import { ToonEventTransport } from "@/shared/api/toonEventTransport";
+import {
+  ToonPaidWriter,
+  type PaidClientFactory,
+} from "@/shared/api/toonPaidWriter";
+import {
+  ToonRelayReader,
+  type ToonSocketFactory,
+} from "@/shared/api/toonRelayReader";
 import { setArweaveGateways } from "@/shared/lib/arweaveMedia";
 import {
   decideTransport,
@@ -53,6 +61,39 @@ function withWizardMnemonic(env: Record<string, string>): ToonTransportEnv {
   if (env.BUZZ_TOON_MNEMONIC?.trim()) return env;
   const stored = getStoredMnemonic();
   return stored ? { ...env, BUZZ_TOON_MNEMONIC: stored } : env;
+}
+
+/**
+ * A test-only escape hatch (buzz#131) letting the e2e bridge run the TOON
+ * transport against a fake payment client and a fake relay socket instead of
+ * the real devnet. `testing/e2eBridgeToon.ts` installs this global before
+ * `installSelectedTransport` runs (see `main.tsx`'s bootstrap order); every
+ * real build leaves it undefined, so the branch below is a no-op there.
+ */
+export type ToonE2eTestOverrides = {
+  paidClientFactory: PaidClientFactory;
+  socketFactory: ToonSocketFactory;
+};
+
+function getToonE2eTestOverrides(): ToonE2eTestOverrides | undefined {
+  if (typeof window === "undefined") return undefined;
+  return (
+    window as unknown as {
+      __BUZZ_E2E_TOON_TEST_OVERRIDES__?: ToonE2eTestOverrides;
+    }
+  ).__BUZZ_E2E_TOON_TEST_OVERRIDES__;
+}
+
+/** `ToonEventTransport`'s constructor parts for the e2e test overrides, or undefined so it builds its real defaults. */
+function toonTransportPartsFor(
+  config: TransportSelection["config"],
+  overrides: ToonE2eTestOverrides | undefined,
+): ConstructorParameters<typeof ToonEventTransport>[1] {
+  if (!overrides) return undefined;
+  return {
+    writer: new ToonPaidWriter(config, overrides.paidClientFactory),
+    reader: new ToonRelayReader(config.relayUrl, overrides.socketFactory),
+  };
 }
 
 /** The transport this run installed, so a later caller (the onboarding wizard) can reach it without a second resolve. */
@@ -104,7 +145,10 @@ export async function installSelectedTransport(): Promise<TransportSelection> {
   }
 
   try {
-    const transport = new ToonEventTransport(selection.config);
+    const transport = new ToonEventTransport(
+      selection.config,
+      toonTransportPartsFor(selection.config, getToonE2eTestOverrides()),
+    );
     setEventTransport(transport);
     setArweaveGateways(selection.config.arweaveGateways);
     setMediaUploader(new StoreMediaUploader(transport.getPaidWriter()));
