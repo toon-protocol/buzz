@@ -9,6 +9,10 @@ import { installMockBridge } from "../helpers/bridge";
 // fixture this spec seeds.
 
 const SELF_PUBKEY = "deadbeef".repeat(8);
+// A managed agent this desktop owns but has never provisioned a channel for
+// (no `accountIndex` seed, so the mocked `get_managed_agent_account_index`
+// answers `null` — buzz#133's "no-channel" state).
+const UNPROVISIONED_AGENT_PUBKEY = "c0ffee00".repeat(8);
 
 test("renders the Money tab's network spend in a seeded funded state on TOON transport", async ({
   page,
@@ -86,4 +90,44 @@ test("falls back to the locally-tracked channel read for the stale-lease claim-s
   await expect(
     page.getByTestId("user-profile-money-network-allowance"),
   ).toContainText("0.50 USDC");
+});
+
+// buzz#133 AC1 — the third Money-tab state the ticket asks for, alongside
+// the funded/low-runway cases above: an agent this desktop owns but that has
+// never had a channel opened for it. Viewed as a non-`isSelf` agent so the
+// read goes through `readSingleAgentNetworkFlowStatus` (`useNetworkSpend.ts`)
+// rather than the self writer — that path returns `null` outright once
+// `getManagedAgentAccountIndex` can't find an assigned index, without ever
+// asking the fake claim-state client, which is what "no channel exists yet"
+// actually means for a fleet agent (buzz#109 / `docs/adr/0007`).
+test("renders the unavailable notice for a managed agent with no provisioned channel", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    transportEnv: { BUZZ_TRANSPORT: "toon" },
+    toonClaimState: "funded",
+    managedAgents: [
+      {
+        pubkey: UNPROVISIONED_AGENT_PUBKEY,
+        name: "Unprovisioned Agent",
+        status: "stopped",
+        // No `accountIndex` — this agent has never been assigned one.
+      },
+    ],
+  });
+
+  await page.goto(`/?profile=${UNPROVISIONED_AGENT_PUBKEY}&profileTab=money`);
+
+  await expect(page.getByTestId("user-profile-money-tab")).toBeVisible();
+
+  const unavailable = page.getByTestId(
+    "user-profile-money-network-spend-unavailable",
+  );
+  await expect(unavailable).toBeVisible();
+  await expect(unavailable).toContainText(
+    "No payment channel could be found for this agent yet.",
+  );
+  await expect(
+    page.getByTestId("user-profile-money-network-balance"),
+  ).toHaveCount(0);
 });
