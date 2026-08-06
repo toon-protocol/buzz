@@ -1,6 +1,27 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import type { ClaimStateResult } from "@toon-protocol/client";
-import type { ClientJobDeliveryPort } from "@toon-protocol/rig";
+
+import {
+  createProviderJobDeliveryPort,
+  describeFactoryJobPaymentSetupError,
+  type FactoryJobIncrementPaymentReceipt,
+  JOB_DELIVERY_NEEDS_BTP_MESSAGE,
+  type ProviderJobDeliveryPort,
+} from "@/shared/api/toonJobDelivery";
+import {
+  buildToonClientOptions,
+  SETTLEMENT_ASSET,
+  SETTLEMENT_ASSET_SCALE,
+  ToonPaidWriteError,
+} from "@/shared/api/toonPaidWriteConfig";
+
+// Re-exported so existing importers keep one home for the paid-write surface.
+export type { FactoryJobIncrementPaymentReceipt } from "@/shared/api/toonJobDelivery";
+export {
+  ToonPaidWriteError,
+  transportEndpointFields,
+} from "@/shared/api/toonPaidWriteConfig";
+export { buildToonClientOptions };
 
 import { splitClaimStateWatermark } from "@/features/profile/lib/claimStateWatermark";
 import {
@@ -66,19 +87,6 @@ export type RawNetworkFlowStatus = {
 };
 
 /**
- * What paying one factory-job increment (buzz#85) settles: the fulfillment
- * IS the artifact's decryption key, per `docs/factory-job-protocol.md` §4.2
- * (toon-meta) — revealing it to satisfy the hashlock and handing the buyer
- * the key are the same act, in the same packet.
- */
-export type FactoryJobIncrementPaymentReceipt = {
-  fulfillmentHex: string;
-  channelId: string;
-  amount: bigint;
-  destination: string;
-};
-
-/**
  * The connector's session lease TTL, as last confirmed by a real write —
  * buzz#84's freshness invariant (`providerAvailability.ts`) reads this
  * rather than a hardcoded constant. `observedAtMs` is stamped fresh on
@@ -102,10 +110,6 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
-/** TOON settles in USDC on every chain the devnet offers. */
-const SETTLEMENT_ASSET = "USDC";
-const SETTLEMENT_ASSET_SCALE = 6;
-
 /** Render a receipt as the fee line a user is shown before/after paying. */
 export function formatFee(receipt: PaidWriteReceipt): string {
   const divisor = 10 ** receipt.assetScale;
@@ -117,31 +121,6 @@ export function formatFee(receipt: PaidWriteReceipt): string {
     maximumFractionDigits: receipt.assetScale,
   });
   return `${text} ${receipt.asset}`;
-}
-
-/** Thrown when a paid write cannot be attempted or the packet was refused. */
-export class ToonPaidWriteError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = "ToonPaidWriteError";
-  }
-}
-
-/**
- * Human copy for a THROWN (not merely refused) failure while setting up a
- * factory job increment payment. `@toon-protocol/client` internals — e.g.
- * `ToonClientError`'s "No negotiation metadata for peer…" when the
- * connector's x402 greeting hasn't bootstrapped a route yet — are debugging
- * detail, not something a buyer paying a provider should read raw. The raw
- * error is preserved as `cause` (and console-logged by the caller) for
- * anyone who needs it.
- */
-function describeFactoryJobPaymentSetupError(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  if (/negotiation metadata/i.test(raw)) {
-    return "This provider isn't ready to accept a payment session yet. Wait a moment and try again — if it keeps failing, the provider may be offline.";
-  }
-  return "Couldn't set up the payment for this increment. Check your connection and try again.";
 }
 
 /**
@@ -304,134 +283,16 @@ type PaidClient = {
   ): Promise<{ channelId: string; txHash?: string }>;
 };
 
-/**
- * The provider-session delivery port (buzz#135) — `@toon-protocol/rig`'s
- * `ClientJobDeliveryPort`, narrowed to the three members this app drives.
- * One port instance per writer, constructed BEFORE the client so its
- * `handleJob` can be registered as `ToonClientConfig.jobHandler` — the only
- * path that ever releases an increment's decryption key, and it releases
- * exactly the one the buyer's PREPARE paid for (§4.2 of
- * `docs/factory-job-protocol.md`, toon-meta).
- */
-export type ProviderJobDeliveryPort = Pick<
-  ClientJobDeliveryPort,
-  "handleJob" | "encryptArtifact" | "waitForPayment"
->;
-
 export type PaidClientFactory = (
   config: ToonTransportConfig,
   /**
    * Present exactly when the config runs a BTP session (`btpUrl !== null`) —
    * the factory registers `jobDelivery.handleJob` as the client's
-   * `jobHandler`. Absent on one-shot ILP-over-HTTP: the connector delivers a
-   * buyer's paying PREPARE as a server-originated BTP MESSAGE, so an
-   * HTTP-only transport has no wire the key release could ride.
+   * `jobHandler`. Absent on one-shot ILP-over-HTTP, which has no wire the
+   * key release could ride (`providerJobDeliveryPort.ts`).
    */
   jobDelivery?: ProviderJobDeliveryPort,
 ) => Promise<PaidClient>;
-
-/**
- * The endpoint fields handed to the `ToonClient` constructor — the seam that
- * decides which wire paid writes ride (buzz#23 stage 2).
- *
- * With `btpUrl` set (the default), the client gets `{connectorUrl, btpUrl,
- * btpAuthToken: ""}` and runs every paid write over the connector's ordered
- * BTP session. With `btpUrl: null` (`BUZZ_TOON_BTP_URL=off`), it gets
- * `{proxyUrl}` instead, which forces the client's stateless one-shot
- * ILP-over-HTTP transport. The two are mutually exclusive by construction:
- * the client prefers the HTTP transport whenever a `proxyUrl` is present, so
- * passing both would silently cap paid writes at the HTTP path's measured
- * ~16 accepted writes/sec — not viable for 50 fps huddle audio (ADR 0003).
- */
-export function transportEndpointFields(
-  config: Pick<ToonTransportConfig, "connectorUrl" | "btpUrl" | "proxyUrl">,
-):
-  | { connectorUrl: string; btpUrl: string; btpAuthToken: string }
-  | { proxyUrl: string } {
-  return config.btpUrl !== null
-    ? {
-        connectorUrl: config.connectorUrl,
-        btpUrl: config.btpUrl,
-        btpAuthToken: "",
-      }
-    : { proxyUrl: config.proxyUrl };
-}
-
-/**
- * The `ToonClient` constructor options for `config` at `accountIndex` — the
- * identity/settlement bootstrap every `ToonClient` this app builds shares,
- * whether it is this writer's own client or one of buzz#74's provisioning
- * clients (`provisionAgent.ts`'s owner-scoped client for `sendTransfer`, and
- * agent-scoped client for `openChannel`), which need a different account
- * index and initial deposit but nothing else about the bootstrap.
- *
- * `supportedChains` and `chainRpcUrls` are both load-bearing and easy to
- * mistake for optional: the client only constructs an on-chain channel client
- * when `chainRpcUrls` is set, and without one the first write dies with "No
- * channel client configured" *after* the user has already sent a message.
- *
- * The transport is decided here too, by which endpoint fields are passed
- * (buzz#23 stage 2): with `btpUrl` set — the default — the client gets
- * `{connectorUrl, btpUrl, btpAuthToken: ""}` and runs every paid write over
- * the connector's ordered BTP session; setting `proxyUrl` instead would force
- * the client's stateless one-shot ILP-over-HTTP transport, measured at
- * ~16 accepted writes/sec on the devnet edge — fine for chat, not viable for
- * 50 fps huddle audio. There is deliberately no parallel path: BTP carries
- * *all* paid writes, or (with `BUZZ_TOON_BTP_URL=off`) HTTP carries all of
- * them. The exact BTP config shape is the one proven live by the huddle
- * prototype (toon-meta `proto/huddle-multi-speaker`, `multi.mjs`).
- */
-export async function buildToonClientOptions(
-  config: Pick<
-    ToonTransportConfig,
-    | "mnemonic"
-    | "connectorUrl"
-    | "btpUrl"
-    | "proxyUrl"
-    | "relayUrl"
-    | "destination"
-    | "chain"
-    | "chainRpcUrl"
-    | "tokenNetwork"
-    | "preferredToken"
-  >,
-  accountIndex: number,
-  initialDeposit?: string | null,
-): Promise<Record<string, unknown>> {
-  if (config.mnemonic === null) {
-    throw new ToonPaidWriteError(
-      "No TOON payment identity configured (BUZZ_TOON_MNEMONIC).",
-    );
-  }
-
-  const { encodeEventToToon, decodeEventFromToon } = await import(
-    "@toon-protocol/core"
-  );
-
-  return {
-    mnemonic: config.mnemonic,
-    mnemonicAccountIndex: accountIndex,
-    ...transportEndpointFields(config),
-    relayUrl: config.relayUrl,
-    destinationAddress: config.destination,
-    ilpInfo: {
-      pubkey: "00".repeat(32),
-      ilpAddress: "g.toon.client",
-      btpEndpoint: config.btpUrl ?? "",
-      assetCode: SETTLEMENT_ASSET,
-      assetScale: SETTLEMENT_ASSET_SCALE,
-    },
-    toonEncoder: encodeEventToToon,
-    toonDecoder: decodeEventFromToon,
-    supportedChains: [config.chain],
-    chainRpcUrls: { [config.chain]: config.chainRpcUrl },
-    tokenNetworks: { [config.chain]: config.tokenNetwork },
-    preferredTokens: { [config.chain]: config.preferredToken },
-    // Collateral for a fresh channel open. The client's own default (0.1
-    // USDC) is exhausted by ~2 seconds of huddle audio; see the config field.
-    ...(initialDeposit != null ? { initialDeposit } : {}),
-  };
-}
 
 const createToonClient: PaidClientFactory = async (config, jobDelivery) => {
   const [options, { ToonClient }] = await Promise.all([
@@ -477,14 +338,10 @@ export class ToonPaidWriter {
   }
 
   /**
-   * Whether this writer's transport can DELIVER a factory-job increment
-   * (buzz#135) — release an artifact key as an ILP fulfillment. Key release
-   * rides the provider's own BTP session (the connector originates the
-   * buyer's paying PREPARE as a server-originated BTP MESSAGE, toon-
-   * client#494), so delivery exists exactly when `btpUrl` is active. An
-   * HTTP-only transport (`BUZZ_TOON_BTP_URL=off`) can still QUOTE — a quote
-   * is an ordinary paid relay write — but must never offer an increment it
-   * has no wire to release the key on.
+   * Whether this transport can DELIVER a factory-job increment (buzz#135) —
+   * true exactly when `btpUrl` is active, because key release rides the
+   * provider's own BTP session. HTTP-only can still QUOTE — see
+   * {@link JOB_DELIVERY_NEEDS_BTP_MESSAGE} for the full rationale.
    */
   supportsJobDelivery(): boolean {
     return this.config.btpUrl !== null;
@@ -499,17 +356,15 @@ export class ToonPaidWriter {
    */
   async getJobDeliveryPort(): Promise<ProviderJobDeliveryPort> {
     if (!this.supportsJobDelivery()) {
-      throw new ToonPaidWriteError(
-        "Increment delivery needs the connector's BTP session — this transport runs one-shot ILP-over-HTTP (BUZZ_TOON_BTP_URL=off), which can quote but never release an artifact key.",
-      );
+      throw new ToonPaidWriteError(JOB_DELIVERY_NEEDS_BTP_MESSAGE);
     }
     await this.ensureClient();
     const port = this.deliveryPort;
     if (!port) {
-      // `ensureClient` constructs the port before the factory whenever
-      // `supportsJobDelivery()` holds, so this is unreachable short of a
-      // programming error — but a missing port must read as an error, never
-      // as an increment silently offered without a registered key-release.
+      // Unreachable short of a programming error (`ensureClient` constructs
+      // the port whenever `supportsJobDelivery()` holds) — but a missing
+      // port must read as an error, never as an increment silently offered
+      // without a registered key-release.
       throw new ToonPaidWriteError(
         "The delivery port was not constructed with the client — increment delivery is unavailable.",
       );
@@ -981,16 +836,10 @@ export class ToonPaidWriter {
    * Construct the delivery port once, before the client, so the factory can
    * register `handleJob` at client construction — or `null` on an HTTP-only
    * transport, where no server-originated PREPARE could ever reach it.
-   * `@toon-protocol/rig` is imported lazily for the same reason
-   * `@toon-protocol/client` is (see the module doc): the relay transport is
-   * the default, and an app that never pays should not load the stack.
    */
   private async ensureDeliveryPort(): Promise<ProviderJobDeliveryPort | null> {
     if (!this.supportsJobDelivery()) return null;
-    if (this.deliveryPort === null) {
-      const { ClientJobDeliveryPort } = await import("@toon-protocol/rig");
-      this.deliveryPort = new ClientJobDeliveryPort();
-    }
+    this.deliveryPort ??= await createProviderJobDeliveryPort();
     return this.deliveryPort;
   }
 
