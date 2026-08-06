@@ -28,6 +28,7 @@ const MIGRATION_0007_SQL: &str = include_str!("../../../migrations/0007_nip_rs_r
 const MIGRATION_0008_SQL: &str =
     include_str!("../../../migrations/0008_fresh_install_search_allowlist.sql");
 const MIGRATION_0014_SQL: &str = include_str!("../../../migrations/0014_push_lease_fts.sql");
+const MIGRATION_0027_SQL: &str = include_str!("../../../migrations/0027_search_reflects_edits.sql");
 
 async fn setup() -> (PgPool, String) {
     let url = std::env::var("BUZZ_TEST_DATABASE_URL").unwrap_or_else(|_| TEST_DB_URL.to_string());
@@ -81,6 +82,9 @@ async fn setup() -> (PgPool, String) {
     pool.execute(MIGRATION_0014_SQL)
         .await
         .expect("apply 0014 migration");
+    pool.execute(MIGRATION_0027_SQL)
+        .await
+        .expect("apply 0027 migration");
     (pool, schema)
 }
 
@@ -1442,6 +1446,119 @@ async fn p_gated_persistent_kinds_have_storage_null_tsvector() {
         1,
         "expected exactly 1 hit (the kind:9 control), got {} (kinds={kinds:?})",
         result.hits.len(),
+    );
+
+    teardown(pool, &schema).await;
+}
+
+/// Mirror `buzz_db::event::set_edit_content` directly via SQL — this crate
+/// has no dependency on `buzz-db`, and the migration itself (0027) is the
+/// unit under test here, not the relay ingest wiring around it.
+async fn set_edit_content(pool: &PgPool, community: CommunityId, id: [u8; 32], new_content: &str) {
+    sqlx::query("UPDATE events SET edit_content = $1 WHERE community_id = $2 AND id = $3")
+        .bind(new_content)
+        .bind(community.as_uuid())
+        .bind(&id[..])
+        .execute(pool)
+        .await
+        .expect("set edit_content");
+}
+
+/// buzz#129: after a message is edited, search must find the new content and
+/// must no longer find text that only existed pre-edit.
+#[tokio::test]
+#[ignore = "requires Postgres"]
+async fn edit_updates_search_to_new_content_and_drops_old() {
+    let (pool, schema) = setup().await;
+
+    let c = mk_community(&pool, "edit-search.example").await;
+    let msg_id = rand_bytes32();
+    let author = rand_bytes32();
+
+    insert_event(
+        &pool,
+        c,
+        msg_id,
+        author,
+        9,
+        "original wombat text",
+        None,
+        1_700_000_000,
+    )
+    .await;
+
+    let svc = SearchService::new(pool.clone());
+
+    let before = svc
+        .search(&SearchQuery {
+            community: c,
+            q: "wombat".into(),
+            channel_scope: ChannelScope::Any,
+            kinds: None,
+            authors: None,
+            since: None,
+            until: None,
+            page: 1,
+            per_page: 10,
+            mode: buzz_search::SearchMode::FullText,
+        })
+        .await
+        .expect("search ok");
+    assert_eq!(
+        before.hits.iter().map(|h| h.event_id).collect::<Vec<_>>(),
+        vec![msg_id],
+        "pre-edit content must be searchable before the edit lands",
+    );
+
+    // Simulate a kind:40003 edit landing: the relay's edit side-effect
+    // handler (`handle_message_edit_reindex`) mirrors the new content into
+    // `edit_content` without touching the original row's signed `content`.
+    set_edit_content(&pool, c, msg_id, "updated giraffe text").await;
+
+    let after_new = svc
+        .search(&SearchQuery {
+            community: c,
+            q: "giraffe".into(),
+            channel_scope: ChannelScope::Any,
+            kinds: None,
+            authors: None,
+            since: None,
+            until: None,
+            page: 1,
+            per_page: 10,
+            mode: buzz_search::SearchMode::FullText,
+        })
+        .await
+        .expect("search ok");
+    assert_eq!(
+        after_new
+            .hits
+            .iter()
+            .map(|h| h.event_id)
+            .collect::<Vec<_>>(),
+        vec![msg_id],
+        "post-edit content must be searchable after the edit lands",
+    );
+
+    let after_old = svc
+        .search(&SearchQuery {
+            community: c,
+            q: "wombat".into(),
+            channel_scope: ChannelScope::Any,
+            kinds: None,
+            authors: None,
+            since: None,
+            until: None,
+            page: 1,
+            per_page: 10,
+            mode: buzz_search::SearchMode::FullText,
+        })
+        .await
+        .expect("search ok");
+    assert!(
+        after_old.hits.is_empty(),
+        "pre-edit-only content must no longer match after the edit lands, got {:?}",
+        after_old.hits,
     );
 
     teardown(pool, &schema).await;

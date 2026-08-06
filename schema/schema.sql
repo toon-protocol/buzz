@@ -196,6 +196,12 @@ CREATE TABLE events (
     kind        INT NOT NULL,
     tags        JSONB NOT NULL,
     content     TEXT NOT NULL,
+    -- The latest kind:40003 edit's text, mirrored out of band by the edit
+    -- ingest path (buzz#129, migration 0027). Plain and nullable, NOT
+    -- generated: `content` is covered by the event signature and must never
+    -- be rewritten, so the edit lives beside it and only `search_tsv` below
+    -- prefers it. NULL means "never edited".
+    edit_content TEXT,
     -- Full-text search vector (Typesense → Postgres FTS). Generated/STORED so
     -- it is a single source of truth — no sidecar indexer to keep coherent
     -- (Quinn option A, Lane-0 call). 'simple' config = no stemming/stopwords,
@@ -207,10 +213,18 @@ CREATE TABLE events (
     -- Privacy: encrypted/private routing wrappers and p-gated membership notices
     -- must never be discoverable through NIP-50 full-text search. NULL tsvector
     -- never matches `@@`.
-    -- Keep in sync with migrations (final state: 0001 + 0005 + 0009).
+    -- Keep in sync with migrations (final state: 0001 + 0005 + 0009 + 0027).
+    --
+    -- 0027 (buzz#129) added `edit_content` so full-text search reflects
+    -- message edits. It is read INSIDE the exclusion, never ahead of it: an
+    -- excluded kind stays NULL whether or not it carries an edit, because
+    -- `set_edit_content` updates by event id alone and applies no kind
+    -- filter. CI builds this database from this file rather than by running
+    -- `migrations/`, so the two must agree or search behaves differently
+    -- under test than in production.
     search_tsv  TSVECTOR GENERATED ALWAYS AS (
         CASE WHEN kind IN (1059, 30300, 30350, 30622, 44100, 44101, 44200) THEN NULL::tsvector
-             ELSE to_tsvector('simple', content)
+             ELSE to_tsvector('simple', COALESCE(edit_content, content))
         END
     ) STORED,
     sig         BYTEA NOT NULL,
