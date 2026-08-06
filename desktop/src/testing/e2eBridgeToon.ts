@@ -215,12 +215,10 @@ function eventMatchesFilter(
     // `Object.entries`'s value union (shared with `kinds`/`limit`) erased.
     const tagValues = values as string[];
     const tagName = key.slice(1);
-    const eventTagValues = event.tags
-      .filter((tag) => tag[0] === tagName)
-      .map((tag) => tag[1]);
-    if (!tagValues.some((value) => eventTagValues.includes(value))) {
-      return false;
-    }
+    const matched = event.tags.some(
+      ([name, value]) => name === tagName && tagValues.includes(value),
+    );
+    if (!matched) return false;
   }
   return true;
 }
@@ -246,6 +244,10 @@ export function createE2eToonSocketFactory(
   return () => {
     const openListeners = new Set<() => void>();
     const messageListeners = new Set<(event: { data: unknown }) => void>();
+    const emitFrame = (frame: unknown[]) => {
+      const data = JSON.stringify(frame);
+      for (const listener of messageListeners) listener({ data });
+    };
     const socket = {
       send(data: string) {
         let payload: unknown;
@@ -267,12 +269,9 @@ export function createE2eToonSocketFactory(
         );
         queueMicrotask(() => {
           for (const event of matches) {
-            const frame = JSON.stringify(["EVENT", subscriptionId, event]);
-            for (const listener of messageListeners) listener({ data: frame });
+            emitFrame(["EVENT", subscriptionId, event]);
           }
-          const eoseFrame = JSON.stringify(["EOSE", subscriptionId]);
-          for (const listener of messageListeners)
-            listener({ data: eoseFrame });
+          emitFrame(["EOSE", subscriptionId]);
         });
       },
       close() {

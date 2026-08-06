@@ -40,13 +40,11 @@ const SEEDED_JOB_REQUEST = {
   sig: "",
 };
 
-async function openProviderPanel(
-  page: Page,
-  toon: { sessionLeaseTtlMs?: number },
-) {
+/** Open the provider panel with advertising on. Omit the TTL for "no lease ever observed". */
+async function openProviderPanel(page: Page, sessionLeaseTtlMs?: number) {
   await installMockBridge(page, {
     transportEnv: { BUZZ_TRANSPORT: "toon" },
-    toonSessionLeaseTtlMs: toon.sessionLeaseTtlMs,
+    toonSessionLeaseTtlMs: sessionLeaseTtlMs,
     toonJobMarketEvents: [SEEDED_JOB_REQUEST],
   });
   await page.goto("/");
@@ -65,7 +63,7 @@ async function sendQuoteForSeededJob(page: Page) {
 }
 
 test("reads pending before any paid write has landed", async ({ page }) => {
-  await openProviderPanel(page, {});
+  await openProviderPanel(page);
 
   await expect(
     page.getByText("Publishing this agent's provider listing…"),
@@ -75,7 +73,7 @@ test("reads pending before any paid write has landed", async ({ page }) => {
 test("reads available once a paid write lands inside the seeded lease", async ({
   page,
 }) => {
-  await openProviderPanel(page, { sessionLeaseTtlMs: 60_000 });
+  await openProviderPanel(page, 60_000);
 
   await expect(
     page.getByText("Publishing this agent's provider listing…"),
@@ -91,7 +89,7 @@ test("reads available once a paid write lands inside the seeded lease", async ({
 test("reads stale once a paid write lands with an already-elapsed lease", async ({
   page,
 }) => {
-  await openProviderPanel(page, { sessionLeaseTtlMs: 0 });
+  await openProviderPanel(page, 0);
 
   await sendQuoteForSeededJob(page);
 
