@@ -148,7 +148,15 @@ type MockBridgeOptions = {
    * connector no longer honors. Defaults to `"funded"` when transport mode
    * is `toon` and this is unset.
    */
-  toonClaimState?: "funded" | "low-runway" | "stale-lease";
+  toonClaimState?: "funded" | "low-runway" | "stale-lease" | "depleted";
+  /**
+   * Seeds one receipt into the live burn-rate tracker at install time
+   * (buzz#133) — base units spent, read back as `amount / 300s` (the
+   * tracker's fixed 5-minute trailing window). The only way a bridged spec
+   * can reach a finite (non-depleted) runway badge level, since a
+   * claim-state fixture alone never carries a burn rate.
+   */
+  toonBurnRateSeedBaseUnits?: number;
   /** Advertised HEAD for the first mock project without adding that branch. */
   projectHeadBranch?: string;
   /** Relay NIP-11 identity used to sign authoritative repository state. */

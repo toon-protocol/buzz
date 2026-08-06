@@ -12,6 +12,7 @@ import {
   createE2eToonPaidClient,
   createE2eToonSocketFactory,
   MOCK_TOON_CHANNEL_ID,
+  seedMockNetworkBurnRateReceipt,
   type MockToonClaimStateFixtureKind,
 } from "./e2eBridgeToon.ts";
 
@@ -173,6 +174,15 @@ type E2eConfig = {
      * Defaults to `"funded"` when transport mode is `toon` and this is unset.
      */
     toonClaimState?: MockToonClaimStateFixtureKind;
+    /**
+     * Seeds one receipt into the live burn-rate tracker at install time
+     * (buzz#133) — base units spent, read back as `amount / 300s` (the
+     * tracker's fixed trailing window). The only way a bridged spec can
+     * reach `agentFleetRunway.ts`'s "warning" runway-badge level, since a
+     * claim-state fixture alone never carries a burn rate. See
+     * `seedMockNetworkBurnRateReceipt` (`e2eBridgeToon.ts`).
+     */
+    toonBurnRateSeedBaseUnits?: number;
     /** Advertised HEAD for the first mock project without adding that branch. */
     projectHeadBranch?: string;
     /** Builderlab account returned by hosted-community onboarding. Null/omitted = signed out. */
@@ -9521,6 +9531,11 @@ export function maybeInstallE2eTauriMocks() {
   };
   if (config.mock?.transportEnv?.BUZZ_TRANSPORT === "toon") {
     seedMockToonPersistedChannel(config.mock.transportEnv);
+    if (config.mock.toonBurnRateSeedBaseUnits) {
+      seedMockNetworkBurnRateReceipt(
+        BigInt(config.mock.toonBurnRateSeedBaseUnits),
+      );
+    }
   }
   mockWebsocketSendMutexWedged = false;
   mockWindows("main");

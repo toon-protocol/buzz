@@ -1,3 +1,4 @@
+import { recordNetworkSpendWrite } from "@/features/profile/lib/networkSpendLiveStore";
 import type { ChannelCloseState } from "@/features/payments/lib/paymentsOverview";
 import type { PaidClientFactory } from "@/shared/api/toonPaidWriter";
 import type {
@@ -24,11 +25,12 @@ import type { RelayEvent } from "@/shared/api/types";
  * browser/Playwright context.
  */
 
-/** Canonical claim-state fixtures a spec can select (buzz#131 AC2). */
+/** Canonical claim-state fixtures a spec can select (buzz#131 AC2, buzz#133 AC1). */
 export type MockToonClaimStateFixtureKind =
   | "funded"
   | "low-runway"
-  | "stale-lease";
+  | "stale-lease"
+  | "depleted";
 
 /**
  * The fake channel id every mock TOON operation resolves to. Exported so the
@@ -44,7 +46,11 @@ export const MOCK_TOON_CHANNEL_ID = "e2e-mock-toon-channel";
  * `@toon-protocol/client`'s `ClaimStateResult`. "funded" and "low-runway"
  * both answer `ok: true` with a deposit/cumulative-claimed pair scaled so
  * `netSpendableBaseUnits` (deposit − claimed) reads as a healthy balance or a
- * near-exhausted one; "stale-lease" answers `ok: false, error: "expired"` —
+ * near-exhausted one; "depleted" (buzz#133) answers `ok: true` with deposit
+ * === claimed, i.e. `netSpendableBaseUnits` of exactly zero — the fleet
+ * runway badge's "critical"/"Out of funds" branch (`agentFleetRunway.ts`'s
+ * `deriveNetworkRunway` "depleted" case), reachable without needing a live
+ * burn-rate sample; "stale-lease" answers `ok: false, error: "expired"` —
  * the connector's own name for a claim it will no longer honor — which
  * `ToonPaidWriter.tryClaimState` treats as no verified read, falling back to
  * this fake client's local channel numbers below.
@@ -79,6 +85,14 @@ function buildMockClaimStateResult(kind: MockToonClaimStateFixtureKind) {
         channelId: base.channelId,
         ok: false as const,
         error: "expired" as const,
+      };
+    case "depleted":
+      return {
+        ...base,
+        ok: true as const,
+        depositTotal: "500000",
+        cumulativeClaimed: "500000",
+        available: "0",
       };
   }
 }
@@ -182,4 +196,26 @@ export function createE2eToonSocketFactory(): ToonSocketFactory {
     });
     return socket as unknown as ToonSocket;
   };
+}
+
+/**
+ * Seed one receipt into `networkSpendLiveStore.ts`'s trailing-window burn
+ * tracker (buzz#133) — the only source `agentFleetRunway.ts`'s "warning"
+ * badge level (a finite, non-depleted runway) ever reads a burn rate from.
+ * Claim-state fixtures alone cannot reach it: `getRoutePrice` on this fake
+ * client always answers `0n` (no route pricing to fake here), so a real
+ * bridged write never produces a nonzero receipt on its own. A spec picks
+ * `amountBaseUnits` together with a claim-state fixture's spendable balance
+ * to land on a specific runway — see `runway-badge-thresholds.spec.ts` for
+ * the arithmetic (a single receipt over the tracker's fixed 5-minute window
+ * gives an exact, non-decaying-within-the-test burn rate).
+ */
+export function seedMockNetworkBurnRateReceipt(amountBaseUnits: bigint): void {
+  recordNetworkSpendWrite({
+    amount: amountBaseUnits,
+    asset: "USDC",
+    assetScale: 6,
+    destination: MOCK_TOON_CHANNEL_ID,
+    eventId: "e2e-mock-burn-seed",
+  });
 }

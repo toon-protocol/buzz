@@ -7,18 +7,24 @@
  *  1. the "funded" fixture reports a healthy deposit/claimed spread
  *  2. the "low-runway" fixture reports a near-exhausted spread
  *  3. the "stale-lease" fixture reports `ok: false, error: "expired"`
- *  4. the fixture getter is read at CALL time, not captured once
- *  5. the fake client never touches real network state (start/openChannel
+ *  4. the "depleted" fixture (buzz#133) reports a zero-spendable spread
+ *  5. the fixture getter is read at CALL time, not captured once
+ *  6. the fake client never touches real network state (start/openChannel
  *     resolve immediately with canned values)
- *  6. the fake socket factory fires "open" without a real WebSocket
+ *  7. the fake socket factory fires "open" without a real WebSocket
+ *  8. seeding a burn-rate receipt (buzz#133) is visible to the live spend
+ *     store's snapshot
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+
+import { getNetworkSpendLiveSnapshot } from "@/features/profile/lib/networkSpendLiveStore";
 
 import {
   createE2eToonPaidClient,
   createE2eToonSocketFactory,
   MOCK_TOON_CHANNEL_ID,
+  seedMockNetworkBurnRateReceipt,
 } from "./e2eBridgeToon.ts";
 
 describe("createE2eToonPaidClient", () => {
@@ -40,6 +46,16 @@ describe("createE2eToonPaidClient", () => {
     assert.equal(result.ok, true);
     assert.equal(result.depositTotal, "1000000");
     assert.equal(result.cumulativeClaimed, "990000");
+  });
+
+  it("depleted fixture reports a zero-spendable deposit/claimed spread", async () => {
+    const factory = createE2eToonPaidClient(() => "depleted");
+    const client = await factory({});
+    const [result] = await client.getClaimState([MOCK_TOON_CHANNEL_ID]);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.depositTotal, "500000");
+    assert.equal(result.cumulativeClaimed, "500000");
   });
 
   it("stale-lease fixture reports an expired claim", async () => {
@@ -80,6 +96,17 @@ describe("createE2eToonPaidClient", () => {
     await assert.doesNotReject(client.start());
     const channelId = await client.openChannel("g.toon.relay");
     assert.equal(channelId, MOCK_TOON_CHANNEL_ID);
+  });
+});
+
+describe("seedMockNetworkBurnRateReceipt", () => {
+  it("records a receipt the live spend store's snapshot reflects", () => {
+    seedMockNetworkBurnRateReceipt(17n);
+    const snapshot = getNetworkSpendLiveSnapshot();
+
+    assert.equal(snapshot.hasSample, true);
+    // 17 base units over the tracker's fixed 300s trailing window.
+    assert.equal(snapshot.burnRateBaseUnitsPerSec, 17 / 300);
   });
 });
 
