@@ -1,5 +1,6 @@
 import { recordNetworkSpendWrite } from "@/features/profile/lib/networkSpendLiveStore";
 import type { ChannelCloseState } from "@/features/payments/lib/paymentsOverview";
+import type { RelaySubscriptionFilter } from "@/shared/api/relayClientShared";
 import type { PaidClientFactory } from "@/shared/api/toonPaidWriter";
 import type {
   ToonSocket,
@@ -16,9 +17,10 @@ import type { RelayEvent } from "@/shared/api/types";
  * module is the fake substitute the e2e bridge installs instead — a
  * `PaidClientFactory` that never touches the network and answers
  * `getClaimState` from a fixture the spec controls, plus a `ToonSocketFactory`
- * that opens instantly and never sends real frames (nothing in these specs
- * needs live channel data over TOON — chat/channel reads stay on the
- * Tauri-mocked path regardless of transport mode).
+ * that opens instantly and answers reads from a spec-seeded fixture list
+ * (buzz#134 AC1) rather than a live relay (nothing in these specs needs a
+ * real WebSocket — chat/channel reads stay on the Tauri-mocked path
+ * regardless of transport mode).
  *
  * Extracted from `e2eBridge.ts` (see `e2eBridgeCustomHarnesses.ts` for the
  * same rationale) so the fake client logic is unit-testable without a full
@@ -110,9 +112,24 @@ function buildMockClaimStateResult(kind: MockToonClaimStateFixtureKind) {
  * mid-test sees the new fixture on its next `refresh()` — same live-read
  * convention every other `window.__BUZZ_E2E_*` config field in this bridge
  * follows.
+ *
+ * `getSessionLeaseTtlMsFixture` (buzz#134 AC3) answers `getLastConnectorRouteTerms`
+ * — `undefined` (the default) reproduces the pre-buzz#134 behaviour exactly
+ * (no lease ever observed, `ToonPaidWriter.getSessionLease()` stays
+ * `undefined` forever, so `useProviderAvailability` can only ever read
+ * `pending`). This too is read at CALL time, and that matters more than for
+ * the claim-state fixture: paid writes land from app boot (the kind-20001
+ * presence heartbeat goes through the same `ToonPaidWriter`, and
+ * `captureSessionLease` runs after EVERY successful write), so a TTL seeded
+ * at install is captured by the boot heartbeat before a spec can observe
+ * `pending`. A spec that wants `available`/`stale` therefore starts with the
+ * TTL absent and sets `window.__BUZZ_E2E__.mock.toonSessionLeaseTtlMs` live
+ * mid-test — the next successful write (quote or heartbeat, whichever lands
+ * first) captures the lease, exactly like the real `ToonClient`.
  */
 export function createE2eToonPaidClient(
   getClaimStateFixture: () => MockToonClaimStateFixtureKind | undefined,
+  getSessionLeaseTtlMsFixture: () => number | undefined = () => undefined,
 ): PaidClientFactory {
   return async () => ({
     async start() {
@@ -132,6 +149,12 @@ export function createE2eToonPaidClient(
     },
     async publishEvent(event: RelayEvent) {
       return { success: true, eventId: event.id };
+    },
+    getLastConnectorRouteTerms() {
+      const sessionLeaseTtlMs = getSessionLeaseTtlMsFixture();
+      return sessionLeaseTtlMs === undefined
+        ? undefined
+        : { extra: { session_lease_ttl_ms: sessionLeaseTtlMs } };
     },
     async uploadBlob() {
       return {
@@ -173,18 +196,87 @@ export function createE2eToonPaidClient(
 }
 
 /**
- * Build a `ToonSocketFactory` whose sockets fire `open` on the next tick and
- * otherwise do nothing — `ToonRelayReader.ready()`/`subscribeLive()` resolve
- * quickly (no real WebSocket, no devnet reachability needed) and every send
- * is a no-op, so a subscription just sits open with no messages, exactly as
- * a real reader would behave against a relay with nothing to send yet.
+ * Whether a seeded fixture event satisfies a NIP-01 filter, covering exactly
+ * the fields the factory-jobs hooks actually send: `kinds`, `authors`, and
+ * `#e`/`#p` tag filters (`RelaySubscriptionFilter`'s tag keys). Not a general
+ * NIP-01 matcher — `since`/`until`/`ids` are unused by every caller today and
+ * deliberately left unimplemented rather than guessed at.
  */
-export function createE2eToonSocketFactory(): ToonSocketFactory {
+function eventMatchesFilter(
+  event: RelayEvent,
+  filter: RelaySubscriptionFilter,
+): boolean {
+  if (filter.kinds.length > 0 && !filter.kinds.includes(event.kind)) {
+    return false;
+  }
+  if (filter.authors && !filter.authors.includes(event.pubkey)) {
+    return false;
+  }
+  for (const [key, values] of Object.entries(filter)) {
+    if (!key.startsWith("#") || !Array.isArray(values)) continue;
+    // Every `#`-prefixed filter key carries `string[]` per
+    // `RelaySubscriptionFilter` — the cast below just recovers what
+    // `Object.entries`'s value union (shared with `kinds`/`limit`) erased.
+    const tagValues = values as string[];
+    const tagName = key.slice(1);
+    const matched = event.tags.some(
+      ([name, value]) => name === tagName && tagValues.includes(value),
+    );
+    if (!matched) return false;
+  }
+  return true;
+}
+
+/**
+ * Build a `ToonSocketFactory` whose sockets fire `open` on the next tick.
+ * `getSeededEvents` (buzz#134 AC1) is read at REQ time, not captured once —
+ * same live-read convention as `getClaimStateFixture` above — so a spec can
+ * seed fixture job/quote/feedback events before navigating and have every
+ * `REQ` answered from that list, filtered the same way a real relay would
+ * (`eventMatchesFilter`), followed by an immediate `EOSE`. The default (no
+ * seeded events) reproduces the pre-buzz#134 behaviour: every subscription
+ * still opens and gets EOSE (nothing to hold `fetchEvents`/`subscribeLive`
+ * open on their 25s/250ms fallbacks), it just never carries any events —
+ * exactly what "a relay with nothing to send yet" means. This fake socket
+ * only ever answers what was seeded BEFORE the REQ arrived; it never pushes
+ * a live event after the fact (no bridged spec needs that yet — see the
+ * module doc).
+ */
+export function createE2eToonSocketFactory(
+  getSeededEvents: () => RelayEvent[] = () => [],
+): ToonSocketFactory {
   return () => {
     const openListeners = new Set<() => void>();
+    const messageListeners = new Set<(event: { data: unknown }) => void>();
+    const emitFrame = (frame: unknown[]) => {
+      const data = JSON.stringify(frame);
+      for (const listener of messageListeners) listener({ data });
+    };
     const socket = {
-      send() {
-        // No real wire — nothing in these specs asserts on outgoing frames.
+      send(data: string) {
+        let payload: unknown;
+        try {
+          payload = JSON.parse(data);
+        } catch {
+          return;
+        }
+        if (!Array.isArray(payload) || payload[0] !== "REQ") return;
+        const [, subscriptionId, filter] = payload as [
+          string,
+          unknown,
+          unknown,
+        ];
+        if (typeof subscriptionId !== "string" || !filter) return;
+
+        const matches = getSeededEvents().filter((event) =>
+          eventMatchesFilter(event, filter as RelaySubscriptionFilter),
+        );
+        queueMicrotask(() => {
+          for (const event of matches) {
+            emitFrame(["EVENT", subscriptionId, event]);
+          }
+          emitFrame(["EOSE", subscriptionId]);
+        });
       },
       close() {
         // Nothing to tear down for a socket that never really opened.
@@ -192,9 +284,11 @@ export function createE2eToonSocketFactory(): ToonSocketFactory {
       addEventListener(type: string, listener: (event?: unknown) => void) {
         if (type === "open") {
           openListeners.add(listener as () => void);
+        } else if (type === "message") {
+          messageListeners.add(listener as (event: { data: unknown }) => void);
         }
-        // "message"/"close"/"error" listeners are accepted but never fired —
-        // this fake socket never receives real frames or drops.
+        // "close"/"error" listeners are accepted but never fired — this fake
+        // socket never drops.
       },
     };
     queueMicrotask(() => {
