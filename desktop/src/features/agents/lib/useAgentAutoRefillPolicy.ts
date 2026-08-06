@@ -52,24 +52,25 @@ export function useAgentAutoRefillPolicy(): void {
   // all mutation is ref-local.
   React.useEffect(() => {
     if (!currentPubkey) return;
-    if (inFlightRef.current) return;
 
+    const state = network.state;
     const config = getAutoRefillConfig(currentPubkey);
+    // `null` means "not opted in", which `decideRefill` already holds on.
     const remainingCeiling = getRemainingCeilingBaseUnits(currentPubkey) ?? 0n;
 
     const decision = decideRefill({
       optedIn: config.enabled,
-      state: network.state,
+      state,
       remainingCeilingBaseUnits: remainingCeiling,
       refillInFlight: inFlightRef.current,
     });
     if (decision !== "fire") return;
-    // Narrows `network.state` for the amount derivation below; `decideRefill`
-    // only returns "fire" once `state.kind === "quoted"` already held.
-    if (network.state.kind !== "quoted") return;
+    // `decideRefill` only returns "fire" once `kind === "quoted"` held; this
+    // re-check is what narrows `state` for the amount derivation below.
+    if (state.kind !== "quoted") return;
 
     const amount = deriveRefillAmountBaseUnits({
-      burnRateBaseUnitsPerSec: network.state.read.burnRateBaseUnitsPerSec,
+      burnRateBaseUnitsPerSec: state.read.burnRateBaseUnitsPerSec,
       remainingCeilingBaseUnits: remainingCeiling,
     });
     if (amount <= 0n) return;

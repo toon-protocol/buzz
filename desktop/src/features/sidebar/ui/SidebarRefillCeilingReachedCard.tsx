@@ -50,6 +50,7 @@ export function SidebarRefillCeilingReachedCard({
   const config = getAutoRefillConfig(currentPubkey);
   if (!config.enabled) return null;
 
+  // `null` only means "not opted in", already ruled out just above.
   const remaining = getRemainingCeilingBaseUnits(currentPubkey) ?? 0n;
   if (remaining > 0n) return null;
 

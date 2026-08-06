@@ -169,8 +169,30 @@ test("a partial refill (clamped) still beats none", () => {
 
 // ── suggested ceiling: pre-filled, requires explicit confirmation ──────────
 
-test("suggests roughly a month of runway at the fallback rate", () => {
+test("suggests roughly a month of runway — four refills' worth", () => {
   assert.equal(SUGGESTED_CEILING_RUNWAY_DAYS, 28);
+});
+
+test("sizes the suggested ceiling from the measured burn rate", () => {
+  const suggested = deriveSuggestedCeilingBaseUnits({
+    measuredBurnRateBaseUnitsPerSec: 100,
+    quotedWritePriceBaseUnits: null,
+  });
+  assert.equal(
+    suggested,
+    BigInt(Math.ceil(100 * SECONDS_PER_DAY * SUGGESTED_CEILING_RUNWAY_DAYS)),
+  );
+  // A ceiling that can't cover even one refill would deadlock the feature.
+  assert.ok(
+    suggested >
+      deriveRefillAmountBaseUnits({
+        burnRateBaseUnitsPerSec: 100,
+        remainingCeilingBaseUnits: suggested,
+      }),
+  );
+});
+
+test("still suggests a usable ceiling with no burn history at all", () => {
   const suggested = deriveSuggestedCeilingBaseUnits({
     measuredBurnRateBaseUnitsPerSec: null,
     quotedWritePriceBaseUnits: null,

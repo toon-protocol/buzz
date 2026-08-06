@@ -123,7 +123,8 @@ export function subscribeToAgentAutoRefillState(
   };
 }
 
-function isStoredRecord(value: unknown): value is Partial<StoredRecord> {
+/** Only asserts "some JSON object" — every field is re-validated below, since stored JSON is untrusted input. */
+function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
@@ -147,7 +148,7 @@ function readRecord(pubkey: string): StoredRecord {
     );
     return { ...EMPTY_RECORD };
   }
-  if (!isStoredRecord(parsed)) return { ...EMPTY_RECORD };
+  if (!isJsonObject(parsed)) return { ...EMPTY_RECORD };
 
   return {
     enabled: parsed.enabled === true,

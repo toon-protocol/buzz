@@ -28,6 +28,8 @@ import { AGENT_FLEET_RUNWAY_WARNING_DAYS } from "@/features/agents/lib/agentFlee
  * gains the ability to deposit into another agent's channel.
  */
 
+const SECONDS_PER_DAY = 86_400;
+
 export type RefillDecision = "fire" | "arm" | "hold";
 
 export type RefillInputs = {
@@ -46,8 +48,9 @@ export function decideRefill(inputs: RefillInputs): RefillDecision {
 
   // Never-fire gates. Each is load-bearing — see the matrix test.
   if (!optedIn) return "hold";
-  // Reuses `canRefillNetworkSpend`'s own `kind === "quoted"` check; the
-  // narrowing form here also lets the branches below read `state.read`.
+  // `canRefillNetworkSpend` is the "can I act on this state" answer
+  // networkSpendState.ts asks call sites to use; the explicit `kind` check
+  // alongside it is what narrows `state.read` for the branches below.
   if (state.kind !== "quoted" || !canRefillNetworkSpend(state)) return "hold";
   // An absent burn sample is a guess dressed as a reading (networkSpendState.ts's
   // own words) — never trigger a spend off a guess.
@@ -70,8 +73,6 @@ export function decideRefill(inputs: RefillInputs): RefillDecision {
   return runwayDays < AGENT_FLEET_RUNWAY_WARNING_DAYS ? "fire" : "arm";
 }
 
-const SECONDS_PER_DAY = 86_400;
-
 /**
  * How much to deposit on a "fire" decision: the same burn-rate-derived
  * allowance provisioning uses (so refill and provisioning agree on "how much
@@ -84,13 +85,14 @@ export function deriveRefillAmountBaseUnits(params: {
   burnRateBaseUnitsPerSec: number;
   remainingCeilingBaseUnits: bigint;
 }): bigint {
+  const { burnRateBaseUnitsPerSec, remainingCeilingBaseUnits } = params;
   const derived = deriveInitialAllowanceBaseUnits({
-    measuredBurnRateBaseUnitsPerSec: params.burnRateBaseUnitsPerSec,
+    measuredBurnRateBaseUnitsPerSec: burnRateBaseUnitsPerSec,
     quotedWritePriceBaseUnits: null,
   });
-  return derived < params.remainingCeilingBaseUnits
+  return derived < remainingCeilingBaseUnits
     ? derived
-    : params.remainingCeilingBaseUnits;
+    : remainingCeilingBaseUnits;
 }
 
 /**
