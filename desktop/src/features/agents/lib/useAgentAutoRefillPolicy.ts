@@ -37,15 +37,28 @@ export function useAgentAutoRefillPolicy(): void {
   const inFlightRef = React.useRef(false);
   const [, setTick] = React.useState(0);
 
-  // Re-evaluate on an interval so a runway that degrades between network
-  // refreshes still gets picked up promptly. This also re-reads
-  // agentAutoRefillStore.ts's config/ledger on every tick, so a change made
-  // elsewhere (the Money tab's opt-in toggle) is noticed within one tick
-  // without this hook needing its own store subscription.
+  // Re-evaluate on an interval. Each tick re-reads agentAutoRefillStore.ts's
+  // config/ledger (so the Money tab's opt-in toggle is noticed within one
+  // tick without a store subscription) AND refreshes the network read:
+  // `useNetworkSpend` fetches its claim-state read once at mount and again
+  // only after this hook's own deposit — every `refresh` dependency is
+  // referentially stable — so without an explicit refresh here a steadily
+  // draining channel would keep its mount-time runway forever and the policy
+  // could never fire. Refresh through a ref (the callback identity changes
+  // across renders) and only while opted in, so sessions that never enabled
+  // auto-refill add no recurring connector traffic.
+  const refreshRef = React.useRef(network.refresh);
+  refreshRef.current = network.refresh;
+
   React.useEffect(() => {
-    const timer = setInterval(() => setTick((t) => t + 1), POLICY_TICK_MS);
+    const timer = setInterval(() => {
+      if (currentPubkey && getAutoRefillConfig(currentPubkey).enabled) {
+        void refreshRef.current();
+      }
+      setTick((t) => t + 1);
+    }, POLICY_TICK_MS);
     return () => clearInterval(timer);
-  }, []);
+  }, [currentPubkey]);
 
   // No dependency array by design (matches useAutoRestartPolicy.ts): the tick
   // pattern re-runs this effect every render so it reads live store state;
