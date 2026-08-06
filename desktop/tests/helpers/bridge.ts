@@ -160,6 +160,25 @@ type MockBridgeOptions = {
    * seeds nothing, leaving the tracker with no sample at all.
    */
   toonBurnRateSeedBaseUnits?: number;
+  /**
+   * The connector's session lease TTL (ms) the fake TOON client advertises
+   * (buzz#134 AC3) — omitted means no lease is ever observed, so provider
+   * availability can only ever read "pending" once advertising is on. Read
+   * at CALL time, and beware seeding it at install: the boot presence
+   * heartbeat is already a paid write, so an install-time TTL is captured
+   * before any spec assertion runs. Specs that need to see "pending" first
+   * leave this unset and mutate `window.__BUZZ_E2E__.mock.toonSessionLeaseTtlMs`
+   * mid-test instead — the next successful paid write captures it. See
+   * `e2eBridgeToon.ts`'s `createE2eToonPaidClient`.
+   */
+  toonSessionLeaseTtlMs?: number;
+  /**
+   * Fixture events the fake TOON socket answers `REQ`s from (buzz#134 AC1) —
+   * e.g. seeded `kind:5097` job requests or `kind:7000` quotes/feedback.
+   * Omitted/empty means every subscription still opens and gets EOSE, just
+   * with nothing in it. See `e2eBridgeToon.ts`'s `createE2eToonSocketFactory`.
+   */
+  toonJobMarketEvents?: RelayEvent[];
   /** Advertised HEAD for the first mock project without adding that branch. */
   projectHeadBranch?: string;
   /** Relay NIP-11 identity used to sign authoritative repository state. */
