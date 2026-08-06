@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import type { InboundFactoryJob } from "@/features/providers/lib/useInboundFactoryJobs";
+import { ProviderDeliveryThread } from "@/features/providers/ui/ProviderDeliveryThread";
 import { QuoteForm } from "@/features/providers/ui/QuoteForm";
 import { formatUsdcBaseUnits } from "@/features/onboarding/toon/toonOnboardingFormat";
 import type { ToonEventTransport } from "@/shared/api/toonEventTransport";
@@ -16,16 +17,26 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/shared/ui/card";
 export function InboundJobsList({
   canQuote,
   jobs,
+  myPubkey,
   transport,
   onQuoted,
 }: {
   /** Whether this agent's connector session is confirmed reachable — see `ProviderJobsPanel`. */
   canQuote: boolean;
   jobs: InboundFactoryJob[];
+  myPubkey: string;
   transport: ToonEventTransport;
   onQuoted: (jobId: string) => void;
 }) {
   const [expandedJobId, setExpandedJobId] = React.useState<string | null>(null);
+  const [deliveringJobId, setDeliveringJobId] = React.useState<string | null>(
+    null,
+  );
+  // `alreadyQuoted` comes from a one-shot fetch at mount, so a quote sent
+  // THIS session must unlock delivery without waiting for a refetch.
+  const [justQuotedJobIds, setJustQuotedJobIds] = React.useState<Set<string>>(
+    new Set(),
+  );
 
   if (jobs.length === 0) {
     return (
@@ -64,20 +75,47 @@ export function InboundJobsList({
                   jobId={job.eventId}
                   onQuoted={() => {
                     setExpandedJobId(null);
+                    setJustQuotedJobIds((prev) =>
+                      new Set(prev).add(job.eventId),
+                    );
                     onQuoted(job.eventId);
                   }}
                   transport={transport}
                 />
               ) : (
-                <button
-                  className="w-fit text-xs text-primary hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground disabled:no-underline"
-                  disabled={!canQuote}
-                  onClick={() => setExpandedJobId(job.eventId)}
-                  type="button"
-                >
-                  {job.alreadyQuoted ? "Send another quote" : "Quote"}
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    className="w-fit text-xs text-primary hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground disabled:no-underline"
+                    disabled={!canQuote}
+                    onClick={() => setExpandedJobId(job.eventId)}
+                    type="button"
+                  >
+                    {job.alreadyQuoted ? "Send another quote" : "Quote"}
+                  </button>
+                  {job.alreadyQuoted || justQuotedJobIds.has(job.eventId) ? (
+                    <button
+                      className="w-fit text-xs text-primary hover:underline"
+                      onClick={() =>
+                        setDeliveringJobId((current) =>
+                          current === job.eventId ? null : job.eventId,
+                        )
+                      }
+                      type="button"
+                    >
+                      {deliveringJobId === job.eventId
+                        ? "Hide delivery"
+                        : "Deliver"}
+                    </button>
+                  ) : null}
+                </div>
               )}
+              {deliveringJobId === job.eventId ? (
+                <ProviderDeliveryThread
+                  job={job}
+                  myPubkey={myPubkey}
+                  transport={transport}
+                />
+              ) : null}
             </CardContent>
           </Card>
         </li>

@@ -61,6 +61,7 @@ export function ProviderJobsPanel({
           <InboundJobsList
             canQuote={canQuote}
             jobs={jobs}
+            myPubkey={myPubkey}
             onQuoted={() => setQuotedCount((count) => count + 1)}
             transport={transport}
           />

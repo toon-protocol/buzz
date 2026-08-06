@@ -88,6 +88,15 @@ export type FactoryJobRequestGrant = {
   sender: string;
   /** The wrap it came out of, for de-duplication. */
   wrapId: string;
+  /**
+   * The rumor reconstituted as an event (buzz#135) — what a delivery's
+   * terminal kind:6097 result carries in its `request` tag. A rumor is
+   * deliberately unsigned (NIP-59), so `id` is the wrap's (the same identity
+   * `request.eventId` already uses) and `sig` is empty — there is no public
+   * kind:5097 event for a private brief, and inventing a signature would be
+   * a forgery, not a convenience.
+   */
+  requestEvent: RelayEvent;
 };
 
 /**
@@ -117,16 +126,19 @@ export function unwrapFactoryJobRequestGift(
     // different one is a relayed forgery attempt.
     if (rumor.pubkey !== seal.pubkey) return null;
 
-    const request = parseFactoryJobRequest({
+    const requestEvent: RelayEvent = {
       id: wrap.id,
       pubkey: rumor.pubkey,
       created_at: rumor.created_at,
       kind: rumor.kind,
       tags: rumor.tags as string[][],
-    });
+      content: rumor.content,
+      sig: "",
+    };
+    const request = parseFactoryJobRequest(requestEvent);
     if (!request) return null;
 
-    return { request, sender: seal.pubkey, wrapId: wrap.id };
+    return { request, sender: seal.pubkey, wrapId: wrap.id, requestEvent };
   } catch {
     // A wrap for another recipient fails the MAC here. That is the common path.
     return null;

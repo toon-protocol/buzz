@@ -46,7 +46,8 @@ export function toRigFactoryJobRequest(
  * to the phase every custom milestone is a variant of rather than rejected.
  */
 export function toRigMilestone(milestone: string): FactoryMilestone {
-  return milestone === "plan" || milestone === "implement" ||
+  return milestone === "plan" ||
+    milestone === "implement" ||
     milestone === "review"
     ? milestone
     : "implement";
