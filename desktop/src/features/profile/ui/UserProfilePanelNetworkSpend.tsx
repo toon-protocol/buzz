@@ -1,6 +1,13 @@
 import * as React from "react";
-import { Clock, Flame, Landmark, Wallet } from "lucide-react";
+import { Clock, Flame, Landmark, RefreshCw, Wallet } from "lucide-react";
 
+import {
+  type AutoRefillConfig,
+  getAgentAutoRefillVersion,
+  getAutoRefillConfig,
+  getMonthlyRefillSpendBaseUnits,
+  subscribeToAgentAutoRefillState,
+} from "@/features/agents/lib/agentAutoRefillStore";
 import { formatUsdcBaseUnits } from "@/features/onboarding/toon/toonOnboardingFormat";
 import { netSpendableBaseUnits } from "@/features/profile/lib/agentNetworkFlow";
 import {
@@ -10,6 +17,7 @@ import {
 } from "@/features/profile/lib/networkSpendState";
 import { parseUsdcAmount } from "@/features/payments/lib/paymentsOverview";
 import type { useNetworkSpend } from "@/features/profile/lib/useNetworkSpend";
+import { AutoRefillControl } from "@/features/profile/ui/UserProfilePanelAutoRefill";
 import {
   type ProfileField,
   ProfileFieldGroup,
@@ -37,9 +45,11 @@ import { Input } from "@/shared/ui/input";
  * twice.
  */
 export function NetworkSpendSection({
+  agentPubkey,
   isSelf,
   network,
 }: {
+  agentPubkey: string;
   isSelf: boolean;
   network: ReturnType<typeof useNetworkSpend>;
 }) {
@@ -51,7 +61,11 @@ export function NetworkSpendSection({
       <h3 className="px-1 text-sm font-semibold text-foreground">
         Network spend
       </h3>
-      <NetworkSpendBody isSelf={isSelf} network={network} />
+      <NetworkSpendBody
+        agentPubkey={agentPubkey}
+        isSelf={isSelf}
+        network={network}
+      />
       <p className="px-1 text-xs text-muted-foreground">
         USDC, prepaid, and exact — this balance empties and stays empty until
         topped up. Any income this agent earns nets into the same balance;
@@ -80,9 +94,11 @@ function NetworkSpendNotice({
 }
 
 function NetworkSpendBody({
+  agentPubkey,
   isSelf,
   network,
 }: {
+  agentPubkey: string;
   isSelf: boolean;
   network: ReturnType<typeof useNetworkSpend>;
 }) {
@@ -110,14 +126,27 @@ function NetworkSpendBody({
         </NetworkSpendNotice>
       );
     case "quoted":
-      return <NetworkSpendReady network={network} state={state} />;
+      return (
+        <NetworkSpendReady
+          agentPubkey={agentPubkey}
+          network={network}
+          state={state}
+        />
+      );
   }
 }
 
+/** This agent's auto-refill opt-in plus what it has already spent this month. */
+type AutoRefillSummary = {
+  config: AutoRefillConfig;
+  spentBaseUnits: bigint;
+};
+
 function buildNetworkSpendFields(
   state: Extract<NetworkSpendState, { kind: "quoted" }>,
+  autoRefill: AutoRefillSummary,
 ): ProfileField[] {
-  return [
+  const fields: ProfileField[] = [
     {
       displayValue: formatUsdcBaseUnits(netSpendableBaseUnits(state.read)),
       icon: Wallet,
@@ -145,17 +174,41 @@ function buildNetworkSpendFields(
       testId: "user-profile-money-network-burn-rate",
     },
   ];
+
+  if (autoRefill.config.enabled) {
+    fields.push({
+      displayValue: `${formatUsdcBaseUnits(autoRefill.spentBaseUnits)} / ${formatUsdcBaseUnits(autoRefill.config.ceilingBaseUnits)} this month`,
+      icon: RefreshCw,
+      label: "Auto-refill",
+      testId: "user-profile-money-network-auto-refill-spend",
+    });
+  }
+
+  return fields;
 }
 
 function NetworkSpendReady({
+  agentPubkey,
   network,
   state,
 }: {
+  agentPubkey: string;
   network: ReturnType<typeof useNetworkSpend>;
   state: Extract<NetworkSpendState, { kind: "quoted" }>;
 }) {
   const [depositInput, setDepositInput] = React.useState("");
-  const fields = buildNetworkSpendFields(state);
+  // Subscribing re-renders this block whenever the config/ledger changes
+  // (here, or from the policy loop recording a confirmed refill); the store
+  // itself is then read straight through on each render.
+  React.useSyncExternalStore(
+    subscribeToAgentAutoRefillState,
+    getAgentAutoRefillVersion,
+  );
+  const autoRefill: AutoRefillSummary = {
+    config: getAutoRefillConfig(agentPubkey),
+    spentBaseUnits: getMonthlyRefillSpendBaseUnits(agentPubkey),
+  };
+  const fields = buildNetworkSpendFields(state, autoRefill);
 
   return (
     <div className="space-y-2">
@@ -198,6 +251,18 @@ function NetworkSpendReady({
             {network.depositPending ? "Topping up…" : "Top up"}
           </Button>
         </div>
+      ) : null}
+
+      {/* `canDeposit` is already `isSelf`-only (useNetworkSpend.ts's
+       * documented constraint) — a refill deposit lands on this process's own
+       * writer, so auto-refill sits behind the same gate as manual top-up. */}
+      {network.canDeposit ? (
+        <AutoRefillControl
+          agentPubkey={agentPubkey}
+          config={autoRefill.config}
+          hasBurnSample={state.hasBurnSample}
+          measuredBurnRateBaseUnitsPerSec={state.read.burnRateBaseUnitsPerSec}
+        />
       ) : null}
     </div>
   );

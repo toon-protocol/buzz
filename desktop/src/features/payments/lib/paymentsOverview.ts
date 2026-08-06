@@ -107,6 +107,25 @@ export function parseUsdcAmount(input: string): bigint | null {
   return amount > 0n ? amount : null;
 }
 
+/**
+ * The inverse of {@link parseUsdcAmount}: render base units as the plain
+ * decimal text a USDC amount field is pre-filled with. Unlike
+ * `formatUsdcBaseUnits`, this carries no unit suffix, no thousands
+ * separators, and no minimum decimal places — the output has to parse back
+ * through `parseUsdcAmount` unchanged.
+ */
+export function formatUsdcAmountInput(amountBaseUnits: bigint): string {
+  const scale = 10n ** BigInt(USDC_DECIMALS);
+  const whole = amountBaseUnits / scale;
+  const fraction = amountBaseUnits % scale;
+  if (fraction === 0n) return whole.toString();
+  const fractionDigits = fraction
+    .toString()
+    .padStart(USDC_DECIMALS, "0")
+    .replace(/0+$/, "");
+  return `${whole}.${fractionDigits}`;
+}
+
 /** Top-up only makes sense while the channel is open and taking claims. */
 export function canDepositToChannel(state: PaymentChannelState): boolean {
   return state.kind === "open";

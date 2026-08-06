@@ -8,6 +8,7 @@ import {
   channelRunwayCaption,
   deriveChannelState,
   derivePaymentsCardState,
+  formatUsdcAmountInput,
   parseUsdcAmount,
 } from "./paymentsOverview.ts";
 
@@ -174,6 +175,23 @@ test("parseUsdcAmount: garbage and negative input is rejected", () => {
   assert.equal(parseUsdcAmount("abc"), null);
   assert.equal(parseUsdcAmount("-1"), null);
   assert.equal(parseUsdcAmount("1.2.3"), null);
+});
+
+test("formatUsdcAmountInput: whole amounts render without a decimal point", () => {
+  assert.equal(formatUsdcAmountInput(10_000_000n), "10");
+});
+
+test("formatUsdcAmountInput: fractional amounts drop trailing zeroes", () => {
+  assert.equal(formatUsdcAmountInput(500_000n), "0.5");
+  assert.equal(formatUsdcAmountInput(1_234_567n), "1.234567");
+  assert.equal(formatUsdcAmountInput(1n), "0.000001");
+});
+
+test("formatUsdcAmountInput: output parses back to the same base units", () => {
+  // A pre-filled field the user confirms unedited must not shift the amount.
+  for (const amount of [1n, 500_000n, 1_234_567n, 10_000_000n, 168_000_000n]) {
+    assert.equal(parseUsdcAmount(formatUsdcAmountInput(amount)), amount);
+  }
 });
 
 test("a fully-read wallet is ready, channel state included even when none exists", () => {
