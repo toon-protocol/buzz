@@ -184,6 +184,23 @@ type E2eConfig = {
      * `seedMockNetworkBurnRateReceipt` (`e2eBridgeToon.ts`).
      */
     toonBurnRateSeedBaseUnits?: number;
+    /**
+     * The connector's session lease TTL (ms), answered by the fake TOON
+     * client's `getLastConnectorRouteTerms` once a paid write has landed
+     * (buzz#134 AC3) — see `e2eBridgeToon.ts`'s `createE2eToonPaidClient`
+     * doc. Omitted (the default) means no lease is ever observed, so
+     * `useProviderAvailability` can only ever read `pending` once
+     * advertising is on.
+     */
+    toonSessionLeaseTtlMs?: number;
+    /**
+     * Fixture events the fake TOON socket answers `REQ`s from (buzz#134
+     * AC1) — e.g. seeded `kind:5097` job requests or `kind:7000` quotes/
+     * feedback, filtered the same way a real relay would
+     * (`e2eBridgeToon.ts`'s `eventMatchesFilter`). Omitted/empty means every
+     * subscription still opens and gets EOSE, just with nothing in it.
+     */
+    toonJobMarketEvents?: RelayEvent[];
     /** Advertised HEAD for the first mock project without adding that branch. */
     projectHeadBranch?: string;
     /** Builderlab account returned by hosted-community onboarding. Null/omitted = signed out. */
@@ -9527,8 +9544,11 @@ export function maybeInstallE2eTauriMocks() {
   window.__BUZZ_E2E_TOON_TEST_OVERRIDES__ = {
     paidClientFactory: createE2eToonPaidClient(
       () => getConfig()?.mock?.toonClaimState,
+      () => getConfig()?.mock?.toonSessionLeaseTtlMs,
     ),
-    socketFactory: createE2eToonSocketFactory(),
+    socketFactory: createE2eToonSocketFactory(
+      () => getConfig()?.mock?.toonJobMarketEvents ?? [],
+    ),
   };
   if (config.mock?.transportEnv?.BUZZ_TRANSPORT === "toon") {
     seedMockToonPersistedChannel(config.mock.transportEnv);

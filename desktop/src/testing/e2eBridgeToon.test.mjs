@@ -14,6 +14,10 @@
  *  7. the fake socket factory fires "open" without a real WebSocket
  *  8. seeding a burn-rate receipt (buzz#133) is visible to the live spend
  *     store's snapshot
+ *  9. `getLastConnectorRouteTerms` answers `undefined` by default and a
+ *     seeded TTL once configured (buzz#134 AC3)
+ * 10. the fake socket answers a `REQ` from seeded fixture events, filtered
+ *     by kind/author/tag, followed by an `EOSE` (buzz#134 AC1)
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -100,6 +104,31 @@ describe("createE2eToonPaidClient", () => {
     const channelId = await client.openChannel("g.toon.relay");
     assert.equal(channelId, MOCK_TOON_CHANNEL_ID);
   });
+
+  it("getLastConnectorRouteTerms answers undefined with no TTL fixture (default)", async () => {
+    const factory = createE2eToonPaidClient(() => "funded");
+    const client = await factory({});
+
+    assert.equal(client.getLastConnectorRouteTerms(), undefined);
+  });
+
+  it("getLastConnectorRouteTerms carries a seeded TTL, read live", async () => {
+    let ttlMs = 60_000;
+    const factory = createE2eToonPaidClient(
+      () => "funded",
+      () => ttlMs,
+    );
+    const client = await factory({});
+
+    assert.deepEqual(client.getLastConnectorRouteTerms(), {
+      extra: { session_lease_ttl_ms: 60_000 },
+    });
+
+    ttlMs = 0;
+    assert.deepEqual(client.getLastConnectorRouteTerms(), {
+      extra: { session_lease_ttl_ms: 0 },
+    });
+  });
 });
 
 describe("seedMockNetworkBurnRateReceipt", () => {
@@ -126,8 +155,88 @@ describe("createE2eToonSocketFactory", () => {
     });
 
     await opened;
-    // send/close are no-ops — proving they don't throw is the whole contract.
+    // A REQ against an empty (default) seed list is still answered, just
+    // with nothing but EOSE — see the module doc.
     assert.doesNotThrow(() => socket.send("hello"));
     assert.doesNotThrow(() => socket.close());
+  });
+
+  function collectFrames(socket) {
+    const frames = [];
+    let resolveDelivered;
+    const delivered = new Promise((resolve) => {
+      resolveDelivered = resolve;
+    });
+    socket.addEventListener("message", (event) => {
+      const frame = JSON.parse(event.data);
+      frames.push(frame);
+      if (frame[0] === "EOSE") resolveDelivered();
+    });
+    return { frames, delivered };
+  }
+
+  it("answers a REQ from seeded events filtered by kind, then EOSE", async () => {
+    const matching = {
+      id: "evt-1",
+      pubkey: "aaaa",
+      created_at: 1,
+      kind: 5097,
+      content: "",
+      tags: [],
+      sig: "",
+    };
+    const otherKind = { ...matching, id: "evt-2", kind: 9 };
+    const factory = createE2eToonSocketFactory(() => [matching, otherKind]);
+    const socket = factory("wss://example.invalid");
+    const { frames, delivered } = collectFrames(socket);
+
+    socket.send(JSON.stringify(["REQ", "sub-1", { kinds: [5097], limit: 10 }]));
+    await delivered;
+
+    assert.deepEqual(frames, [
+      ["EVENT", "sub-1", matching],
+      ["EOSE", "sub-1"],
+    ]);
+  });
+
+  it("filters seeded events by a #e tag filter", async () => {
+    const tagged = {
+      id: "evt-3",
+      pubkey: "aaaa",
+      created_at: 1,
+      kind: 7000,
+      content: "",
+      tags: [["e", "root-job", "", "root"]],
+      sig: "",
+    };
+    const untagged = { ...tagged, id: "evt-4", tags: [] };
+    const factory = createE2eToonSocketFactory(() => [tagged, untagged]);
+    const socket = factory("wss://example.invalid");
+    const { frames, delivered } = collectFrames(socket);
+
+    socket.send(
+      JSON.stringify([
+        "REQ",
+        "sub-2",
+        { kinds: [7000], "#e": ["root-job"], limit: 10 },
+      ]),
+    );
+    await delivered;
+
+    assert.deepEqual(frames, [
+      ["EVENT", "sub-2", tagged],
+      ["EOSE", "sub-2"],
+    ]);
+  });
+
+  it("answers only EOSE when no seeded event matches", async () => {
+    const factory = createE2eToonSocketFactory(() => []);
+    const socket = factory("wss://example.invalid");
+    const { frames, delivered } = collectFrames(socket);
+
+    socket.send(JSON.stringify(["REQ", "sub-3", { kinds: [5097], limit: 10 }]));
+    await delivered;
+
+    assert.deepEqual(frames, [["EOSE", "sub-3"]]);
   });
 });
