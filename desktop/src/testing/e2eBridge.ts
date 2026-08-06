@@ -186,11 +186,12 @@ type E2eConfig = {
     toonBurnRateSeedBaseUnits?: number;
     /**
      * The connector's session lease TTL (ms), answered by the fake TOON
-     * client's `getLastConnectorRouteTerms` once a paid write has landed
-     * (buzz#134 AC3) — see `e2eBridgeToon.ts`'s `createE2eToonPaidClient`
-     * doc. Omitted (the default) means no lease is ever observed, so
-     * `useProviderAvailability` can only ever read `pending` once
-     * advertising is on.
+     * client's `getLastConnectorRouteTerms` (buzz#134 AC3) — see
+     * `e2eBridgeToon.ts`'s `createE2eToonPaidClient` doc. Read live at call
+     * time: specs typically leave it unset at install (so availability reads
+     * `pending` despite the boot presence heartbeat's paid write) and mutate
+     * it mid-test; the next successful paid write then captures the lease.
+     * Omitted throughout means no lease is ever observed.
      */
     toonSessionLeaseTtlMs?: number;
     /**

@@ -161,10 +161,15 @@ type MockBridgeOptions = {
    */
   toonBurnRateSeedBaseUnits?: number;
   /**
-   * The connector's session lease TTL (ms) the fake TOON client reports once
-   * a paid write has landed (buzz#134 AC3) — omitted means no lease is ever
-   * observed, so provider availability can only ever read "pending" once
-   * advertising is on. See `e2eBridgeToon.ts`'s `createE2eToonPaidClient`.
+   * The connector's session lease TTL (ms) the fake TOON client advertises
+   * (buzz#134 AC3) — omitted means no lease is ever observed, so provider
+   * availability can only ever read "pending" once advertising is on. Read
+   * at CALL time, and beware seeding it at install: the boot presence
+   * heartbeat is already a paid write, so an install-time TTL is captured
+   * before any spec assertion runs. Specs that need to see "pending" first
+   * leave this unset and mutate `window.__BUZZ_E2E__.mock.toonSessionLeaseTtlMs`
+   * mid-test instead — the next successful paid write captures it. See
+   * `e2eBridgeToon.ts`'s `createE2eToonPaidClient`.
    */
   toonSessionLeaseTtlMs?: number;
   /**

@@ -117,11 +117,15 @@ function buildMockClaimStateResult(kind: MockToonClaimStateFixtureKind) {
  * — `undefined` (the default) reproduces the pre-buzz#134 behaviour exactly
  * (no lease ever observed, `ToonPaidWriter.getSessionLease()` stays
  * `undefined` forever, so `useProviderAvailability` can only ever read
- * `pending`). A spec that wants `available`/`stale` sets a TTL and then
- * drives one successful paid write (any `transport.publish`/quote/job post
- * on this same writer) — `ToonPaidWriter.captureSessionLease` reads this
- * method right after that write succeeds, exactly like the real
- * `ToonClient`.
+ * `pending`). This too is read at CALL time, and that matters more than for
+ * the claim-state fixture: paid writes land from app boot (the kind-20001
+ * presence heartbeat goes through the same `ToonPaidWriter`, and
+ * `captureSessionLease` runs after EVERY successful write), so a TTL seeded
+ * at install is captured by the boot heartbeat before a spec can observe
+ * `pending`. A spec that wants `available`/`stale` therefore starts with the
+ * TTL absent and sets `window.__BUZZ_E2E__.mock.toonSessionLeaseTtlMs` live
+ * mid-test — the next successful write (quote or heartbeat, whichever lands
+ * first) captures the lease, exactly like the real `ToonClient`.
  */
 export function createE2eToonPaidClient(
   getClaimStateFixture: () => MockToonClaimStateFixtureKind | undefined,

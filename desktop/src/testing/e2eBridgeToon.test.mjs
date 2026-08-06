@@ -15,7 +15,9 @@
  *  8. seeding a burn-rate receipt (buzz#133) is visible to the live spend
  *     store's snapshot
  *  9. `getLastConnectorRouteTerms` answers `undefined` by default and a
- *     seeded TTL once configured (buzz#134 AC3)
+ *     seeded TTL once configured, including a TTL that first appears
+ *     mid-session (buzz#134 AC3 — the absent-at-boot → set-live transition
+ *     the provider-availability specs drive)
  * 10. the fake socket answers a `REQ` from seeded fixture events, filtered
  *     by kind/author/tag, followed by an `EOSE` (buzz#134 AC1)
  */
@@ -127,6 +129,26 @@ describe("createE2eToonPaidClient", () => {
     ttlMs = 0;
     assert.deepEqual(client.getLastConnectorRouteTerms(), {
       extra: { session_lease_ttl_ms: 0 },
+    });
+  });
+
+  it("getLastConnectorRouteTerms picks up a TTL first set mid-session", async () => {
+    // The transition the provider-availability e2e specs drive: no TTL at
+    // boot (so writes like the presence heartbeat capture no lease and
+    // availability reads `pending`), then a TTL advertised live so the next
+    // write's `captureSessionLease` sees it.
+    let ttlMs;
+    const factory = createE2eToonPaidClient(
+      () => "funded",
+      () => ttlMs,
+    );
+    const client = await factory({});
+
+    assert.equal(client.getLastConnectorRouteTerms(), undefined);
+
+    ttlMs = 3_000;
+    assert.deepEqual(client.getLastConnectorRouteTerms(), {
+      extra: { session_lease_ttl_ms: 3_000 },
     });
   });
 });
