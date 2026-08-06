@@ -11,7 +11,7 @@ use buzz_core::kind::{
     KIND_GIT_REPO_ANNOUNCEMENT, KIND_IA_ARCHIVED, KIND_IA_ARCHIVED_LIST, KIND_IA_UNARCHIVED,
     KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_NIP29_GROUP_ADMINS,
     KIND_NIP29_GROUP_MEMBERS, KIND_NIP29_GROUP_METADATA, KIND_NIP43_MEMBERSHIP_LIST, KIND_REACTION,
-    KIND_THREAD_SUMMARY,
+    KIND_STREAM_MESSAGE_EDIT, KIND_THREAD_SUMMARY,
 };
 use buzz_core::StoredEvent;
 use buzz_db::channel::{MemberRecord, MemberRole};
@@ -33,7 +33,7 @@ pub fn is_admin_kind(kind: u32) -> bool {
 /// handled in `ingest_event()` before storage so we can short-circuit on
 /// duplicates without storing the event at all.
 pub fn is_side_effect_kind(kind: u32) -> bool {
-    matches!(kind, 0 | 5 | 9000..=9022 | KIND_GIT_REPO_ANNOUNCEMENT | KIND_AGENT_PROFILE | 41001..=41003 | 40099)
+    matches!(kind, 0 | 5 | 9000..=9022 | KIND_GIT_REPO_ANNOUNCEMENT | KIND_AGENT_PROFILE | 41001..=41003 | 40099 | KIND_STREAM_MESSAGE_EDIT)
 }
 
 async fn evict_live_channel_subscriptions(
@@ -212,6 +212,7 @@ pub async fn handle_side_effects(
         // NIP-34: Git repo announcement → reserve name + seed manifest pointer.
         KIND_GIT_REPO_ANNOUNCEMENT => handle_git_repo_announcement(tenant, event, state).await,
         KIND_AGENT_PROFILE => handle_agent_profile(tenant, event, state).await,
+        KIND_STREAM_MESSAGE_EDIT => handle_message_edit_reindex(tenant, event, state).await,
         // kind:7 (reaction) handled inline in ingest_event() before storage.
         _ => Ok(()),
     }
@@ -1189,6 +1190,29 @@ async fn handle_agent_profile(
         .await?;
 
     info!(pubkey = %hex::encode(&pubkey_bytes), policy, "kind:10100 channel_add_policy updated");
+    Ok(())
+}
+
+/// Kind:40003 (message edit) side effect — mirror the edit's new content into
+/// the target message's `edit_content` column so full-text search reflects
+/// it (buzz#129). `validate_edit_ownership` already gated acceptance of this
+/// edit event before storage, so the target id is trusted; a missing/invalid
+/// `e` tag here would mean the event was accepted despite failing that gate,
+/// which is a bug elsewhere, not something to re-validate.
+async fn handle_message_edit_reindex(
+    tenant: &TenantContext,
+    event: &Event,
+    state: &Arc<AppState>,
+) -> anyhow::Result<()> {
+    let Some(target_id) = extract_target_event_ids(event).into_iter().next() else {
+        warn!(event_id = %event.id, "kind:40003 edit accepted with no valid e-tag target");
+        return Ok(());
+    };
+
+    state
+        .db
+        .set_edit_content(tenant.community(), &target_id, &event.content)
+        .await?;
     Ok(())
 }
 

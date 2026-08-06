@@ -1804,6 +1804,20 @@ impl Db {
         event::get_event_by_id_including_deleted(&self.pool, community_id, id_bytes).await
     }
 
+    /// Mirrors a validated kind:40003 edit's new text into its target
+    /// message's `edit_content` column for search purposes. See
+    /// [`event::set_edit_content`] for the full rationale.
+    ///
+    /// Returns `Ok(true)` if a live target row was found and updated.
+    pub async fn set_edit_content(
+        &self,
+        community_id: CommunityId,
+        target_event_id: &[u8],
+        new_content: &str,
+    ) -> Result<bool> {
+        event::set_edit_content(&self.pool, community_id, target_event_id, new_content).await
+    }
+
     /// Soft-deletes an event. Returns `Ok(true)` if deleted, `Ok(false)` if already deleted.
     pub async fn soft_delete_event(
         &self,
