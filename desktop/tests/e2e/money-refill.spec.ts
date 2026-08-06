@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 import { installMockBridge } from "../helpers/bridge";
 
@@ -17,24 +18,29 @@ import { installMockBridge } from "../helpers/bridge";
 
 const SELF_PUBKEY = "deadbeef".repeat(8);
 
-async function gotoMoneyTab(page: import("@playwright/test").Page) {
+/** Install the funded TOON fixture and deep-link to the self Money tab. */
+async function openFundedMoneyTab(page: Page) {
+  await installMockBridge(page, {
+    transportEnv: { BUZZ_TRANSPORT: "toon" },
+    toonClaimState: "funded",
+  });
   await page.goto(`/?profile=${SELF_PUBKEY}&profileTab=money`);
   await expect(page.getByTestId("user-profile-money-tab")).toBeVisible();
+}
+
+function topUpControls(page: Page) {
+  return {
+    amountInput: page.getByTestId("user-profile-money-network-deposit-amount"),
+    depositError: page.getByTestId("user-profile-money-network-deposit-error"),
+    submit: page.getByTestId("user-profile-money-network-deposit-submit"),
+  };
 }
 
 test("keeps the top-up submit disabled for an invalid or zero amount", async ({
   page,
 }) => {
-  await installMockBridge(page, {
-    transportEnv: { BUZZ_TRANSPORT: "toon" },
-    toonClaimState: "funded",
-  });
-  await gotoMoneyTab(page);
-
-  const amountInput = page.getByTestId(
-    "user-profile-money-network-deposit-amount",
-  );
-  const submit = page.getByTestId("user-profile-money-network-deposit-submit");
+  await openFundedMoneyTab(page);
+  const { amountInput, depositError, submit } = topUpControls(page);
 
   // Nothing typed yet.
   await expect(submit).toBeDisabled();
@@ -45,9 +51,7 @@ test("keeps the top-up submit disabled for an invalid or zero amount", async ({
   }
 
   // A deposit error never surfaced, since no submit ever fired.
-  await expect(
-    page.getByTestId("user-profile-money-network-deposit-error"),
-  ).toHaveCount(0);
+  await expect(depositError).toHaveCount(0);
 
   // A valid amount flips the gate back on, proving the disablement above
   // was about the input's content, not some other stuck state.
@@ -58,16 +62,8 @@ test("keeps the top-up submit disabled for an invalid or zero amount", async ({
 test("tops up the balance and clears the input on success", async ({
   page,
 }) => {
-  await installMockBridge(page, {
-    transportEnv: { BUZZ_TRANSPORT: "toon" },
-    toonClaimState: "funded",
-  });
-  await gotoMoneyTab(page);
-
-  const amountInput = page.getByTestId(
-    "user-profile-money-network-deposit-amount",
-  );
-  const submit = page.getByTestId("user-profile-money-network-deposit-submit");
+  await openFundedMoneyTab(page);
+  const { amountInput, depositError, submit } = topUpControls(page);
 
   await amountInput.fill("5");
   await expect(submit).toBeEnabled();
@@ -77,8 +73,6 @@ test("tops up the balance and clears the input on success", async ({
   // state clears, no error banner appears, and the amount field resets —
   // `NetworkSpendReady`'s success path (`useNetworkSpend.ts`'s `deposit`).
   await expect(submit).toContainText("Top up", { timeout: 10_000 });
-  await expect(
-    page.getByTestId("user-profile-money-network-deposit-error"),
-  ).toHaveCount(0);
+  await expect(depositError).toHaveCount(0);
   await expect(amountInput).toHaveValue("");
 });

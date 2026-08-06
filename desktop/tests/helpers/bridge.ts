@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 import type { ChannelTemplate, RelayEvent } from "../../src/shared/api/types";
+import type { MockToonClaimStateFixtureKind } from "../../src/testing/e2eBridgeToon";
 import { FEATURE_OVERRIDES_STORAGE_KEY, PREVIEW_FEATURE_IDS } from "./features";
 
 export const TEST_IDENTITIES = {
@@ -144,17 +145,19 @@ type MockBridgeOptions = {
   transportEnv?: Record<string, string>;
   /**
    * Selects the fake TOON payment client's canned `getClaimState` answer
-   * (buzz#131 AC2): a healthy balance, a near-exhausted one, or a lease the
-   * connector no longer honors. Defaults to `"funded"` when transport mode
-   * is `toon` and this is unset.
+   * (buzz#131 AC2): a healthy balance, a near-exhausted one, an exactly
+   * depleted one, or a lease the connector no longer honors — see each
+   * fixture's case in `e2eBridgeToon.ts`. Defaults to `"funded"` when
+   * transport mode is `toon` and this is unset.
    */
-  toonClaimState?: "funded" | "low-runway" | "stale-lease" | "depleted";
+  toonClaimState?: MockToonClaimStateFixtureKind;
   /**
    * Seeds one receipt into the live burn-rate tracker at install time
    * (buzz#133) — base units spent, read back as `amount / 300s` (the
    * tracker's fixed 5-minute trailing window). The only way a bridged spec
    * can reach a finite (non-depleted) runway badge level, since a
-   * claim-state fixture alone never carries a burn rate.
+   * claim-state fixture alone never carries a burn rate. Omitted or `0`
+   * seeds nothing, leaving the tracker with no sample at all.
    */
   toonBurnRateSeedBaseUnits?: number;
   /** Advertised HEAD for the first mock project without adding that branch. */

@@ -18,7 +18,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { getNetworkSpendLiveSnapshot } from "@/features/profile/lib/networkSpendLiveStore";
+import {
+  getNetworkSpendLiveSnapshot,
+  resetNetworkSpendLiveStore,
+} from "@/features/profile/lib/networkSpendLiveStore";
 
 import {
   createE2eToonPaidClient,
@@ -101,6 +104,9 @@ describe("createE2eToonPaidClient", () => {
 
 describe("seedMockNetworkBurnRateReceipt", () => {
   it("records a receipt the live spend store's snapshot reflects", () => {
+    // The store is module-level state — start from empty so the rate below
+    // is this seed's alone.
+    resetNetworkSpendLiveStore();
     seedMockNetworkBurnRateReceipt(17n);
     const snapshot = getNetworkSpendLiveSnapshot();
 

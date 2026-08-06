@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 import { installMockBridge } from "../helpers/bridge";
 
@@ -21,24 +22,29 @@ import { installMockBridge } from "../helpers/bridge";
 
 const SELF_PUBKEY = "deadbeef".repeat(8);
 const PERSONA_ID = "custom:fleet-runway";
+const AGENT_NAME = "Runway Test Agent";
 
-async function openAgentsView(page: import("@playwright/test").Page) {
-  await page.getByTestId("open-agents-view").click();
-  await expect(page.getByTestId("unified-agents-groups")).toBeVisible({
-    timeout: 10_000,
-  });
-}
-
-test("shows the critical badge and low-funds alert for a depleted fleet agent", async ({
-  page,
-}) => {
+/**
+ * Seed one running managed agent owned by the bridge's default identity, on
+ * TOON transport, funded per the fixtures a test picks. Only those fixtures
+ * differ between the two tests here, so each test body reads as just its
+ * funding state and the badge that state must produce.
+ */
+async function installFleetBridge(
+  page: Page,
+  toon: {
+    claimState: "depleted" | "low-runway";
+    burnRateSeedBaseUnits?: number;
+  },
+) {
   await installMockBridge(page, {
     transportEnv: { BUZZ_TRANSPORT: "toon" },
-    toonClaimState: "depleted",
+    toonClaimState: toon.claimState,
+    toonBurnRateSeedBaseUnits: toon.burnRateSeedBaseUnits,
     personas: [
       {
         id: PERSONA_ID,
-        displayName: "Runway Test Agent",
+        displayName: AGENT_NAME,
         systemPrompt: "A test persona for fleet-runway E2E coverage.",
         isActive: true,
       },
@@ -46,62 +52,58 @@ test("shows the critical badge and low-funds alert for a depleted fleet agent", 
     managedAgents: [
       {
         pubkey: SELF_PUBKEY,
-        name: "Runway Test Agent",
+        name: AGENT_NAME,
         personaId: PERSONA_ID,
         status: "running",
       },
     ],
   });
+}
 
-  await page.goto("/");
-
+/** The sidebar alert must count the one seeded agent as needing attention. */
+async function expectLowFundsAlert(page: Page) {
   const lowFundsCard = page.getByTestId("sidebar-low-funds");
   await expect(lowFundsCard).toBeVisible();
   await expect(lowFundsCard).toContainText("1 agent low on funds");
+}
 
-  await openAgentsView(page);
+/** Open the Agents view and return the seeded agent's runway badge. */
+async function openAgentsViewAndFindBadge(page: Page) {
+  await page.getByTestId("open-agents-view").click();
+  await expect(page.getByTestId("unified-agents-groups")).toBeVisible({
+    timeout: 10_000,
+  });
+
   const badge = page.getByTestId("agent-runway-badge");
   await expect(badge).toBeVisible();
+  return badge;
+}
+
+test("shows the critical badge and low-funds alert for a depleted fleet agent", async ({
+  page,
+}) => {
+  await installFleetBridge(page, { claimState: "depleted" });
+  await page.goto("/");
+
+  await expectLowFundsAlert(page);
+  const badge = await openAgentsViewAndFindBadge(page);
   await expect(badge).toContainText("Out of funds");
 });
 
 test("shows the warning badge and low-funds alert for a fleet agent with a finite runway", async ({
   page,
 }) => {
-  await installMockBridge(page, {
-    transportEnv: { BUZZ_TRANSPORT: "toon" },
-    toonClaimState: "low-runway",
-    // "low-runway"'s spendable balance is 10_000 base units. A single
-    // 17-base-unit receipt over the tracker's fixed 300s window gives a
-    // burn rate of 17/300 ≈ 0.0567/s, i.e. ~176_471s (~2.04 days) of
-    // runway — inside [1, 3) days, `agentFleetRunway.ts`'s "warning" band.
-    toonBurnRateSeedBaseUnits: 17,
-    personas: [
-      {
-        id: PERSONA_ID,
-        displayName: "Runway Test Agent",
-        systemPrompt: "A test persona for fleet-runway E2E coverage.",
-        isActive: true,
-      },
-    ],
-    managedAgents: [
-      {
-        pubkey: SELF_PUBKEY,
-        name: "Runway Test Agent",
-        personaId: PERSONA_ID,
-        status: "running",
-      },
-    ],
+  // "low-runway"'s spendable balance is 10_000 base units. A single
+  // 17-base-unit receipt over the tracker's fixed 300s window gives a burn
+  // rate of 17/300 ≈ 0.0567/s, i.e. ~176_471s (~2.04 days) of runway —
+  // inside [1, 3) days, `agentFleetRunway.ts`'s "warning" band.
+  await installFleetBridge(page, {
+    claimState: "low-runway",
+    burnRateSeedBaseUnits: 17,
   });
-
   await page.goto("/");
 
-  const lowFundsCard = page.getByTestId("sidebar-low-funds");
-  await expect(lowFundsCard).toBeVisible();
-  await expect(lowFundsCard).toContainText("1 agent low on funds");
-
-  await openAgentsView(page);
-  const badge = page.getByTestId("agent-runway-badge");
-  await expect(badge).toBeVisible();
+  await expectLowFundsAlert(page);
+  const badge = await openAgentsViewAndFindBadge(page);
   await expect(badge).toContainText("2 days left");
 });

@@ -43,17 +43,12 @@ export const MOCK_TOON_CHANNEL_ID = "e2e-mock-toon-channel";
 
 /**
  * The connector's claim-state answer for each fixture, shaped like
- * `@toon-protocol/client`'s `ClaimStateResult`. "funded" and "low-runway"
- * both answer `ok: true` with a deposit/cumulative-claimed pair scaled so
- * `netSpendableBaseUnits` (deposit − claimed) reads as a healthy balance or a
- * near-exhausted one; "depleted" (buzz#133) answers `ok: true` with deposit
- * === claimed, i.e. `netSpendableBaseUnits` of exactly zero — the fleet
- * runway badge's "critical"/"Out of funds" branch (`agentFleetRunway.ts`'s
- * `deriveNetworkRunway` "depleted" case), reachable without needing a live
- * burn-rate sample; "stale-lease" answers `ok: false, error: "expired"` —
- * the connector's own name for a claim it will no longer honor — which
- * `ToonPaidWriter.tryClaimState` treats as no verified read, falling back to
- * this fake client's local channel numbers below.
+ * `@toon-protocol/client`'s `ClaimStateResult`. Every `ok: true` fixture
+ * picks a deposit/cumulative-claimed pair whose difference is the spendable
+ * balance (`netSpendableBaseUnits`) the Money tab and the fleet runway badge
+ * read back; the one `ok: false` fixture stands in for a claim the connector
+ * no longer honors. What each fixture's numbers are chosen to surface is
+ * noted on its case below.
  */
 function buildMockClaimStateResult(kind: MockToonClaimStateFixtureKind) {
   const base = {
@@ -63,6 +58,7 @@ function buildMockClaimStateResult(kind: MockToonClaimStateFixtureKind) {
     lastClaimTime: Date.now(),
   };
   switch (kind) {
+    // A healthy balance: 9.95 USDC spendable.
     case "funded":
       return {
         ...base,
@@ -71,6 +67,9 @@ function buildMockClaimStateResult(kind: MockToonClaimStateFixtureKind) {
         cumulativeClaimed: "50000",
         available: "9950000",
       };
+    // Near-exhausted but non-zero: 0.01 USDC spendable, small enough that a
+    // seeded burn rate (see `seedMockNetworkBurnRateReceipt`) lands the fleet
+    // runway badge inside a warning band rather than a healthy runway.
     case "low-runway":
       return {
         ...base,
@@ -79,13 +78,10 @@ function buildMockClaimStateResult(kind: MockToonClaimStateFixtureKind) {
         cumulativeClaimed: "990000",
         available: "10000",
       };
-    case "stale-lease":
-      return {
-        blockchain: base.blockchain,
-        channelId: base.channelId,
-        ok: false as const,
-        error: "expired" as const,
-      };
+    // Deposit === claimed, i.e. a spendable balance of exactly zero
+    // (buzz#133) — `agentFleetRunway.ts`'s "critical"/"Out of funds" branch
+    // via `deriveNetworkRunway`'s "depleted" case, and the only badge level
+    // reachable without a live burn-rate sample.
     case "depleted":
       return {
         ...base,
@@ -93,6 +89,16 @@ function buildMockClaimStateResult(kind: MockToonClaimStateFixtureKind) {
         depositTotal: "500000",
         cumulativeClaimed: "500000",
         available: "0",
+      };
+    // "expired" is the connector's own name for a claim it will no longer
+    // honor. `ToonPaidWriter.tryClaimState` treats it as no verified read and
+    // falls back to this fake client's local channel numbers below.
+    case "stale-lease":
+      return {
+        blockchain: base.blockchain,
+        channelId: base.channelId,
+        ok: false as const,
+        error: "expired" as const,
       };
   }
 }
@@ -206,9 +212,9 @@ export function createE2eToonSocketFactory(): ToonSocketFactory {
  * client always answers `0n` (no route pricing to fake here), so a real
  * bridged write never produces a nonzero receipt on its own. A spec picks
  * `amountBaseUnits` together with a claim-state fixture's spendable balance
- * to land on a specific runway — see `runway-badge-thresholds.spec.ts` for
- * the arithmetic (a single receipt over the tracker's fixed 5-minute window
- * gives an exact, non-decaying-within-the-test burn rate).
+ * to land on a specific runway — see `tests/e2e/agent-fleet-runway.spec.ts`
+ * for the arithmetic (a single receipt over the tracker's fixed 5-minute
+ * window gives an exact, non-decaying-within-the-test burn rate).
  */
 export function seedMockNetworkBurnRateReceipt(amountBaseUnits: bigint): void {
   recordNetworkSpendWrite({

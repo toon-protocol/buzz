@@ -25,6 +25,7 @@ import { installMockBridge } from "../helpers/bridge";
  */
 
 const PERSONA_ID = "custom:provisioning-handoff";
+const AGENT_NAME = "Handoff Test Agent";
 
 test("hands off to wallet provisioning after starting a persona on TOON transport", async ({
   page,
@@ -35,7 +36,7 @@ test("hands off to wallet provisioning after starting a persona on TOON transpor
     personas: [
       {
         id: PERSONA_ID,
-        displayName: "Handoff Test Agent",
+        displayName: AGENT_NAME,
         systemPrompt: "A test persona for provisioning-handoff E2E coverage.",
         isActive: true,
       },
@@ -58,9 +59,10 @@ test("hands off to wallet provisioning after starting a persona on TOON transpor
   });
   await page.getByRole("button", { name: "Done" }).click();
 
-  await expect(
-    page.getByText("Set up Handoff Test Agent's wallet"),
-  ).toBeVisible({ timeout: 10_000 });
+  const provisioningDialogTitle = page.getByText(
+    `Set up ${AGENT_NAME}'s wallet`,
+  );
+  await expect(provisioningDialogTitle).toBeVisible({ timeout: 10_000 });
   await expect(
     page.getByText("Waiting for the agent's payment key to be assigned…"),
   ).toBeVisible();
@@ -68,9 +70,7 @@ test("hands off to wallet provisioning after starting a persona on TOON transpor
   // Declining leaves the buzz#122 AC2 indicator on the agent's card instead
   // of silently dropping back to no wallet/channel with no trace.
   await page.getByRole("button", { name: "Do this later" }).click();
-  await expect(
-    page.getByText("Set up Handoff Test Agent's wallet"),
-  ).toHaveCount(0);
+  await expect(provisioningDialogTitle).toHaveCount(0);
 
   const card = page.getByTestId(`persona-agent-row-${PERSONA_ID}`);
   await expect(card.getByTestId("agent-unprovisioned-badge")).toBeVisible();

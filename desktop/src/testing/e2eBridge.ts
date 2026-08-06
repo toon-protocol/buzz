@@ -177,9 +177,10 @@ type E2eConfig = {
     /**
      * Seeds one receipt into the live burn-rate tracker at install time
      * (buzz#133) — base units spent, read back as `amount / 300s` (the
-     * tracker's fixed trailing window). The only way a bridged spec can
-     * reach `agentFleetRunway.ts`'s "warning" runway-badge level, since a
-     * claim-state fixture alone never carries a burn rate. See
+     * tracker's fixed 5-minute trailing window). The only way a bridged spec
+     * can reach `agentFleetRunway.ts`'s "warning" runway-badge level, since a
+     * claim-state fixture alone never carries a burn rate. Omitted or `0`
+     * seeds nothing, leaving the tracker with no sample at all. See
      * `seedMockNetworkBurnRateReceipt` (`e2eBridgeToon.ts`).
      */
     toonBurnRateSeedBaseUnits?: number;

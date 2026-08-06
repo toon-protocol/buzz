@@ -119,12 +119,14 @@ test("renders the unavailable notice for a managed agent with no provisioned cha
   await page.goto(`/?profile=${UNPROVISIONED_AGENT_PUBKEY}&profileTab=money`);
 
   await expect(page.getByTestId("user-profile-money-tab")).toBeVisible();
-  await expect(
-    page.getByTestId("user-profile-money-network-spend-unavailable"),
-  ).toBeVisible();
-  await expect(
-    page.getByTestId("user-profile-money-network-spend-unavailable"),
-  ).toContainText("No payment channel could be found for this agent yet.");
+
+  const unavailable = page.getByTestId(
+    "user-profile-money-network-spend-unavailable",
+  );
+  await expect(unavailable).toBeVisible();
+  await expect(unavailable).toContainText(
+    "No payment channel could be found for this agent yet.",
+  );
   await expect(
     page.getByTestId("user-profile-money-network-balance"),
   ).toHaveCount(0);
