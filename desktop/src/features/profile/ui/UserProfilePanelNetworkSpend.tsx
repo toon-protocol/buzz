@@ -223,46 +223,46 @@ function NetworkSpendReady({
 
       <ProfileFieldGroup fields={fields} />
 
-      {/* `canDeposit` is already `isSelf`-only (useNetworkSpend.ts's
-       * documented constraint) — an auto-refill deposit lands on this
-       * process's own writer, so it sits behind the same gate as manual
-       * top-up. */}
       {network.canDeposit ? (
-        <>
-          <div className="flex items-center gap-2 px-1 pt-1">
-            <Input
-              aria-label="Top up amount, in USDC"
-              data-testid="user-profile-money-network-deposit-amount"
-              inputMode="decimal"
-              onChange={(event) => setDepositInput(event.target.value)}
-              placeholder="Amount in USDC"
-              value={depositInput}
-            />
-            <Button
-              data-testid="user-profile-money-network-deposit-submit"
-              disabled={
-                network.depositPending || parseUsdcAmount(depositInput) === null
-              }
-              onClick={() => {
-                const amount = parseUsdcAmount(depositInput);
-                if (amount === null) return;
-                void network.deposit(amount).then((succeeded) => {
-                  if (succeeded) setDepositInput("");
-                });
-              }}
-              size="sm"
-              type="button"
-            >
-              {network.depositPending ? "Topping up…" : "Top up"}
-            </Button>
-          </div>
-          <AutoRefillControl
-            agentPubkey={agentPubkey}
-            config={autoRefill.config}
-            hasBurnSample={state.hasBurnSample}
-            measuredBurnRateBaseUnitsPerSec={state.read.burnRateBaseUnitsPerSec}
+        <div className="flex items-center gap-2 px-1 pt-1">
+          <Input
+            aria-label="Top up amount, in USDC"
+            data-testid="user-profile-money-network-deposit-amount"
+            inputMode="decimal"
+            onChange={(event) => setDepositInput(event.target.value)}
+            placeholder="Amount in USDC"
+            value={depositInput}
           />
-        </>
+          <Button
+            data-testid="user-profile-money-network-deposit-submit"
+            disabled={
+              network.depositPending || parseUsdcAmount(depositInput) === null
+            }
+            onClick={() => {
+              const amount = parseUsdcAmount(depositInput);
+              if (amount === null) return;
+              void network.deposit(amount).then((succeeded) => {
+                if (succeeded) setDepositInput("");
+              });
+            }}
+            size="sm"
+            type="button"
+          >
+            {network.depositPending ? "Topping up…" : "Top up"}
+          </Button>
+        </div>
+      ) : null}
+
+      {/* `canDeposit` is already `isSelf`-only (useNetworkSpend.ts's
+       * documented constraint) — a refill deposit lands on this process's own
+       * writer, so auto-refill sits behind the same gate as manual top-up. */}
+      {network.canDeposit ? (
+        <AutoRefillControl
+          agentPubkey={agentPubkey}
+          config={autoRefill.config}
+          hasBurnSample={state.hasBurnSample}
+          measuredBurnRateBaseUnitsPerSec={state.read.burnRateBaseUnitsPerSec}
+        />
       ) : null}
     </div>
   );
