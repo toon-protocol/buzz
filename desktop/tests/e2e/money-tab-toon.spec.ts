@@ -56,3 +56,34 @@ test("renders a near-exhausted balance for the low-runway claim-state fixture", 
     page.getByTestId("user-profile-money-network-balance"),
   ).toContainText("0.01 USDC");
 });
+
+test("falls back to the locally-tracked channel read for the stale-lease claim-state fixture", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    transportEnv: { BUZZ_TRANSPORT: "toon" },
+    toonClaimState: "stale-lease",
+  });
+
+  await page.goto(`/?profile=${SELF_PUBKEY}&profileTab=money`);
+
+  // "stale-lease" answers `ok: false, error: "expired"` from the fake
+  // connector, so `ToonPaidWriter.tryClaimState` yields no verified read and
+  // `getNetworkFlowStatus` falls back to the fake client's locally-tracked
+  // channel numbers (deposit 0.50 USDC, claimed 0.10 USDC). The block must
+  // still render real figures — never the "unavailable" notice — and the
+  // figures must be the LOCAL pair, proving the fallback path ran rather
+  // than any claim-state fixture leaking through.
+  await expect(
+    page.getByTestId("user-profile-money-network-spend"),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("user-profile-money-network-spend-unavailable"),
+  ).toHaveCount(0);
+  await expect(
+    page.getByTestId("user-profile-money-network-balance"),
+  ).toContainText("0.40 USDC");
+  await expect(
+    page.getByTestId("user-profile-money-network-allowance"),
+  ).toContainText("0.50 USDC");
+});
