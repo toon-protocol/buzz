@@ -70,6 +70,7 @@ export default defineConfig({
         "**/workflows.spec.ts",
         "**/identity-archive.spec.ts",
         "**/identity-archive-hide.spec.ts",
+        "**/money-tab-toon.spec.ts",
         "**/relay-connectivity.spec.ts",
         "**/unread-pill.spec.ts",
         "**/sidebar-more-unread-overlap.spec.ts",

@@ -229,7 +229,7 @@ export function ProfileSummaryView({
   const activeTurns = useAgentWorking(isBot ? pubkey : null).channels;
 
   const showMemoriesTab = isOwner === true && Boolean(pubkey);
-  const showMoneyTab = isOwner === true && Boolean(pubkey);
+  const showMoneyTab = (isOwner === true || isSelf) && Boolean(pubkey);
   const showInstructionBlock =
     isOwner === true &&
     (agentInstruction !== null || handleEditPersona !== undefined);

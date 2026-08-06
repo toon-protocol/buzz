@@ -59,6 +59,8 @@ type MockManagedAgentSeed = {
   autoRestartOnConfigChange?: boolean;
   respondTo?: "owner-only" | "allowlist" | "anyone";
   respondToAllowlist?: string[];
+  /** Backs the mocked `get_managed_agent_account_index` command (buzz#131). */
+  accountIndex?: number | null;
 };
 
 type MockSearchProfileSeed = {
@@ -132,6 +134,21 @@ export type MockAgentMemoryListing = {
 };
 
 type MockBridgeOptions = {
+  /**
+   * Answers the mocked `get_transport_env` command (buzz#131). Set
+   * `{BUZZ_TRANSPORT: "toon"}` to run the spec on the TOON transport against
+   * the bridge's fake payment client (`e2eBridgeToon.ts`) instead of a real
+   * connector — no other TOON env keys need setting, since the fake client
+   * never reads them.
+   */
+  transportEnv?: Record<string, string>;
+  /**
+   * Selects the fake TOON payment client's canned `getClaimState` answer
+   * (buzz#131 AC2): a healthy balance, a near-exhausted one, or a lease the
+   * connector no longer honors. Defaults to `"funded"` when transport mode
+   * is `toon` and this is unset.
+   */
+  toonClaimState?: "funded" | "low-runway" | "stale-lease";
   /** Advertised HEAD for the first mock project without adding that branch. */
   projectHeadBranch?: string;
   /** Relay NIP-11 identity used to sign authoritative repository state. */
@@ -521,6 +538,13 @@ type BridgeOptions = {
 const WELCOME_CHANNEL_ENSURED_STORAGE_KEY_PREFIX =
   "buzz-welcome-channel-ensured.v2:";
 const ONBOARDING_COMPLETION_STORAGE_KEY_PREFIX = "buzz-onboarding-complete.v1:";
+// The TOON *payments* wizard's own store (`toonOnboardingStore.ts`), which is a
+// single key rather than one per pubkey. Distinct from the buzz onboarding
+// completion flag above: on relay transport it is never read, so nothing needed
+// to seed it until `transportEnv` could turn TOON on (buzz#131). Left unseeded,
+// every bridged TOON run stops on `ToonOnboardingGate`'s "Set up payments"
+// screen and no TOON surface is reachable.
+const TOON_ONBOARDING_STORAGE_KEY = "buzz-toon-onboarding.v1";
 const DEFAULT_MOCK_PUBKEY = "deadbeef".repeat(8);
 // The relay HTTP/WS URLs follow BUZZ_E2E_RELAY_URL (same env var seed.ts reads),
 // so a suite pointed at an isolated relay (e.g. the read-model harness on :3030)
@@ -666,6 +690,97 @@ async function seedOnboardingCompletionForKnownIdentities(
   );
 }
 
+/**
+ * Answer the settlement chain's JSON-RPC from fixtures, so a bridged TOON run
+ * never reaches a real endpoint (buzz#131).
+ *
+ * The payments wizard's fund step is derived from LIVE balances, not from any
+ * stored flag (`toonOnboardingState.ts`: `!fundedForToken || !hasNativeGas`
+ * → `"fund"`), and `readToonOnboardingBalances` calls `readWalletBalances`
+ * from `@toon-protocol/client` against `config.chainRpcUrl` — by default
+ * `https://base-sepolia-rpc.publicnode.com`. So seeding localStorage alone
+ * cannot get past that step: without this stub the harness dials the public
+ * internet, and the run's outcome depends on the on-chain state of whatever
+ * wallet the seeded mnemonic derives.
+ *
+ * Deliberately answers by method rather than by exact call encoding, so it
+ * does not break if the client changes how it asks for a token balance:
+ * anything unrecognised returns `0x0` rather than erroring, which surfaces as
+ * an honest "unreadable" balance instead of a hang.
+ */
+async function stubToonChainRpc(page: Page) {
+  await page.route(
+    (url) => /base-sepolia-rpc\.publicnode\.com/.test(url.href),
+    async (route) => {
+      let method = "";
+      let id: unknown = 1;
+      try {
+        const body: unknown = route.request().postDataJSON();
+        if (body && typeof body === "object") {
+          method = String((body as Record<string, unknown>).method ?? "");
+          id = (body as Record<string, unknown>).id ?? 1;
+        }
+      } catch {
+        // Non-JSON body — fall through to the default answer below.
+      }
+
+      // 32-byte word holding 1000 USDC at 6 decimals, the shape an ERC-20
+      // `balanceOf` returns. Any positive value satisfies `fundedForToken`.
+      const TOKEN_BALANCE_WORD = `0x${1_000_000_000n.toString(16).padStart(64, "0")}`;
+      // 0.05 ETH in wei — `hasNativeGas` only needs > 0, but a plausible
+      // figure keeps the wizard's own copy sensible if it ever renders.
+      const NATIVE_BALANCE = `0x${(50_000_000_000_000_000n).toString(16)}`;
+
+      const result =
+        method === "eth_getBalance"
+          ? NATIVE_BALANCE
+          : method === "eth_call"
+            ? TOKEN_BALANCE_WORD
+            : method === "eth_chainId"
+              ? "0x14a34" // 84532, Base Sepolia
+              : method === "eth_blockNumber"
+                ? "0x1"
+                : "0x0";
+
+      await route.fulfill({
+        contentType: "application/json",
+        status: 200,
+        body: JSON.stringify({ jsonrpc: "2.0", id, result }),
+      });
+    },
+  );
+}
+
+/**
+ * Mark the TOON payments wizard already completed (buzz#131).
+ *
+ * `toonOnboardingState.ts` derives its step purely from the three stored
+ * facts — no wallet -> wallet step, no confirmed channel -> channel step, no
+ * first message -> message step, otherwise `"done"` — and `ToonOnboardingGate`
+ * renders nothing once the step is `"done"`. Seeding all three is therefore
+ * what makes a bridged TOON run land in the app rather than the wizard.
+ *
+ * The mnemonic is a fixed BIP-39 test vector, never a real wallet: the fake
+ * `PaidClientFactory` (`e2eBridgeToon.ts`) answers every payment call, so
+ * nothing derives a key from it — it only has to be non-null for `hasWallet`.
+ */
+async function seedToonOnboardingCompletion(page: Page) {
+  await page.addInitScript(
+    ({ key, state }) => {
+      window.localStorage.setItem(key, JSON.stringify(state));
+    },
+    {
+      key: TOON_ONBOARDING_STORAGE_KEY,
+      state: {
+        mnemonic:
+          "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        channelConfirmed: true,
+        firstMessageSent: true,
+      },
+    },
+  );
+}
+
 async function seedDefaultCommunity(
   page: Page,
   fallbackPubkey: string,
@@ -749,6 +864,17 @@ export async function installBridge(page: Page, options: BridgeOptions) {
   }
   if (!options.skipOnboardingSeed) {
     await seedOnboardingCompletionForKnownIdentities(page, options.relayWsUrl);
+    // Only when the spec actually asked for TOON: on relay transport the
+    // payments wizard never renders, so seeding it would assert nothing and
+    // would quietly hide a regression in the gate itself.
+    //
+    // `transportEnv` lives on `MockBridgeOptions` (the `mock` argument), not
+    // on `BridgeOptions` — `installMockBridge(page, {transportEnv})` passes it
+    // positionally as `mock`, so it is reached through `options.mock`.
+    if (options.mock?.transportEnv?.BUZZ_TRANSPORT === "toon") {
+      await seedToonOnboardingCompletion(page);
+      await stubToonChainRpc(page);
+    }
   }
   // Default to opting every preview feature in. Specs that exercise the
   // Experiments toggle UI itself pass `seedPreviewFeatures: false`.

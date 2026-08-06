@@ -22,7 +22,7 @@
 use std::time::Duration;
 
 use buzz_test_client::{BuzzTestClient, RelayMessage, TestClientError};
-use nostr::{Alphabet, EventBuilder, Filter, Keys, Kind, SingleLetterTag, Tag};
+use nostr::{Alphabet, EventBuilder, EventId, Filter, Keys, Kind, SingleLetterTag, Tag};
 
 fn relay_url() -> String {
     std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string())
@@ -331,6 +331,106 @@ async fn test_nip50_search_returns_results_and_eose() {
             // Any other error (e.g. connection closed) is also acceptable here.
         }
     }
+
+    client.disconnect().await.expect("disconnect");
+}
+
+/// buzz#129: full-text search must reflect message edits (kind:40003) —
+/// searching the new content finds the message, and searching content that
+/// only existed pre-edit no longer matches.
+#[tokio::test]
+#[ignore]
+async fn test_edit_updates_search_index() {
+    let url = relay_url();
+    let keys = Keys::generate();
+    let channel = create_test_channel(&keys).await;
+    let channel_uuid = uuid::Uuid::parse_str(&channel).expect("channel id is a uuid");
+
+    let mut client = BuzzTestClient::connect(&url, &keys).await.expect("connect");
+
+    let old_token = format!("editold_{}", uuid::Uuid::new_v4().simple());
+    let new_token = format!("editnew_{}", uuid::Uuid::new_v4().simple());
+
+    let ok = client
+        .send_text_message(&keys, &channel, &format!("original {old_token}"), 9)
+        .await
+        .expect("send original message");
+    assert!(
+        ok.accepted,
+        "relay rejected original message: {}",
+        ok.message
+    );
+    let target_id = EventId::from_hex(&ok.event_id).expect("valid event id hex");
+
+    let edit_event =
+        buzz_sdk::builders::build_edit(channel_uuid, target_id, &format!("edited {new_token}"))
+            .expect("build edit event")
+            .sign_with_keys(&keys)
+            .expect("sign edit event");
+
+    let edit_ok = client
+        .send_event(edit_event)
+        .await
+        .expect("send edit event");
+    assert!(edit_ok.accepted, "relay rejected edit: {}", edit_ok.message);
+
+    // Small delay to allow indexing.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // The new content must now be searchable, resolving to the ORIGINAL
+    // message's id/kind — edits stay separate rows the client overlays
+    // (aux-closure design), so search results never surface the kind:40003
+    // edit event itself.
+    let sid_new = sub_id("edit-search-new");
+    let filter_new = Filter::new()
+        .kind(Kind::Custom(9))
+        .search(&new_token)
+        .custom_tags(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
+    client
+        .subscribe(&sid_new, vec![filter_new])
+        .await
+        .expect("subscribe new-content search");
+    let new_events = client
+        .collect_until_eose(&sid_new, Duration::from_secs(10))
+        .await
+        .expect("collect new-content search");
+    // Only the id is asserted, deliberately. The row's `content` is the
+    // ORIGINAL signed text and stays that way: migration 0027 indexes the edit
+    // through a separate `edit_content` column precisely so the signed column
+    // is never rewritten (rewriting it would invalidate the event signature).
+    // The edit is applied by the client as an overlay — which is what this
+    // test's own comment above describes — so asserting
+    // `e.content.contains(&new_token)` here would contradict the design and
+    // could never pass, no matter how the index behaves.
+    assert!(
+        new_events.iter().any(|e| e.id == target_id),
+        "post-edit content must be searchable and resolve to the original \
+         message id, got: {:?}",
+        new_events
+            .iter()
+            .map(|e| (e.id, e.content.clone()))
+            .collect::<Vec<_>>(),
+    );
+
+    // Content that only existed pre-edit must no longer match.
+    let sid_old = sub_id("edit-search-old");
+    let filter_old = Filter::new()
+        .kind(Kind::Custom(9))
+        .search(&old_token)
+        .custom_tags(SingleLetterTag::lowercase(Alphabet::H), [channel.as_str()]);
+    client
+        .subscribe(&sid_old, vec![filter_old])
+        .await
+        .expect("subscribe old-content search");
+    let old_events = client
+        .collect_until_eose(&sid_old, Duration::from_secs(10))
+        .await
+        .expect("collect old-content search");
+    assert!(
+        old_events.is_empty(),
+        "pre-edit-only content must no longer match after the edit lands, got: {:?}",
+        old_events.iter().map(|e| &e.content).collect::<Vec<_>>(),
+    );
 
     client.disconnect().await.expect("disconnect");
 }
