@@ -43,7 +43,11 @@ export function ProfileMoneyTabContent({
         isPending={usageQuery.isPending}
         summary={usageQuery.data ?? null}
       />
-      <NetworkSpendSection isSelf={isSelf} network={network} />
+      <NetworkSpendSection
+        agentPubkey={agentPubkey}
+        isSelf={isSelf}
+        network={network}
+      />
       <SpendAttributionSection
         agentPubkey={agentPubkey}
         isSelf={isSelf}
