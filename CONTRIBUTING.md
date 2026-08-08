@@ -241,6 +241,27 @@ just ci
 This is the same check that runs in CI. PRs that fail `just ci` will not be
 merged. If `just ci` fails on formatting, `just fix-all` fixes it in one shot (`rustfmt` + Tauri fmt + desktop, web, and mobile formatters).
 
+#### The `CI OK` required check
+
+`main` requires exactly one status check: **`CI OK`**, the aggregate job at the end
+of `.github/workflows/ci.yml`. Every other job feeds into it, and it is the only
+context branch protection looks at.
+
+`CI OK` is not "no job failed" — a skipped job is not a passing job. It recomputes
+each job's own trigger condition from the `Detect Changed Paths` outputs and then
+demands one of two things per job:
+
+- the job ran and succeeded, or
+- the job was skipped **and** its paths genuinely were not touched.
+
+A job that should have run for your change but did not fails `CI OK`, as does any
+`failure` or `cancelled` result. `Detect Changed Paths` and `Dead Token Reference
+Guard` are unconditional and must always succeed.
+
+So a docs-only PR still gets a real verdict: the Rust, desktop, web and mobile jobs
+skip legitimately, `CI OK` confirms each skip was expected, and the PR goes green —
+never with an empty check set.
+
 ---
 
 ## Code Style
