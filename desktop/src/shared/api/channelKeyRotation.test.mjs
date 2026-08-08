@@ -257,6 +257,92 @@ test("the admin list moves to the next epoch and drops the removed admin", async
   assert.deepEqual(wraps.flatMap(wrapRecipients), [survivor.pubkey]);
 });
 
+test("an admin can rotate without removing anyone, for a suspected key leak", async () => {
+  // buzz#42: the "this key may have leaked" trigger. No removal rides along —
+  // the admin list is unchanged apart from the epoch, and everyone but the
+  // calling admin gets the fresh key.
+  const { genesis, outcome, published } = await rotate({
+    admins: [owner.pubkey, coAdmin.pubkey],
+    removedPubkeys: [],
+    remaining: [owner.pubkey, survivor.pubkey, coAdmin.pubkey],
+  });
+
+  const resolved = resolveChannelAdminList(
+    [genesis, ...published].filter(
+      (event) => event.kind === CHANNEL_ADMIN_LIST_KIND,
+    ),
+    { channelId: CHANNEL, creator: owner.pubkey },
+  );
+
+  assert.equal(outcome.rotated, true);
+  assert.deepEqual(resolved.admins, [owner.pubkey, coAdmin.pubkey]);
+  assert.equal(resolved.epoch, 1);
+  assert.deepEqual(outcome.delivered, [survivor.pubkey, coAdmin.pubkey]);
+  assert.deepEqual(outcome.skipped, []);
+});
+
+test("a non-creator admin can rotate themselves out when they leave voluntarily", async () => {
+  // buzz#42: the voluntary-leave trigger. The leaving admin is both the
+  // caller and the removed pubkey — self-initiated, nobody else has to
+  // notice and act on their behalf.
+  const oldKey = generateChannelKey();
+  setChannelKey(CHANNEL, oldKey);
+  const genesis = genesisList(oldKey, [owner.pubkey, coAdmin.pubkey]);
+  recordChannelAdminListEvent(genesis);
+
+  const { ports, published } = rotationPorts(coAdmin);
+  const outcome = await rotateChannelKeyForRemoval(
+    {
+      channelId: CHANNEL,
+      removed: [coAdmin.pubkey],
+      remaining: [owner.pubkey],
+    },
+    ports,
+  );
+
+  assert.equal(outcome.rotated, true);
+  const resolved = resolveChannelAdminList(
+    [genesis, ...published].filter(
+      (event) => event.kind === CHANNEL_ADMIN_LIST_KIND,
+    ),
+    { channelId: CHANNEL, creator: owner.pubkey },
+  );
+  assert.deepEqual(resolved.admins, [owner.pubkey]);
+  assert.deepEqual(outcome.delivered, [owner.pubkey]);
+});
+
+test("the creator leaving still rotates the key, but stays on the list", async () => {
+  // buzz#18's admin-list builder never drops the creator, so a creator who
+  // leaves voluntarily loses the content like anyone else while their name
+  // stays on the list — re-rooting the channel to a new creator is a
+  // separate, unbuilt feature (buzz#42's scope explicitly excludes it).
+  const oldKey = generateChannelKey();
+  setChannelKey(CHANNEL, oldKey);
+  const genesis = genesisList(oldKey, [owner.pubkey]);
+  recordChannelAdminListEvent(genesis);
+
+  const { ports, published } = rotationPorts(owner);
+  const outcome = await rotateChannelKeyForRemoval(
+    {
+      channelId: CHANNEL,
+      removed: [owner.pubkey],
+      remaining: [survivor.pubkey],
+    },
+    ports,
+  );
+
+  assert.equal(outcome.rotated, true);
+  const resolved = resolveChannelAdminList(
+    [genesis, ...published].filter(
+      (event) => event.kind === CHANNEL_ADMIN_LIST_KIND,
+    ),
+    { channelId: CHANNEL, creator: owner.pubkey },
+  );
+  assert.deepEqual(resolved.admins, [owner.pubkey]);
+  assert.equal(resolved.epoch, 1);
+  assert.deepEqual(outcome.delivered, [survivor.pubkey]);
+});
+
 test("the rotating admin switches to the new key and keeps the old one", async () => {
   const { oldKey, outcome } = await rotate({
     removedPubkeys: [removed.pubkey],

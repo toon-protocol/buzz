@@ -1,7 +1,12 @@
-import { KeyRound, Lock, LockOpen } from "lucide-react";
+import { KeyRound, Lock, LockOpen, RefreshCw } from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
 
+import { isChannelAdmin } from "@/shared/api/channelAdminList";
+import {
+  getChannelAdminList,
+  subscribeToChannelAdminLists,
+} from "@/shared/api/channelAdminListStore";
 import {
   type ChannelKey,
   formatChannelKey,
@@ -15,7 +20,9 @@ import {
   subscribeToChannelKeys,
 } from "@/shared/api/channelKeyStore";
 import { announceChannelKey } from "@/shared/api/channelMembership";
+import { useIdentityQuery } from "@/shared/api/hooks";
 import { ChannelAdminList } from "@/features/channels/ui/ChannelAdminList";
+import { useRotateChannelKeyMutation } from "@/features/channels/hooks";
 import { copyTextToClipboard } from "@/shared/lib/clipboard";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
@@ -171,6 +178,23 @@ function KeyedState({
   testIdPrefix: string;
 }) {
   const parsed = parseChannelKey(keyHex);
+  const adminList = useChannelAdminListSnapshot(channelId);
+  const identity = useIdentityQuery();
+  const canRotate = isChannelAdmin(adminList, identity.data?.pubkey);
+  const rotateMutation = useRotateChannelKeyMutation(channelId);
+
+  async function handleRotateNow() {
+    try {
+      await rotateMutation.mutateAsync();
+      toast.success("Channel key rotated. Members will be sent the new key.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to rotate the channel key.",
+      );
+    }
+  }
 
   return (
     <div className="space-y-3">
@@ -214,8 +238,39 @@ function KeyedState({
         >
           Forget key
         </Button>
+        {canRotate ? (
+          // The "this key may have leaked" trigger (buzz#42): rotate on
+          // demand with no removal riding along, for the admin who suspects
+          // the key reached someone who should not have it and cannot wait
+          // for the next membership change to fix that.
+          <Button
+            className="gap-2"
+            data-testid={`${testIdPrefix}-encryption-rotate`}
+            disabled={disabled || rotateMutation.isPending}
+            onClick={() => void handleRotateNow()}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            <RefreshCw className="size-4" />
+            {rotateMutation.isPending ? "Rotating..." : "Rotate now"}
+          </Button>
+        ) : null}
       </div>
     </div>
+  );
+}
+
+/** The validated admin list, re-rendering when a new signed one arrives. */
+function useChannelAdminListSnapshot(channelId: string) {
+  const snapshot = React.useCallback(
+    () => getChannelAdminList(channelId),
+    [channelId],
+  );
+  return React.useSyncExternalStore(
+    subscribeToChannelAdminLists,
+    snapshot,
+    snapshot,
   );
 }
 
