@@ -1,12 +1,7 @@
 import { ShieldCheck, ShieldQuestion } from "lucide-react";
-import * as React from "react";
 
-import type { ChannelAdminList as ChannelAdminListState } from "@/shared/api/channelAdminList";
-import {
-  getChannelAdminList,
-  subscribeToChannelAdminLists,
-} from "@/shared/api/channelAdminListStore";
 import { useIdentityQuery } from "@/shared/api/hooks";
+import { useChannelAdminList } from "@/features/channels/useChannelAdminList";
 
 /**
  * Who may hand out this channel's key, rendered from the signed admin list.
@@ -79,18 +74,5 @@ export function ChannelAdminList({
         </p>
       ) : null}
     </div>
-  );
-}
-
-/** The validated admin list, re-rendering when a new signed one arrives. */
-function useChannelAdminList(channelId: string): ChannelAdminListState | null {
-  const snapshot = React.useCallback(
-    () => getChannelAdminList(channelId),
-    [channelId],
-  );
-  return React.useSyncExternalStore(
-    subscribeToChannelAdminLists,
-    snapshot,
-    snapshot,
   );
 }
