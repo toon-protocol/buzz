@@ -4,10 +4,6 @@ import { toast } from "sonner";
 
 import { isChannelAdmin } from "@/shared/api/channelAdminList";
 import {
-  getChannelAdminList,
-  subscribeToChannelAdminLists,
-} from "@/shared/api/channelAdminListStore";
-import {
   type ChannelKey,
   formatChannelKey,
   generateChannelKey,
@@ -21,8 +17,9 @@ import {
 } from "@/shared/api/channelKeyStore";
 import { announceChannelKey } from "@/shared/api/channelMembership";
 import { useIdentityQuery } from "@/shared/api/hooks";
-import { ChannelAdminList } from "@/features/channels/ui/ChannelAdminList";
 import { useRotateChannelKeyMutation } from "@/features/channels/hooks";
+import { useChannelAdminList } from "@/features/channels/useChannelAdminList";
+import { ChannelAdminList } from "@/features/channels/ui/ChannelAdminList";
 import { copyTextToClipboard } from "@/shared/lib/clipboard";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
@@ -178,7 +175,7 @@ function KeyedState({
   testIdPrefix: string;
 }) {
   const parsed = parseChannelKey(keyHex);
-  const adminList = useChannelAdminListSnapshot(channelId);
+  const adminList = useChannelAdminList(channelId);
   const identity = useIdentityQuery();
   const canRotate = isChannelAdmin(adminList, identity.data?.pubkey);
   const rotateMutation = useRotateChannelKeyMutation(channelId);
@@ -258,19 +255,6 @@ function KeyedState({
         ) : null}
       </div>
     </div>
-  );
-}
-
-/** The validated admin list, re-rendering when a new signed one arrives. */
-function useChannelAdminListSnapshot(channelId: string) {
-  const snapshot = React.useCallback(
-    () => getChannelAdminList(channelId),
-    [channelId],
-  );
-  return React.useSyncExternalStore(
-    subscribeToChannelAdminLists,
-    snapshot,
-    snapshot,
   );
 }
 

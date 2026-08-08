@@ -31,7 +31,10 @@ import type {
   SetChannelTopicInput,
   UpdateChannelInput,
 } from "@/shared/api/types";
-import type { ChannelKeyRotationRefusal } from "@/shared/api/channelKeyRotation";
+import type {
+  ChannelKeyRotationOutcome,
+  ChannelKeyRotationRefusal,
+} from "@/shared/api/channelKeyRotation";
 import { rotateChannelKeyForRemoval } from "@/shared/api/channelKeyRotation";
 import { hasChannelKey } from "@/shared/api/channelKeyStore";
 import {
@@ -538,6 +541,31 @@ export function useDeleteChannelMutation(channelId: string | null) {
 }
 
 /**
+ * Warn about the parts of a rotation that did not land.
+ *
+ * Neither is fatal, and neither is worth failing a mutation over: the new
+ * epoch is already this client's, an admin list that missed the relay is
+ * republished by the next rotation, and a member whose wrap failed stays on
+ * the old epoch — readable, just not current — until one reaches them.
+ */
+function reportRotationDelivery(
+  channelId: string,
+  outcome: Extract<ChannelKeyRotationOutcome, { rotated: true }>,
+): void {
+  outcome.published.catch((error) => {
+    console.warn(
+      `[channel-keys] ${channelId}'s rotated admin list did not reach the relay`,
+      error,
+    );
+  });
+  for (const skip of outcome.skipped) {
+    console.warn(
+      `[channel-keys] the rotated key did not reach ${skip.pubkey}: ${skip.reason}`,
+    );
+  }
+}
+
+/**
  * Rotate an encrypted channel's key after someone is removed from it (buzz#18).
  *
  * Awaited, unlike the add-member gift wraps. Removing a member is a rare,
@@ -577,17 +605,7 @@ async function rotateAfterRemoval(
       return;
     }
 
-    outcome.published.catch((error) => {
-      console.warn(
-        `[channel-keys] ${channelId}'s rotated admin list did not reach the relay`,
-        error,
-      );
-    });
-    for (const skip of outcome.skipped) {
-      console.warn(
-        `[channel-keys] the rotated key did not reach ${skip.pubkey}: ${skip.reason}`,
-      );
-    }
+    reportRotationDelivery(channelId, outcome);
   } catch (error) {
     // The member is already off the roster; failing the mutation here would
     // report a removal that did happen as one that did not. The channel stays
@@ -610,13 +628,13 @@ async function rotateAfterRemoval(
  * is what makes this self-initiated: an admin rotates themselves out on the
  * way out, the same way they could rotate anyone else out.
  *
- * A non-admin leaving costs nothing here: they were never entitled to hand
- * this channel's key to anyone, so `rotateChannelKeyForRemoval`'s admin check
- * refuses for free, before any network round trip. The creator is the one
- * admin the admin-list builder will not drop (buzz#18); a creator who leaves
- * still rotates the key like anyone else, with their name staying on the
- * list — re-rooting a channel to a new creator is a separate, unbuilt
- * feature.
+ * A non-admin leaving changes nothing: they were never entitled to hand this
+ * channel's key to anyone, so `rotateChannelKeyForRemoval` refuses at its
+ * admin check — after the roster read, but before a key is minted or a write
+ * is paid for. The creator is the one admin the admin-list builder will not
+ * drop (buzz#18); a creator who leaves still rotates the key like anyone else,
+ * with their name staying on the list — re-rooting a channel to a new creator
+ * is a separate, unbuilt feature.
  */
 async function rotateAfterVoluntaryLeave(channelId: string): Promise<void> {
   if (!hasChannelKey(channelId)) return;
@@ -637,17 +655,7 @@ async function rotateAfterVoluntaryLeave(channelId: string): Promise<void> {
       return;
     }
 
-    outcome.published.catch((error) => {
-      console.warn(
-        `[channel-keys] ${channelId}'s rotated admin list did not reach the relay`,
-        error,
-      );
-    });
-    for (const skip of outcome.skipped) {
-      console.warn(
-        `[channel-keys] the rotated key did not reach ${skip.pubkey}: ${skip.reason}`,
-      );
-    }
+    reportRotationDelivery(channelId, outcome);
   } catch (error) {
     // The member has already left; failing the mutation here would report a
     // leave that did happen as one that did not. The channel stays on its old
@@ -696,18 +704,7 @@ export function useRotateChannelKeyMutation(channelId: string | null) {
         throw new Error(ROTATION_REFUSAL_MESSAGES[outcome.reason]);
       }
 
-      outcome.published.catch((error) => {
-        console.warn(
-          `[channel-keys] ${channelId}'s rotated admin list did not reach the relay`,
-          error,
-        );
-      });
-      for (const skip of outcome.skipped) {
-        console.warn(
-          `[channel-keys] the rotated key did not reach ${skip.pubkey}: ${skip.reason}`,
-        );
-      }
-
+      reportRotationDelivery(channelId, outcome);
       return outcome;
     },
     onSettled: async () => {
