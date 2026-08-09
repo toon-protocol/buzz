@@ -31,12 +31,17 @@ import type {
   SetChannelTopicInput,
   UpdateChannelInput,
 } from "@/shared/api/types";
-import { rotateChannelKeyForRemoval } from "@/shared/api/channelKeyRotation";
+import {
+  type ChannelKeyRotationOutcome,
+  type ChannelKeyRotationRefusal,
+  rotateChannelKeyForRemoval,
+} from "@/shared/api/channelKeyRotation";
 import { hasChannelKey } from "@/shared/api/channelKeyStore";
 import {
   grantChannelKeyToMembers,
   provisionPrivateChannel,
 } from "@/shared/api/channelMembership";
+import { getIdentity } from "@/shared/api/tauriIdentity";
 import { useCommunities } from "@/features/communities/useCommunities";
 import {
   readChannelSnapshot,
@@ -536,6 +541,31 @@ export function useDeleteChannelMutation(channelId: string | null) {
 }
 
 /**
+ * Warn about the parts of a rotation that did not land.
+ *
+ * Neither is fatal, and neither is worth failing a mutation over: the new
+ * epoch has already been minted and signed, an admin list that missed the
+ * relay is republished by the next rotation, and a member whose wrap failed
+ * stays on the old epoch — readable, just not current — until one reaches them.
+ */
+function reportRotationDelivery(
+  channelId: string,
+  outcome: Extract<ChannelKeyRotationOutcome, { rotated: true }>,
+): void {
+  outcome.published.catch((error) => {
+    console.warn(
+      `[channel-keys] ${channelId}'s rotated admin list did not reach the relay`,
+      error,
+    );
+  });
+  for (const skip of outcome.skipped) {
+    console.warn(
+      `[channel-keys] the rotated key did not reach ${skip.pubkey}: ${skip.reason}`,
+    );
+  }
+}
+
+/**
  * Rotate an encrypted channel's key after someone is removed from it (buzz#18).
  *
  * Awaited, unlike the add-member gift wraps. Removing a member is a rare,
@@ -575,17 +605,7 @@ async function rotateAfterRemoval(
       return;
     }
 
-    outcome.published.catch((error) => {
-      console.warn(
-        `[channel-keys] ${channelId}'s rotated admin list did not reach the relay`,
-        error,
-      );
-    });
-    for (const skip of outcome.skipped) {
-      console.warn(
-        `[channel-keys] the rotated key did not reach ${skip.pubkey}: ${skip.reason}`,
-      );
-    }
+    reportRotationDelivery(channelId, outcome);
   } catch (error) {
     // The member is already off the roster; failing the mutation here would
     // report a removal that did happen as one that did not. The channel stays
@@ -596,6 +616,105 @@ async function rotateAfterRemoval(
       error,
     );
   }
+}
+
+/**
+ * Rotate an encrypted channel's key when the member who just left was one of
+ * its admins (buzz#42).
+ *
+ * Leaving is a roster change like removal, but nobody else is there to act on
+ * it — the member walking out is the only actor in the picture. Reuses #18's
+ * removal machinery with the leaving admin as the sole `removed` pubkey, which
+ * is what makes this self-initiated: an admin rotates themselves out on the
+ * way out, the same way they could rotate anyone else out — and is denied the
+ * new epoch on the same terms, because `rotateChannelKeyForRemoval` skips its
+ * final adopt step whenever this client's own pubkey is one of the `removed`.
+ * The leaver ends up where a removed member ends up: holding the epochs they
+ * were in, holding nothing that opens what the channel says after them.
+ *
+ * A non-admin leaving changes nothing: they were never entitled to hand this
+ * channel's key to anyone, so `rotateChannelKeyForRemoval` refuses at its
+ * admin check — after the roster read, but before a key is minted or a write
+ * is paid for. The creator is the one admin the admin-list builder will not
+ * drop (buzz#18); a creator who leaves still rotates the key like anyone else,
+ * with their name staying on the list — re-rooting a channel to a new creator
+ * is a separate, unbuilt feature.
+ */
+async function rotateAfterVoluntaryLeave(channelId: string): Promise<void> {
+  if (!hasChannelKey(channelId)) return;
+
+  try {
+    const identity = await getIdentity();
+    const remaining = await getChannelMembers(channelId);
+    const outcome = await rotateChannelKeyForRemoval({
+      channelId,
+      removed: [identity.pubkey],
+      remaining: remaining.map((member) => member.pubkey),
+    });
+
+    if (!outcome.rotated) {
+      console.warn(
+        `[channel-keys] ${channelId} was not rotated after ${identity.pubkey} left: ${outcome.reason}`,
+      );
+      return;
+    }
+
+    reportRotationDelivery(channelId, outcome);
+  } catch (error) {
+    // The member has already left; failing the mutation here would report a
+    // leave that did happen as one that did not. The channel stays on its old
+    // epoch, visible in channel settings, and "Rotate now" or the next
+    // removal/leave rotates it.
+    console.warn(
+      `[channel-keys] could not rotate ${channelId} after leaving`,
+      error,
+    );
+  }
+}
+
+const ROTATION_REFUSAL_MESSAGES: Record<ChannelKeyRotationRefusal, string> = {
+  "channel-not-encrypted": "This channel has no key to rotate.",
+  "no-admin-list": "This channel has no signed admin list yet.",
+  "not-an-admin": "Only a channel admin can rotate its key.",
+};
+
+/**
+ * Rotate an encrypted channel's key on demand, without removing anyone
+ * (buzz#42).
+ *
+ * The "this key may have leaked" trigger: reuses #18's removal machinery with
+ * an empty `removed` set, so every current member other than the calling
+ * admin is re-wrapped a fresh key before the admin list names its epoch —
+ * same publish order, same all-or-nothing-per-recipient delivery, just no
+ * roster change riding along with it.
+ */
+export function useRotateChannelKeyMutation(channelId: string | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      if (!channelId) {
+        throw new Error("No channel selected.");
+      }
+
+      const members = await getChannelMembers(channelId);
+      const outcome = await rotateChannelKeyForRemoval({
+        channelId,
+        removed: [],
+        remaining: members.map((member) => member.pubkey),
+      });
+
+      if (!outcome.rotated) {
+        throw new Error(ROTATION_REFUSAL_MESSAGES[outcome.reason]);
+      }
+
+      reportRotationDelivery(channelId, outcome);
+      return outcome;
+    },
+    onSettled: async () => {
+      await invalidateChannelState(queryClient, channelId);
+    },
+  });
 }
 
 export function useAddChannelMembersMutation(channelId: string | null) {
@@ -703,6 +822,7 @@ export function useLeaveChannelMutation(channelId: string | null) {
       }
 
       await leaveChannel(channelId);
+      await rotateAfterVoluntaryLeave(channelId);
     },
     onSettled: async () => {
       await invalidateChannelState(queryClient, channelId);
