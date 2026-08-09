@@ -6,6 +6,7 @@ import {
 } from "@/features/payments/lib/paymentsOverview";
 import { SettingsOptionGroup } from "@/features/settings/ui/SettingsOptionGroup";
 import { SettingsSectionHeader } from "@/features/settings/ui/SettingsSectionHeader";
+import { useFeatureEnabled } from "@/shared/features";
 import { Input } from "@/shared/ui/input";
 import { useMeshComputeSellPricing } from "../hooks/useMeshComputeSellPricing";
 import {
@@ -26,7 +27,15 @@ import {
  * settings store (and its version counter) but has nothing to re-publish
  * to yet. See `meshComputeSellPricingStore.ts`'s module doc.
  */
+// Gated behind the `meshComputeSelling` preview feature until buzz#91 lands the
+// kind:31990 publisher. Without it this card tells every desktop user their
+// machine "charges the open compute market" while nothing advertises, quotes or
+// charges — the price is real, the market it implies is not. The gate is on the
+// card rather than the `compute` settings section because that section also
+// carries MeshComputeSettingsCard, which is shipped free sharing with relay
+// members and must stay visible.
 export function MeshComputeSellPricingCard() {
+  const sellingEnabled = useFeatureEnabled("meshComputeSelling");
   const { pricing, revise } = useMeshComputeSellPricing();
   const [priceInput, setPriceInput] = React.useState(() =>
     formatUsdcAmountInput(pricing.priceMicroUsdcPer1kTokens),
@@ -63,6 +72,10 @@ export function MeshComputeSellPricingCard() {
     pricing.priceMicroUsdcPer1kTokens,
     pricing.maxOutputTokens,
   );
+
+  // After every hook, never before: an early return above `useMeshComputeSellPricing`
+  // and the `useState` calls would make the hook order depend on the flag.
+  if (!sellingEnabled) return null;
 
   return (
     <section className="min-w-0" data-testid="settings-mesh-sell-pricing">
