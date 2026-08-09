@@ -31,11 +31,11 @@ import type {
   SetChannelTopicInput,
   UpdateChannelInput,
 } from "@/shared/api/types";
-import type {
-  ChannelKeyRotationOutcome,
-  ChannelKeyRotationRefusal,
+import {
+  type ChannelKeyRotationOutcome,
+  type ChannelKeyRotationRefusal,
+  rotateChannelKeyForRemoval,
 } from "@/shared/api/channelKeyRotation";
-import { rotateChannelKeyForRemoval } from "@/shared/api/channelKeyRotation";
 import { hasChannelKey } from "@/shared/api/channelKeyStore";
 import {
   grantChannelKeyToMembers,
@@ -627,10 +627,10 @@ async function rotateAfterRemoval(
  * removal machinery with the leaving admin as the sole `removed` pubkey, which
  * is what makes this self-initiated: an admin rotates themselves out on the
  * way out, the same way they could rotate anyone else out — and is denied the
- * new epoch on the same terms, since `rotateChannelKeyForRemoval` does not
- * adopt a key it has just wrapped to everyone but this client. The leaver ends
- * up where a removed member ends up: holding the epochs they were in, holding
- * nothing that opens what the channel says after them.
+ * new epoch on the same terms, because `rotateChannelKeyForRemoval` skips its
+ * final adopt step whenever this client's own pubkey is one of the `removed`.
+ * The leaver ends up where a removed member ends up: holding the epochs they
+ * were in, holding nothing that opens what the channel says after them.
  *
  * A non-admin leaving changes nothing: they were never entitled to hand this
  * channel's key to anyone, so `rotateChannelKeyForRemoval` refuses at its
