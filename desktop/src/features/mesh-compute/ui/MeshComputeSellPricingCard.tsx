@@ -69,9 +69,9 @@ export function MeshComputeSellPricingCard() {
       <SettingsSectionHeader
         description={
           <>
-            Set what this machine charges the open compute market per job.
-            Revising the price takes effect for jobs quoted after the change —
-            no restart needed.
+            Set the rate this machine charges the open compute market for the
+            jobs it runs. Revising the price takes effect for jobs quoted after
+            the change — no restart needed.
           </>
         }
         title="Posted price"
@@ -79,55 +79,25 @@ export function MeshComputeSellPricingCard() {
 
       <SettingsOptionGroup>
         <div className="flex flex-col gap-4 px-4 py-4">
-          <div>
-            <label
-              className="text-sm font-medium"
-              htmlFor="mesh-sell-price-input"
-            >
-              Price
-            </label>
-            <div className="mt-2 flex items-center gap-2">
-              <Input
-                className="max-w-[10rem]"
-                data-testid="mesh-sell-price-input"
-                id="mesh-sell-price-input"
-                inputMode="decimal"
-                onChange={(e) => handlePriceChange(e.target.value)}
-                value={priceInput}
-              />
-              <span className="text-sm text-muted-foreground">
-                USDC per 1,000 output tokens
-              </span>
-            </div>
-            {priceError ? (
-              <p className="mt-1 text-sm text-destructive">{priceError}</p>
-            ) : null}
-          </div>
+          <PricingField
+            error={priceError}
+            id="mesh-sell-price-input"
+            inputMode="decimal"
+            label="Price"
+            onChange={handlePriceChange}
+            suffix="USDC per 1,000 output tokens"
+            value={priceInput}
+          />
 
-          <div>
-            <label
-              className="text-sm font-medium"
-              htmlFor="mesh-sell-max-tokens-input"
-            >
-              Output token ceiling
-            </label>
-            <div className="mt-2 flex items-center gap-2">
-              <Input
-                className="max-w-[10rem]"
-                data-testid="mesh-sell-max-tokens-input"
-                id="mesh-sell-max-tokens-input"
-                inputMode="numeric"
-                onChange={(e) => handleTokensChange(e.target.value)}
-                value={tokensInput}
-              />
-              <span className="text-sm text-muted-foreground">
-                max output tokens per job
-              </span>
-            </div>
-            {tokensError ? (
-              <p className="mt-1 text-sm text-destructive">{tokensError}</p>
-            ) : null}
-          </div>
+          <PricingField
+            error={tokensError}
+            id="mesh-sell-max-tokens-input"
+            inputMode="numeric"
+            label="Output token ceiling"
+            onChange={handleTokensChange}
+            suffix="max output tokens per job"
+            value={tokensInput}
+          />
 
           <p
             className="text-sm text-muted-foreground"
@@ -147,5 +117,44 @@ export function MeshComputeSellPricingCard() {
         separate rail that never counts toward this number.
       </p>
     </section>
+  );
+}
+
+/** One labelled pricing field: the input, its unit suffix, and its parse error. */
+function PricingField({
+  error,
+  id,
+  inputMode,
+  label,
+  onChange,
+  suffix,
+  value,
+}: {
+  error: string | null;
+  id: string;
+  inputMode: "decimal" | "numeric";
+  label: string;
+  onChange: (next: string) => void;
+  suffix: string;
+  value: string;
+}) {
+  return (
+    <div>
+      <label className="text-sm font-medium" htmlFor={id}>
+        {label}
+      </label>
+      <div className="mt-2 flex items-center gap-2">
+        <Input
+          className="max-w-[10rem]"
+          data-testid={id}
+          id={id}
+          inputMode={inputMode}
+          onChange={(e) => onChange(e.target.value)}
+          value={value}
+        />
+        <span className="text-sm text-muted-foreground">{suffix}</span>
+      </div>
+      {error ? <p className="mt-1 text-sm text-destructive">{error}</p> : null}
+    </div>
   );
 }

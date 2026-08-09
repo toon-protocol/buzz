@@ -35,9 +35,10 @@ export const DEFAULT_SELL_PRICE_MICRO_USDC = 2_000n;
 export const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
 
 /**
- * micro-USDC per 1,000 output tokens, at the given output-token ceiling.
- * Floors sub-micro-USDC remainders — the advertised price is a rate, not a
- * guarantee of exact-cent billing.
+ * What one job costs in micro-USDC when it generates the full output-token
+ * ceiling, at the given per-1k-output-token rate. Floors sub-micro-USDC
+ * remainders — the advertised price is a rate, not a guarantee of exact-cent
+ * billing.
  */
 export function typicalJobCostBaseUnits(
   priceMicroUsdcPer1kTokens: bigint,
@@ -55,11 +56,11 @@ export function typicalJobCostBaseUnits(
  * rate the operator has to do math on.
  */
 export function typicalJobCostCaption(
-  priceBaseUnits: bigint,
+  jobCostBaseUnits: bigint,
   maxOutputTokens: number,
 ): string {
   const tokens = maxOutputTokens.toLocaleString();
-  return `A full-length job (up to ${tokens} output tokens) costs up to ${formatUsdcBaseUnits(priceBaseUnits)}.`;
+  return `A full-length job (up to ${tokens} output tokens) costs up to ${formatUsdcBaseUnits(jobCostBaseUnits)}.`;
 }
 
 /**

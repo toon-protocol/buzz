@@ -11,9 +11,15 @@ import {
  * local seller configuration to persist.
  *
  * Follows `agentAutoRefillStore.ts`'s shape: injectable storage for tests,
- * a bumped `version` + subscriber set so `useSyncExternalStore` consumers
- * (and, once buzz#91 exists, a kind:31990 republish hook) invalidate on
- * every revision — the "without restarting the node" half of AC2.
+ * plus a subscriber set and a bumped `version` so every revision is
+ * observable — by `useSyncExternalStore` consumers today and, once buzz#91
+ * exists, by a kind:31990 republish hook. That is the "without restarting
+ * the node" half of AC2.
+ *
+ * Like `agentAutoRefillStore.ts`, this is deliberately NOT registered in
+ * `resetCommunityState()`: the posted price belongs to this machine's
+ * seller configuration, not to whichever community is open, so switching
+ * communities must not clear it.
  */
 
 const STORAGE_KEY = "buzz-mesh-compute-sell-pricing.v1";
@@ -85,7 +91,7 @@ function notify(): void {
   for (const listener of listeners) listener();
 }
 
-/** Bumped on every write — lets `useSyncExternalStore` consumers invalidate on any change. */
+/** Bumped on every revision (and on a storage swap) — a scalar "has it changed?" read. */
 export function getMeshComputeSellPricingVersion(): number {
   return version;
 }
