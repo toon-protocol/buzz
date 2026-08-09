@@ -45,7 +45,8 @@ import type { RelayEvent } from "@/shared/api/types";
  * ```
  * 1. gift-wrap the new key to every REMAINING member      (N paid writes)
  * 2. publish the admin list: epoch + 1, new keyId, member gone   (1 write)
- * 3. only now switch this client's sending key
+ * 3. only now switch this client's sending key — unless this client is the
+ *    member being removed, which is a rotation it must not be able to read
  * ```
  *
  * Wraps first. The wraps are validated by the recipient against the admin list
@@ -172,6 +173,17 @@ function normalizePubkeys(values: readonly string[]): string[] {
  * cached before the removal landed, and a stale roster that re-wraps the key
  * to the person being removed would undo the entire operation silently.
  *
+ * Rotating *yourself* out is this same call with this client's own pubkey in
+ * `removed` — what the voluntary-leave trigger does (buzz#42). It differs in
+ * exactly one place, the end: the new key is never taken into this client's
+ * ring, so a leaver finishes the rotation on the epoch they were already in.
+ * They keep the history they could already read — ADR 0001's Slack-export
+ * semantics do not change because the departure was their own idea — and hold
+ * nothing that opens what the channel says after them. A rotation that handed
+ * the leaver the new epoch would deny nobody anything: every remaining member
+ * could already read the channel, so the only access it can withdraw is the
+ * departing member's.
+ *
  * Removing an admin is the same call: the new list simply omits them, so they
  * lose both the ability to read the channel and the authority to hand its key
  * out, in one signed event. The channel's *creator* is the exception — the
@@ -205,8 +217,13 @@ export async function rotateChannelKeyForRemoval(
   }
 
   const removed = normalizePubkeys(input.removed);
+  // Normalised the way the rosters are, because two decisions compare against
+  // it: whether to wrap the key to ourselves (never), and whether we are the
+  // member being removed (then we do not keep the key at all). A differently
+  // cased pubkey must not be able to turn either of those into a "no".
+  const self = identity.pubkey.trim().toLowerCase();
   const recipients = normalizePubkeys(input.remaining).filter(
-    (pubkey) => !removed.includes(pubkey) && pubkey !== identity.pubkey,
+    (pubkey) => !removed.includes(pubkey) && pubkey !== self,
   );
 
   const key = ports.freshKey();
@@ -264,13 +281,24 @@ export async function rotateChannelKeyForRemoval(
     ADMIN_LIST_MESSAGES.failure,
   );
 
-  // Step 3: switch. Straight to the front of the ring rather than through
+  // Step 3: switch, unless this client rotated itself out — then there is
+  // nothing to switch to. The new epoch belongs to the members who stayed, and
+  // a leaver who kept it would read everything the channel said after they
+  // walked out, which is the one access this rotation exists to withdraw.
+  //
+  // Never adopted rather than adopted and then forgotten: a key that is never
+  // written to the ring cannot be left in it by a failure between the two
+  // steps, and nothing persists it in the meantime.
+  //
+  // Otherwise straight to the front of the ring rather than through
   // `reconcileChannelKeyEpochs`, because the rule that gate enforces — send
   // only under an epoch a validated admin list names — is already satisfied:
   // this client signed that list and recorded it on the line above. Making the
   // switch depend on re-folding our own event would add a way for a rotation
   // to half-happen, and no safety.
-  adoptChannelKey(channelId, key, { makeCurrent: true });
+  if (!removed.includes(self)) {
+    adoptChannelKey(channelId, key, { makeCurrent: true });
+  }
 
   return {
     rotated: true,

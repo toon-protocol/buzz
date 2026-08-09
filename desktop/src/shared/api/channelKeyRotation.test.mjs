@@ -26,6 +26,7 @@ import { startChannelKeyInbox } from "./channelKeyInbox.ts";
 import { rotateChannelKeyForRemoval } from "./channelKeyRotation.ts";
 import {
   channelKeyRecord,
+  findChannelKey,
   getChannelKey,
   getChannelKeys,
   setChannelKey,
@@ -74,9 +75,13 @@ function memoryDisk() {
  */
 function rotationPorts(who, options = {}) {
   const published = [];
+  /** Every key the rotation minted — the only handle a test has on one it is
+   * not supposed to be able to read afterwards. */
+  const minted = [];
   let clock = options.startedAt ?? 1_700_000_100;
   return {
     published,
+    minted,
     ports: {
       identity: async () => ({ pubkey: who.pubkey }),
       secretKey: async () => who.secretKey,
@@ -92,7 +97,11 @@ function rotationPorts(who, options = {}) {
         return event;
       },
       ready: async () => {},
-      freshKey: generateChannelKey,
+      freshKey: () => {
+        const key = generateChannelKey();
+        minted.push(key);
+        return key;
+      },
     },
   };
 }
@@ -309,6 +318,55 @@ test("a non-creator admin can rotate themselves out when they leave voluntarily"
   );
   assert.deepEqual(resolved.admins, [owner.pubkey]);
   assert.deepEqual(outcome.delivered, [owner.pubkey]);
+  // *Out*, not merely off the list: the epoch they minted on the way out is
+  // one they do not hold. The test below is what that costs them.
+  assert.equal(findChannelKey(CHANNEL, outcome.keyId), null);
+});
+
+test("the admin who leaves cannot read what the channel says after them", async () => {
+  // The security property of the voluntary-leave trigger (buzz#42). The caller
+  // is also the removed member, so the epoch they mint must be one they cannot
+  // open — a leaver who kept it would have paid for N wraps that denied nobody
+  // anything, and would read the channel forever from outside its roster.
+  const oldKey = generateChannelKey();
+  setChannelKey(CHANNEL, oldKey);
+  recordChannelAdminListEvent(
+    genesisList(oldKey, [owner.pubkey, coAdmin.pubkey]),
+  );
+
+  const { ports, minted } = rotationPorts(coAdmin);
+  const outcome = await rotateChannelKeyForRemoval(
+    {
+      channelId: CHANNEL,
+      removed: [coAdmin.pubkey],
+      remaining: [owner.pubkey],
+    },
+    ports,
+  );
+
+  // The ring is exactly what it was: the epoch they were in, nothing after it.
+  assert.equal(outcome.rotated, true);
+  const ring = getChannelKeys(CHANNEL);
+  assert.equal(ring.length, 1);
+  assert.equal(channelKeyId(ring[0]), channelKeyId(oldKey));
+  assert.equal(findChannelKey(CHANNEL, outcome.keyId), null);
+  // Nor on the Rust side, which seals under whatever the front of the ring is.
+  assert.deepEqual(channelKeyRecord(), { [CHANNEL]: formatChannelKey(oldKey) });
+
+  // What the channel says next, sealed under the epoch they minted and handed
+  // to the members who stayed, is closed to them.
+  const [newKey] = minted;
+  assert.equal(channelKeyId(newKey), outcome.keyId);
+  assert.equal(
+    openChannelEvent(message(newKey, "said after they left")).content,
+    LOCKED_MESSAGE_PLACEHOLDER,
+  );
+
+  // History they already had still opens. ADR 0001's Slack-export semantics
+  // apply to a member who walks out exactly as they do to one who is removed:
+  // the epochs they were in stay readable, the ones they were not never start.
+  const history = message(oldKey, "said before they left", "a".repeat(64));
+  assert.equal(openChannelEvent(history).content, "said before they left");
 });
 
 test("the creator leaving still rotates the key, but stays on the list", async () => {
@@ -341,6 +399,9 @@ test("the creator leaving still rotates the key, but stays on the list", async (
   assert.deepEqual(resolved.admins, [owner.pubkey]);
   assert.equal(resolved.epoch, 1);
   assert.deepEqual(outcome.delivered, [survivor.pubkey]);
+  // "Loses the content like anyone else": their name survives on the list, the
+  // key does not survive in their ring.
+  assert.equal(findChannelKey(CHANNEL, outcome.keyId), null);
 });
 
 test("the rotating admin switches to the new key and keeps the old one", async () => {

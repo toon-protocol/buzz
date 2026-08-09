@@ -544,9 +544,9 @@ export function useDeleteChannelMutation(channelId: string | null) {
  * Warn about the parts of a rotation that did not land.
  *
  * Neither is fatal, and neither is worth failing a mutation over: the new
- * epoch is already this client's, an admin list that missed the relay is
- * republished by the next rotation, and a member whose wrap failed stays on
- * the old epoch — readable, just not current — until one reaches them.
+ * epoch has already been minted and signed, an admin list that missed the
+ * relay is republished by the next rotation, and a member whose wrap failed
+ * stays on the old epoch — readable, just not current — until one reaches them.
  */
 function reportRotationDelivery(
   channelId: string,
@@ -626,7 +626,11 @@ async function rotateAfterRemoval(
  * it — the member walking out is the only actor in the picture. Reuses #18's
  * removal machinery with the leaving admin as the sole `removed` pubkey, which
  * is what makes this self-initiated: an admin rotates themselves out on the
- * way out, the same way they could rotate anyone else out.
+ * way out, the same way they could rotate anyone else out — and is denied the
+ * new epoch on the same terms, since `rotateChannelKeyForRemoval` does not
+ * adopt a key it has just wrapped to everyone but this client. The leaver ends
+ * up where a removed member ends up: holding the epochs they were in, holding
+ * nothing that opens what the channel says after them.
  *
  * A non-admin leaving changes nothing: they were never entitled to hand this
  * channel's key to anyone, so `rotateChannelKeyForRemoval` refuses at its
