@@ -26,14 +26,15 @@ import {
  * publisher (buzz#91) exist yet, so a revision here updates the local
  * settings store (and its version counter) but has nothing to re-publish
  * to yet. See `meshComputeSellPricingStore.ts`'s module doc.
+ *
+ * Which is why the whole card sits behind the `meshComputeSelling` preview
+ * feature until buzz#91 lands: ungated, it tells every desktop user their
+ * machine "charges the open compute market" while nothing advertises, quotes
+ * or charges — the price is real, the market it implies is not. The gate is on
+ * the card rather than the `compute` settings section because that section also
+ * carries `MeshComputeSettingsCard`, which is shipped free sharing with relay
+ * members and must stay visible.
  */
-// Gated behind the `meshComputeSelling` preview feature until buzz#91 lands the
-// kind:31990 publisher. Without it this card tells every desktop user their
-// machine "charges the open compute market" while nothing advertises, quotes or
-// charges — the price is real, the market it implies is not. The gate is on the
-// card rather than the `compute` settings section because that section also
-// carries MeshComputeSettingsCard, which is shipped free sharing with relay
-// members and must stay visible.
 export function MeshComputeSellPricingCard() {
   const sellingEnabled = useFeatureEnabled("meshComputeSelling");
   const { pricing, revise } = useMeshComputeSellPricing();

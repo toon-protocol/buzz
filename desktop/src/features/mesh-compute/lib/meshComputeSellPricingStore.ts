@@ -161,15 +161,20 @@ function readRecord(): MeshComputeSellPricing {
   return { priceMicroUsdcPer1kTokens, maxOutputTokens };
 }
 
-/** The seller's current posted price and output-token ceiling. Defaults when nothing has been saved. */
+/**
+ * The seller's current posted price and output-token ceiling, read straight
+ * from storage. Defaults when nothing has been saved. Returns a fresh object
+ * every call — React consumers want the hook (and, under it,
+ * `getMeshComputeSellPricingSnapshot`) instead.
+ */
 export function getMeshComputeSellPricing(): MeshComputeSellPricing {
   return readRecord();
 }
 
 /**
  * The cached, referentially-stable read behind `useMeshComputeSellPricing`
- * (see `snapshotCache` above). Exported for direct assertions in tests;
- * production code should prefer the hook.
+ * (see `snapshotCache` above) — the `getSnapshot` a `useSyncExternalStore`
+ * consumer needs. Components should reach for the hook, not this.
  */
 export function getMeshComputeSellPricingSnapshot(): MeshComputeSellPricing {
   if (snapshotCache) return snapshotCache;
