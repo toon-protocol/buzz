@@ -4,12 +4,16 @@ import type {
   FactoryJobIncrementOffer,
   FactoryJobNarration,
 } from "@/features/factory-jobs/lib/factoryJobFeedback";
+import type { FactoryJobResult } from "@/features/factory-jobs/lib/factoryJobResult";
 import {
   useFactoryJobFeedback,
   useFactoryJobResults,
 } from "@/features/factory-jobs/lib/useFactoryJobBuyer";
 import type { InboundFactoryJob } from "@/features/providers/lib/useInboundFactoryJobs";
-import { useProviderDelivery } from "@/features/providers/lib/useProviderDelivery";
+import {
+  type ProviderDeliveryPhase,
+  useProviderDelivery,
+} from "@/features/providers/lib/useProviderDelivery";
 import { formatUsdcBaseUnits } from "@/features/onboarding/toon/toonOnboardingFormat";
 import type { ToonEventTransport } from "@/shared/api/toonEventTransport";
 import { Badge } from "@/shared/ui/badge";
@@ -48,10 +52,12 @@ export function ProviderDeliveryThread({
     useFactoryJobFeedback(transport, job.eventId);
   const results = useFactoryJobResults(transport, job.eventId);
 
-  const ownQuote = React.useMemo(() => {
-    const own = quotes.filter((quote) => quote.providerPubkey === myPubkey);
-    return own.length > 0 ? own[own.length - 1] : null;
-  }, [quotes, myPubkey]);
+  const ownQuote = React.useMemo(
+    () =>
+      quotes.filter((quote) => quote.providerPubkey === myPubkey).at(-1) ??
+      null,
+    [quotes, myPubkey],
+  );
   const ownOffers = React.useMemo(
     () => offersByProvider.get(myPubkey) ?? [],
     [offersByProvider, myPubkey],
@@ -95,67 +101,6 @@ export function ProviderDeliveryThread({
     ownResult !== null ||
     delivery.phase.kind === "completed" ||
     delivery.phase.kind === "abandoned-buyer";
-
-  return (
-    <div className="flex flex-col gap-3">
-      <ol className="flex flex-col gap-2">
-        {feed.map((item) => (
-          <li key={item.eventId}>
-            {item.feedKind === "narration" ? (
-              <p className="rounded-lg bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
-                {item.narration}
-              </p>
-            ) : (
-              <Card className="flex items-center justify-between p-3">
-                <span className="text-sm font-medium">
-                  Increment {item.increment.n} of {item.increment.of} offered
-                </span>
-                <span className="text-sm">
-                  {formatUsdcBaseUnits(item.amountBaseUnits)}
-                </span>
-              </Card>
-            )}
-          </li>
-        ))}
-      </ol>
-
-      {renderPhase(delivery.phase, ownResult)}
-
-      {!terminal && renderDeliveryControls()}
-
-      {!terminal && (
-        <form
-          className="flex items-center gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!updateText.trim()) return;
-            void delivery.sendUpdate(updateText.trim()).then(() => {
-              setUpdateText("");
-            });
-          }}
-        >
-          <Input
-            aria-label="Progress update"
-            onChange={(event) => setUpdateText(event.target.value)}
-            placeholder="Share free progress narration with the buyer"
-            value={updateText}
-          />
-          <Button
-            disabled={delivery.narrating || !updateText.trim()}
-            size="sm"
-            type="submit"
-            variant="outline"
-          >
-            {delivery.narrating ? "Sending…" : "Send update"}
-          </Button>
-        </form>
-      )}
-
-      {delivery.error ? (
-        <p className="text-sm text-destructive">{delivery.error}</p>
-      ) : null}
-    </div>
-  );
 
   function renderDeliveryControls() {
     if (!supportsDelivery) {
@@ -217,11 +162,72 @@ export function ProviderDeliveryThread({
       </form>
     );
   }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <ol className="flex flex-col gap-2">
+        {feed.map((item) => (
+          <li key={item.eventId}>
+            {item.feedKind === "narration" ? (
+              <p className="rounded-lg bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
+                {item.narration}
+              </p>
+            ) : (
+              <Card className="flex items-center justify-between p-3">
+                <span className="text-sm font-medium">
+                  Increment {item.increment.n} of {item.increment.of} offered
+                </span>
+                <span className="text-sm">
+                  {formatUsdcBaseUnits(item.amountBaseUnits)}
+                </span>
+              </Card>
+            )}
+          </li>
+        ))}
+      </ol>
+
+      {renderPhase(delivery.phase, ownResult)}
+
+      {!terminal && renderDeliveryControls()}
+
+      {!terminal && (
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!updateText.trim()) return;
+            void delivery.sendUpdate(updateText.trim()).then(() => {
+              setUpdateText("");
+            });
+          }}
+        >
+          <Input
+            aria-label="Progress update"
+            onChange={(event) => setUpdateText(event.target.value)}
+            placeholder="Share free progress narration with the buyer"
+            value={updateText}
+          />
+          <Button
+            disabled={delivery.narrating || !updateText.trim()}
+            size="sm"
+            type="submit"
+            variant="outline"
+          >
+            {delivery.narrating ? "Sending…" : "Send update"}
+          </Button>
+        </form>
+      )}
+
+      {delivery.error ? (
+        <p className="text-sm text-destructive">{delivery.error}</p>
+      ) : null}
+    </div>
+  );
 }
 
 function renderPhase(
-  phase: ReturnType<typeof useProviderDelivery>["phase"],
-  ownResult: ReturnType<typeof useFactoryJobResults>[number] | null,
+  phase: ProviderDeliveryPhase,
+  ownResult: FactoryJobResult | null,
 ) {
   if (phase.kind === "publishing-result") {
     return (

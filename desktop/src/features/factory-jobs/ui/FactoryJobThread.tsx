@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import type { PaidArtifactState } from "@/features/factory-jobs/lib/factoryJobArtifact";
 import {
   checkOfferPayable,
   deriveFactoryJobExposure,
@@ -10,7 +11,6 @@ import type {
   FactoryJobNarration,
   FactoryJobQuoteIncrement,
 } from "@/features/factory-jobs/lib/factoryJobFeedback";
-import type { PaidArtifactState } from "@/features/factory-jobs/ui/FactoryJobsScreen";
 import { formatUsdcBaseUnits } from "@/features/onboarding/toon/toonOnboardingFormat";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";

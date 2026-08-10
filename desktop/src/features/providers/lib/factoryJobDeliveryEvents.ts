@@ -45,12 +45,14 @@ export function toRigFactoryJobRequest(
  * schedule already named it on the quote), so an unrecognized name is mapped
  * to the phase every custom milestone is a variant of rather than rejected.
  */
+const RIG_MILESTONES: readonly FactoryMilestone[] = [
+  "plan",
+  "implement",
+  "review",
+];
+
 export function toRigMilestone(milestone: string): FactoryMilestone {
-  return milestone === "plan" ||
-    milestone === "implement" ||
-    milestone === "review"
-    ? milestone
-    : "implement";
+  return RIG_MILESTONES.find((phase) => phase === milestone) ?? "implement";
 }
 
 /** A rig `UnsignedEvent`, reshaped for `signRelayEvent`'s template input. */

@@ -11,7 +11,7 @@ import {
   decryptFactoryJobArtifact,
   describeFactoryJobArtifact,
   fetchFactoryJobCiphertext,
-  type FactoryJobArtifactContent,
+  type PaidArtifactState,
 } from "@/features/factory-jobs/lib/factoryJobArtifact";
 import type { FactoryJobIncrementOffer } from "@/features/factory-jobs/lib/factoryJobFeedback";
 import {
@@ -37,12 +37,6 @@ import { Card } from "@/shared/ui/card";
  * with that stored fulfillment alone, so the paid artifact actually
  * surfaces in the thread.
  */
-
-/** One paid increment's decrypt-tail progress (buzz#135). */
-export type PaidArtifactState =
-  | { kind: "loading" }
-  | { kind: "ready"; content: FactoryJobArtifactContent }
-  | { kind: "error"; message: string };
 
 function JobDetail({
   jobId,

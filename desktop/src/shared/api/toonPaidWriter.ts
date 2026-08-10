@@ -289,7 +289,7 @@ export type PaidClientFactory = (
    * Present exactly when the config runs a BTP session (`btpUrl !== null`) —
    * the factory registers `jobDelivery.handleJob` as the client's
    * `jobHandler`. Absent on one-shot ILP-over-HTTP, which has no wire the
-   * key release could ride (`providerJobDeliveryPort.ts`).
+   * key release could ride (`toonJobDelivery.ts`).
    */
   jobDelivery?: ProviderJobDeliveryPort,
 ) => Promise<PaidClient>;

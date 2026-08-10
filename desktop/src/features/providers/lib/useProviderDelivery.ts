@@ -38,11 +38,10 @@ export type ProviderDeliveryPhase =
   | { kind: "completed" }
   | { kind: "abandoned-buyer"; unpaidIncrement: number };
 
+/** An offer published THIS session — the relay read-back can lag it (see above). */
 type SessionOffer = {
   n: number;
   eventId: string;
-  artifactTxId: string;
-  paid: boolean;
 };
 
 export function useProviderDelivery({
@@ -73,12 +72,11 @@ export function useProviderDelivery({
     ...sessionOffers.map((offer) => offer.n),
   );
   const nextIncrementN = highestOffered + 1;
-  const paidCount = sessionOffers.filter((offer) => offer.paid).length;
 
   /** The thread event a fresh offer/narration replies to (§4.1's `reply` tag). */
   const parentEventId =
-    sessionOffers[sessionOffers.length - 1]?.eventId ??
-    wireOffers[wireOffers.length - 1]?.eventId ??
+    sessionOffers.at(-1)?.eventId ??
+    wireOffers.at(-1)?.eventId ??
     quote?.eventId ??
     null;
 
@@ -111,12 +109,7 @@ export function useProviderDelivery({
 
       setSessionOffers((prev) => [
         ...prev,
-        {
-          n,
-          eventId: delivered.offerEvent.id,
-          artifactTxId: delivered.artifactTxId,
-          paid: delivered.paid,
-        },
+        { n, eventId: delivered.offerEvent.id },
       ]);
 
       if (!delivered.paid) {
@@ -190,8 +183,6 @@ export function useProviderDelivery({
     phase,
     error,
     narrating,
-    paidCount,
-    totalIncrements,
     /** The next increment to deliver, or null when the schedule is exhausted (or unquoted). */
     nextIncrement,
     deliverNext,

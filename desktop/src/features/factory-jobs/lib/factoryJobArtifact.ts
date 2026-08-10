@@ -121,6 +121,12 @@ export type FactoryJobArtifactContent =
   | { kind: "text"; text: string }
   | { kind: "binary"; byteLength: number };
 
+/** One paid increment's progress through the fetch-then-decrypt tail above. */
+export type PaidArtifactState =
+  | { kind: "loading" }
+  | { kind: "ready"; content: FactoryJobArtifactContent }
+  | { kind: "error"; message: string };
+
 /**
  * Decode an artifact for the thread. Providers on this surface deliver
  * text (the delivery form is a text input), but the wire allows any bytes —
