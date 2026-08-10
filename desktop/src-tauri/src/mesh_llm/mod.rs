@@ -44,6 +44,10 @@ use std::time::Duration;
 
 const DEFAULT_MESH_API_PORT: u16 = 9337;
 const DEFAULT_MESH_CONSOLE_PORT: u16 = 3131;
+/// Mirrors the pinned SDK's own loopback bind (upstream `mesh_llm/mod.rs:449`
+/// — not this file), the same in both `MeshAdmission` modes: exposing the
+/// ingress off-box is an unmade decision with a new threat model.
+const MESH_LOOPBACK_HOST: &str = "127.0.0.1";
 const MESH_STATUS_KIND: u64 = KIND_BUZZ_MESH_MEMBER_STATUS as u64;
 const MESH_API_PORT_ENV: &str = "BUZZ_MESH_API_PORT";
 const MESH_CONSOLE_PORT_ENV: &str = "BUZZ_MESH_CONSOLE_PORT";
@@ -177,6 +181,25 @@ pub enum MeshNodeMode {
     Client,
 }
 
+/// Who this node's mesh admission trusts, orthogonal to [`MeshNodeMode`].
+/// Sharing and selling are two admission deals on one `Serve` mode, not two
+/// modes — one enum would make them mutually exclusive on the single
+/// runtime slot, foreclosing running both at once (epic toon-meta#265:
+/// independently switchable).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MeshAdmission {
+    /// Share Compute: admit the resolved community roster (`trusted_owner_ids`).
+    /// Pre-existing behavior; stays the default so no other caller changes shape.
+    #[default]
+    Community,
+    /// Sell Compute: admit exactly this node's own owner id, full stop.
+    /// `trusted_owner_ids` is never consulted (epic toon-meta#265 decision 2:
+    /// "a market seller locks mesh admission to itself"; the DVM is the
+    /// door, iroh is not a door at all).
+    SelfOnly,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MeshNodeState {
@@ -206,14 +229,15 @@ pub struct StartMeshNodeRequest {
     /// workspace switches; moving a share requires an explicit stop/start.
     #[serde(default, skip_deserializing)]
     pub relay_url: Option<String>,
-    /// Mesh owner ids admitted to this node (the member roster from
-    /// member-signed discovery notes). `None` = caller did not resolve a roster
-    /// (tests, direct invocations): the node runs without allowlist
-    /// enforcement, matching an open relay. `Some` = enforce
-    /// `TrustPolicy::Allowlist` over exactly these owners (self is always
-    /// included by the caller).
+    /// Mesh owner ids admitted under `MeshAdmission::Community`. `None` = no
+    /// roster resolved: runs without allowlist enforcement, matching an open
+    /// relay. `Some` = enforce `TrustPolicy::Allowlist` over these owners
+    /// (self always included). Ignored under `MeshAdmission::SelfOnly`.
     #[serde(default)]
     pub trusted_owner_ids: Option<Vec<String>>,
+    /// Who this node's mesh admission trusts; defaults to `Community`.
+    #[serde(default)]
+    pub admission: MeshAdmission,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -389,13 +413,16 @@ impl DesktopMeshRuntime {
                 if let Some(join_token) = request.join_token.as_deref() {
                     builder = builder.join_token(join_token);
                 }
-                // Admission: present our owner attestation, and when a member
-                // roster was resolved, admit only those owners. Membership in
-                // the Buzz relay is the source of the roster; possession of a
-                // dial pointer or relay reachability admits nobody.
+                // Admission: present our owner attestation, then decide who
+                // may join — Community admits a resolved member roster,
+                // SelfOnly admits nobody but this node.
                 let identity = ensure_owner_identity()?;
                 builder = builder.owner_key(identity.keystore_path.clone());
-                if let Some(owners) = normalized_roster(&request.trusted_owner_ids, &identity) {
+                if let Some(owners) = resolve_serve_trust_owners(
+                    request.admission,
+                    &request.trusted_owner_ids,
+                    &identity,
+                ) {
                     builder = builder
                         .owner_required(true)
                         .trust_policy(TrustPolicy::Allowlist)
@@ -448,8 +475,8 @@ impl DesktopMeshRuntime {
             id: MESH_RUNTIME_ID_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             handle: tokio::sync::Mutex::new(handle),
             mode: request.mode,
-            api_base_url: format!("http://127.0.0.1:{api_port}/v1"),
-            console_url: format!("http://127.0.0.1:{console_port}"),
+            api_base_url: format!("http://{MESH_LOOPBACK_HOST}:{api_port}/v1"),
+            console_url: format!("http://{MESH_LOOPBACK_HOST}:{console_port}"),
             model_id,
             model_name,
             start_request: request,
@@ -787,6 +814,22 @@ fn normalized_roster(
     owners.sort();
     owners.dedup();
     Some(owners)
+}
+
+/// Resolve the allowlist enforcement for a `Serve` node by admission mode.
+/// `SelfOnly` ignores `trusted_owner_ids` — always exactly this node's own
+/// owner id, never wider (epic toon-meta#265 decision 2: a market seller's
+/// admission must not be widenable by any roster a caller resolved).
+/// `Community` is unchanged: defers to `normalized_roster`.
+fn resolve_serve_trust_owners(
+    admission: MeshAdmission,
+    trusted_owner_ids: &Option<Vec<String>>,
+    identity: &identity::OwnerIdentity,
+) -> Option<Vec<String>> {
+    match admission {
+        MeshAdmission::SelfOnly => Some(vec![identity.owner_id.clone()]),
+        MeshAdmission::Community => normalized_roster(trusted_owner_ids, identity),
+    }
 }
 
 fn sanitize_no_leak_request(request: &mut StartMeshNodeRequest) -> anyhow::Result<()> {
