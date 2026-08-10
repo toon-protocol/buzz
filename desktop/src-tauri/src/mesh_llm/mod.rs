@@ -44,9 +44,11 @@ use std::time::Duration;
 
 const DEFAULT_MESH_API_PORT: u16 = 9337;
 const DEFAULT_MESH_CONSOLE_PORT: u16 = 3131;
-/// Mirrors the pinned SDK's own loopback bind (upstream `mesh_llm/mod.rs:449`
-/// — not this file), the same in both `MeshAdmission` modes: exposing the
-/// ingress off-box is an unmade decision with a new threat model.
+/// Host of the ingress URLs this runtime reports, identical in both
+/// [`MeshAdmission`] modes. It mirrors where the pinned SDK actually listens:
+/// its `listen_all` defaults to false and Buzz never enables it, so the API
+/// and console listeners stay on loopback. Exposing the ingress off-box is an
+/// unmade decision with a new threat model.
 const MESH_LOOPBACK_HOST: &str = "127.0.0.1";
 const MESH_STATUS_KIND: u64 = KIND_BUZZ_MESH_MEMBER_STATUS as u64;
 const MESH_API_PORT_ENV: &str = "BUZZ_MESH_API_PORT";

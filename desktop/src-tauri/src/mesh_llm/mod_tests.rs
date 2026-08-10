@@ -237,39 +237,35 @@ fn add_test_owner_bindings(
     )));
 }
 
+/// The identity every roster/admission test resolves against: `owner-self` is
+/// this node's own owner id, so anything else in a roster is "not us".
+fn self_owner_identity() -> super::identity::OwnerIdentity {
+    super::identity::OwnerIdentity {
+        keystore_path: std::path::PathBuf::from("/tmp/ks.json"),
+        owner_id: "owner-self".to_string(),
+        verifying_key_hex: String::new(),
+    }
+}
+
 #[test]
 fn mesh_ingress_stays_on_loopback_regardless_of_admission_mode() {
-    // AC3 (buzz#171): the ingress URLs `DesktopMeshRuntime::start` hands back
-    // to callers are built from one host constant with no `MeshAdmission`
-    // branch at all — a Sell Compute (SelfOnly) node gets the identical
-    // loopback host a Share Compute (Community) node does. Pin the constant
-    // directly so a future edit cannot thread an admission-conditional bind
-    // address through the two `format!` call sites without this test's
-    // author noticing.
+    // AC3 (buzz#171): both ingress URLs `DesktopMeshRuntime::start` hands back
+    // to callers interpolate this one constant, with no `MeshAdmission` branch
+    // at either call site — a Sell Compute (SelfOnly) node reports the same
+    // loopback host a Share Compute (Community) node does. This pins the
+    // value; the "one unconditional constant" half is structural.
     assert_eq!(super::MESH_LOOPBACK_HOST, "127.0.0.1");
-    let api_base_url = format!("http://{}:{}/v1", super::MESH_LOOPBACK_HOST, 9337);
-    let console_url = format!("http://{}:{}", super::MESH_LOOPBACK_HOST, 3131);
-    assert!(api_base_url.starts_with("http://127.0.0.1:"));
-    assert!(console_url.starts_with("http://127.0.0.1:"));
 }
 
 #[test]
 fn normalized_roster_none_means_no_enforcement() {
-    let identity = super::identity::OwnerIdentity {
-        keystore_path: std::path::PathBuf::from("/tmp/ks.json"),
-        owner_id: "owner-self".to_string(),
-        verifying_key_hex: String::new(),
-    };
+    let identity = self_owner_identity();
     assert_eq!(super::normalized_roster(&None, &identity), None);
 }
 
 #[test]
 fn normalized_roster_always_includes_self_and_dedupes() {
-    let identity = super::identity::OwnerIdentity {
-        keystore_path: std::path::PathBuf::from("/tmp/ks.json"),
-        owner_id: "owner-self".to_string(),
-        verifying_key_hex: String::new(),
-    };
+    let identity = self_owner_identity();
     // Empty roster (fresh relay, nobody published yet) still admits self —
     // otherwise the first sharer locks themselves out.
     assert_eq!(
@@ -306,11 +302,7 @@ fn sell_compute_locks_trust_owners_to_self_and_ignores_any_roster() {
     // that starts threading community state through a sell request. Under
     // `TrustPolicy::Allowlist`, an owner id absent from this list is refused
     // admission, so "self is the only entry" IS "a non-owner is refused".
-    let identity = super::identity::OwnerIdentity {
-        keystore_path: std::path::PathBuf::from("/tmp/ks.json"),
-        owner_id: "owner-self".to_string(),
-        verifying_key_hex: String::new(),
-    };
+    let identity = self_owner_identity();
     let community_roster_with_other_members = Some(vec![
         "owner-a-not-self".to_string(),
         "owner-b-not-self".to_string(),
@@ -338,11 +330,7 @@ fn sell_compute_locks_trust_owners_to_self_and_ignores_any_roster() {
 fn community_admission_is_unchanged_by_the_new_admission_field() {
     // AC5 (buzz#171): Community must still defer to `normalized_roster`
     // byte-for-byte, the pre-existing Share Compute behavior.
-    let identity = super::identity::OwnerIdentity {
-        keystore_path: std::path::PathBuf::from("/tmp/ks.json"),
-        owner_id: "owner-self".to_string(),
-        verifying_key_hex: String::new(),
-    };
+    let identity = self_owner_identity();
     assert_eq!(
         super::resolve_serve_trust_owners(super::MeshAdmission::Community, &None, &identity),
         None,
