@@ -60,6 +60,16 @@ import {
  * two NIP-44 layers ourselves — still with `nostr-tools/nip44`, no hand-rolled
  * crypto, just one fewer thing thrown away. Wrapping uses `nip59.wrapEvent`
  * unchanged.
+ *
+ * ## Which pair of these functions the app actually calls
+ *
+ * The `ViaRust` pair ({@link wrapChannelKeyViaRust},
+ * {@link unwrapChannelKeyViaRust}): since buzz#43 both NIP-44 layers are done
+ * by the `seal_gift_wrap`/`unseal_gift_wrap` commands against the identity
+ * `AppState` already holds, so no channel-key wrap costs the renderer a copy
+ * of the secret key. The secret-key-taking {@link wrapChannelKey} and
+ * {@link unwrapChannelKey} above them are the reference implementation the
+ * unit suite runs — real crypto, no Tauri host to call into.
  */
 
 /** The rumor kind carried inside the wrap. */
@@ -124,6 +134,11 @@ export function buildChannelKeyRumor(input: {
  * `senderSecretKey` is the admin's own key: the seal has to be signed by the
  * identity the recipient will check against the admin list, so this cannot be
  * delegated to an ephemeral key the way the outer wrap is.
+ *
+ * No production caller since buzz#43 — the app seals through
+ * {@link wrapChannelKeyViaRust}, which never names a secret key. This stays as
+ * the reference implementation the unit suite builds its fixtures with, and is
+ * not a path to wire an identity key back into the renderer through.
  */
 export function wrapChannelKey(input: {
   channelId: string;
@@ -210,8 +225,9 @@ function tagAt(tags: unknown, name: string, index: number): string | undefined {
  * describe a channel key.
  */
 function parseChannelKeyRumor(input: {
-  kind: number;
-  content: string;
+  /** Untyped: the pure path reads these off a freshly parsed JSON rumor. */
+  kind: unknown;
+  content: unknown;
   tags: unknown;
   sender: string;
   sentAt: number;
@@ -220,7 +236,9 @@ function parseChannelKeyRumor(input: {
   if (input.kind !== CHANNEL_KEY_RUMOR_KIND) return null;
 
   const channelId = tagValue(input.tags, "h");
-  const key = parseChannelKey(input.content);
+  const key = parseChannelKey(
+    typeof input.content === "string" ? input.content : null,
+  );
   if (!channelId || !key) return null;
 
   const declaredKeyId = tagValue(input.tags, "key");
@@ -262,6 +280,11 @@ function parseChannelKeyRumor(input: {
  *
  * It deliberately does NOT decide whether to accept the key: that needs the
  * admin list, and lives in {@link acceptChannelKeyGrant}.
+ *
+ * No production caller since buzz#43 — the inbox opens wraps through
+ * {@link unwrapChannelKeyViaRust}. This stays as the reference implementation
+ * the unit suite checks that path against, and is not a path to wire an
+ * identity key back into the renderer through.
  */
 export function unwrapChannelKey(
   wrap: RelayEvent,
@@ -286,8 +309,8 @@ export function unwrapChannelKey(
     if (record.pubkey !== seal.pubkey) return null;
 
     return parseChannelKeyRumor({
-      kind: typeof record.kind === "number" ? record.kind : -1,
-      content: typeof record.content === "string" ? record.content : "",
+      kind: record.kind,
+      content: record.content,
       tags: record.tags,
       sender: seal.pubkey,
       sentAt: seal.created_at,
