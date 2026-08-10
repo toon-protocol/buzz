@@ -33,6 +33,17 @@
 //   CLAUDE_CODE_OAUTH_TOKEN   Claude Max-plan credential (org secret)
 //   GH_TOKEN                  token with contents:write + pull-requests:write +
 //                             issues:write (the App token in CI)
+//   APP_ID, APP_PRIVATE_KEY   the same GitHub App the workflow mints GH_TOKEN
+//                             from. Used to mint a FRESH token immediately
+//                             before each push, because installation tokens
+//                             expire after one hour and long runs pushed with
+//                             a dead credential — see toon-meta#331/#248 and
+//                             ./mint-app-token.ts. HOST ONLY: the private key
+//                             is deliberately absent from PASSTHROUGH_KEYS in
+//                             ./sandbox-secrets.ts, so it never enters the
+//                             sandbox container. Optional — without it the
+//                             runner falls back to the ambient GH_TOKEN and
+//                             the old expiry behaviour.
 //
 // Usage:
 //   SANDCASTLE_ISSUE_NUMBER=123 npx tsx .sandcastle/agent-implement-issue.ts
@@ -41,6 +52,7 @@
 import { execFileSync } from "node:child_process";
 import * as sandcastle from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+import { mintAppToken } from "./mint-app-token.ts";
 import {
   resolveFactoryOpsIdentity,
   runReviewerWithVerdict,
@@ -128,6 +140,98 @@ const hooks = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Pushing with a credential that is fresh AT THE MOMENT OF THE PUSH
+// (toon-meta#331/#248, ported from toon-protocol/connector#463)
+// ---------------------------------------------------------------------------
+
+/** Where the fresh token is staged inside the container. Mode 600, deleted after use. */
+const TOKEN_PATH = "/tmp/.sandcastle-push-token";
+
+// Git credential helper that reads the token from TOKEN_PATH at push time.
+//
+// The leading `!` makes git run this as a shell snippet. The empty
+// `credential.helper=` that precedes it on the command line is load-bearing: git
+// treats credential.helper as a MULTI-VALUED config key and an empty value
+// RESETS the list, which is what stops `gh auth setup-git`'s container-global
+// helper (wired in onSandboxReady, and holding the STALE token from container
+// start) from being consulted first and winning.
+//
+// The token reaches the container via `stdin`, and is read back from a file
+// rather than interpolated into the command, so it appears in no argv, no
+// process listing, and no captured log line.
+const FRESH_CREDENTIAL_HELPER =
+  `!f() { test "$1" = get && ` +
+  `{ echo username=x-access-token; echo "password=$(cat ${TOKEN_PATH})"; }; }; f`;
+
+/**
+ * Push `branch` from inside the sandbox using a newly-minted App token.
+ *
+ * Also refreshes the HOST's `GH_TOKEN` from the same mint, because the host `gh`
+ * calls that follow (`pr list`, verdict submission, `resolveIssueFromPrBody`,
+ * ...) authenticate from `process.env` and expire on exactly the same
+ * one-hour clock.
+ *
+ * `bestEffort` is for the early publish after the implementer phase: a failure
+ * there costs us recoverability but must not abandon a run that still has a
+ * review phase to do. The final push is never best-effort — it fails loud.
+ *
+ * Returns true on a successful push, false only on a best-effort failure.
+ */
+async function pushBranch(
+  sandbox: sandcastle.Sandbox,
+  label: string,
+  { bestEffort = false }: { bestEffort?: boolean } = {},
+): Promise<boolean> {
+  // Every failure below takes the same decision, so it lives in one place:
+  // warn and carry on (best-effort), or fail the run loudly.
+  const giveUp = (reason: string): false => {
+    if (!bestEffort) throw new Error(`[${label}] ${reason}`);
+    console.warn(`  WARNING: [${label}] ${reason}`);
+    return false;
+  };
+
+  let token: string;
+  try {
+    const minted = await mintAppToken();
+    token = minted.token;
+    // Keep the host in step with the container.
+    process.env.GH_TOKEN = token;
+    console.log(
+      `  [${label}] push credential: ` +
+        (minted.source === "app"
+          ? "freshly minted"
+          : "ambient GH_TOKEN (no APP_ID/APP_PRIVATE_KEY on the host)"),
+    );
+  } catch (err) {
+    return giveUp(`could not obtain a push credential: ${(err as Error).message}`);
+  }
+
+  // `umask 077` so the file is 600 from creation — never briefly world-readable.
+  const stage = await sandbox.exec(`umask 077 && cat > ${TOKEN_PATH}`, { stdin: token });
+  try {
+    if (stage.exitCode !== 0) {
+      return giveUp(`failed to stage the push credential (exit ${stage.exitCode}).`);
+    }
+
+    const push = await sandbox.exec(
+      `git -c credential.helper= -c credential.helper='${FRESH_CREDENTIAL_HELPER}' ` +
+        `push -u origin ${branch}`,
+      { onLine: (line) => console.log(`  [${label}] ${line}`) },
+    );
+    if (push.exitCode !== 0) {
+      return giveUp(
+        `git push of '${branch}' failed (exit ${push.exitCode}).\n${push.stderr}`,
+      );
+    }
+    return true;
+  } finally {
+    // Do not leave a usable credential on disk in the container for the agent
+    // phases that follow — including when staging itself failed part-way.
+    await sandbox.exec(`rm -f ${TOKEN_PATH}`);
+  }
+}
+
 console.log(
   `\n=== agent:implement runner — issue #${issueNumber} "${issueTitle}" ===`,
 );
@@ -180,6 +284,20 @@ try {
     process.exit(0);
   }
 
+  // PUBLISH EARLY (toon-meta#331/#248). The implementer has committed; get
+  // those commits onto origin NOW rather than after the reviewer. Two reasons:
+  //   1. Recoverability — a run that dies during review (timeout, cancellation,
+  //      runner death) leaves the completed implementation on a remote branch
+  //      instead of losing it with the container. This is the change that
+  //      would have saved buzz#43, whose agent commented that it had
+  //      implemented on a branch that was never pushed.
+  //   2. It is the cheapest moment to fail: if push auth is broken we learn it
+  //      here, minutes in, not after the review phase too.
+  // Best-effort: a failure is a warning, because the review phase is still
+  // worth running and the final push below fails loud.
+  console.log("\nPublishing the implementer branch early (crash-recovery point).");
+  await pushBranch(sandbox, "push:early", { bestEffort: true });
+
   // Review (opus, 1 iteration) on the SAME branch, with the structured
   // verdict REQUIRED (toon-meta#275): the reviewer receives the issue via
   // promptArgs (Spec axis — it reviews against the issue's acceptance
@@ -221,7 +339,22 @@ try {
   } else {
     // DEFAULT path: push the branch and open a PR for a human to review+merge.
     // Nothing is merged and the issue is NOT closed here.
+    //
+    // The push itself is deterministic and non-best-effort here (toon-meta#331/
+    // #248): mint fresh immediately before pushing, so the run's total length
+    // to this point is irrelevant, and refresh the host's GH_TOKEN for the
+    // `gh` verification calls below. open-pr-prompt.md's own step no longer
+    // re-pushes (see its comment) — it only confirms the ref and opens the PR.
+    // A residual gap remains: `gh pr create` inside the sandbox still
+    // authenticates with the token baked into the container at job start
+    // (@ai-hero/sandcastle has no per-exec env override), so on a run long
+    // enough to have gone stale by THIS point, PR creation could still fail —
+    // stated rather than hidden, matching this file's existing green-lying
+    // guard, which turns exactly that failure into a loud job failure instead
+    // of a silent one. Moving PR creation to the host too (as connector does)
+    // is toon-meta#235-shaped follow-up work, out of scope here.
     console.log("\nPR mode — pushing branch and opening a PR for human review.");
+    await pushBranch(sandbox, "push:final");
     await sandbox.run({
       name: "open-pr",
       maxIterations: 1,
