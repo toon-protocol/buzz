@@ -13,6 +13,7 @@ import {
   parseChannelKey,
 } from "@/shared/api/channelEncryption";
 import type { RelaySubscriptionFilter } from "@/shared/api/relayClientShared";
+import { sealGiftWrap, unsealGiftWrap } from "@/shared/api/tauriGiftWrap";
 import type { RelayEvent } from "@/shared/api/types";
 import {
   KIND_CHANNEL_KEY_DELIVERY,
@@ -197,6 +198,49 @@ function tagAt(tags: unknown, name: string, index: number): string | undefined {
 }
 
 /**
+ * Turn an already-authenticated rumor (sender verified, layers peeled) into a
+ * {@link ChannelKeyGrant}, or `null` if it is not a well-formed one.
+ *
+ * The one place both unwrap paths agree on what a valid key grant looks like:
+ * the pure path ({@link unwrapChannelKey}, real crypto, no Tauri host — what
+ * the unit test suite exercises) and the Rust-backed path
+ * ({@link unwrapChannelKeyViaRust}, buzz#43's seal/unseal commands). Both have
+ * already established *who* sent the rumor (the seal's signer) before calling
+ * this; what is left is deciding whether its `kind`/`content`/`tags` actually
+ * describe a channel key.
+ */
+function parseChannelKeyRumor(input: {
+  kind: number;
+  content: string;
+  tags: unknown;
+  sender: string;
+  sentAt: number;
+  wrapId: string;
+}): ChannelKeyGrant | null {
+  if (input.kind !== CHANNEL_KEY_RUMOR_KIND) return null;
+
+  const channelId = tagValue(input.tags, "h");
+  const key = parseChannelKey(input.content);
+  if (!channelId || !key) return null;
+
+  const declaredKeyId = tagValue(input.tags, "key");
+  const actualKeyId = channelKeyId(key);
+  if (declaredKeyId && declaredKeyId !== actualKeyId) return null;
+
+  const epoch = Number.parseInt(tagAt(input.tags, "key", 2) ?? "0", 10);
+
+  return {
+    channelId,
+    key,
+    keyId: actualKeyId,
+    epoch: Number.isFinite(epoch) && epoch >= 0 ? epoch : 0,
+    sender: input.sender,
+    sentAt: input.sentAt,
+    wrapId: input.wrapId,
+  };
+}
+
+/**
  * Open a gift wrap addressed to us and read the channel key out of it.
  *
  * Null on anything that is not a well-formed key grant for this recipient —
@@ -237,36 +281,70 @@ export function unwrapChannelKey(
     const rumor = openLayer(seal.content, recipientSecretKey, seal.pubkey);
     if (typeof rumor !== "object" || rumor === null) return null;
     const record = rumor as Record<string, unknown>;
-    if (record.kind !== CHANNEL_KEY_RUMOR_KIND) return null;
     // NIP-59: the seal's signer is the author, so a rumor claiming a different
     // one is a relayed forgery attempt.
     if (record.pubkey !== seal.pubkey) return null;
 
-    const channelId = tagValue(record.tags, "h");
-    const key = parseChannelKey(
-      typeof record.content === "string" ? record.content : null,
-    );
-    if (!channelId || !key) return null;
-
-    const declaredKeyId = tagValue(record.tags, "key");
-    const actualKeyId = channelKeyId(key);
-    if (declaredKeyId && declaredKeyId !== actualKeyId) return null;
-
-    const epoch = Number.parseInt(tagAt(record.tags, "key", 2) ?? "0", 10);
-
-    return {
-      channelId,
-      key,
-      keyId: actualKeyId,
-      epoch: Number.isFinite(epoch) && epoch >= 0 ? epoch : 0,
+    return parseChannelKeyRumor({
+      kind: typeof record.kind === "number" ? record.kind : -1,
+      content: typeof record.content === "string" ? record.content : "",
+      tags: record.tags,
       sender: seal.pubkey,
       sentAt: seal.created_at,
       wrapId: wrap.id,
-    };
+    });
   } catch {
     // A wrap for another recipient fails the MAC here. That is the common path.
     return null;
   }
+}
+
+/**
+ * {@link wrapChannelKey}, via the Rust seal command (buzz#43) instead of a
+ * secret key handed to the renderer. Seals under this identity — whichever
+ * one `AppState` currently holds — so there is no `senderSecretKey` to pass;
+ * the recipient and channel/key/epoch are all this needs to say.
+ */
+export async function wrapChannelKeyViaRust(input: {
+  channelId: string;
+  key: ChannelKey;
+  epoch?: number;
+  recipient: string;
+}): Promise<RelayEvent> {
+  const rumor = buildChannelKeyRumor(input);
+  return sealGiftWrap({
+    recipient: input.recipient,
+    kind: rumor.kind,
+    content: rumor.content,
+    tags: rumor.tags,
+  });
+}
+
+/**
+ * {@link unwrapChannelKey}, via the Rust unseal command (buzz#43) instead of
+ * a secret key handed to the renderer. Same contract — `null` for a wrap that
+ * is not for us or not a well-formed grant — because the sender authenticity
+ * check (rumor author === seal signer) already happened inside
+ * `unseal_gift_wrap` (`nostr` crate's `nip59::extract_rumor`), so there is
+ * nothing left to verify here beyond what {@link parseChannelKeyRumor} does
+ * for both paths.
+ */
+export async function unwrapChannelKeyViaRust(
+  wrap: RelayEvent,
+): Promise<ChannelKeyGrant | null> {
+  if (wrap.kind !== KIND_GIFT_WRAP) return null;
+
+  const unsealed = await unsealGiftWrap(wrap);
+  if (!unsealed) return null;
+
+  return parseChannelKeyRumor({
+    kind: unsealed.kind,
+    content: unsealed.content,
+    tags: unsealed.tags,
+    sender: unsealed.sender,
+    sentAt: unsealed.createdAt,
+    wrapId: wrap.id,
+  });
 }
 
 /**

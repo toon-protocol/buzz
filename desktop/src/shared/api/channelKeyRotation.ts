@@ -12,13 +12,12 @@ import {
   channelKeyId,
   generateChannelKey,
 } from "@/shared/api/channelEncryption";
-import { wrapChannelKey } from "@/shared/api/channelKeyDelivery";
+import { wrapChannelKeyViaRust } from "@/shared/api/channelKeyDelivery";
 import { adoptChannelKey, getChannelKey } from "@/shared/api/channelKeyStore";
 import {
   ensureTransportReady,
   publishEvent,
 } from "@/shared/api/eventTransport";
-import { getIdentitySecretKey } from "@/shared/api/identitySecretKey";
 import { signRelayEvent } from "@/shared/api/tauri";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import type { RelayEvent } from "@/shared/api/types";
@@ -117,7 +116,12 @@ export type ChannelKeyRotationOutcome =
 /** The outside world, injectable so the publish *order* can be asserted. */
 export type ChannelKeyRotationPorts = {
   identity: () => Promise<{ pubkey: string }>;
-  secretKey: () => Promise<Uint8Array>;
+  wrap: (input: {
+    channelId: string;
+    key: ChannelKey;
+    epoch?: number;
+    recipient: string;
+  }) => Promise<RelayEvent>;
   sign: (template: {
     kind: number;
     content: string;
@@ -145,7 +149,7 @@ const ADMIN_LIST_MESSAGES = {
 /** The real implementations. Publishing goes through the transport seam. */
 export const liveRotationPorts: ChannelKeyRotationPorts = {
   identity: getIdentity,
-  secretKey: getIdentitySecretKey,
+  wrap: wrapChannelKeyViaRust,
   sign: signRelayEvent,
   publish: publishEvent,
   ready: ensureTransportReady,
@@ -231,7 +235,6 @@ export async function rotateChannelKeyForRemoval(
   const epoch = adminList.epoch + 1;
 
   await ports.ready();
-  const secretKey = await ports.secretKey();
 
   // Step 1: the survivors, before anything announces the epoch they are for.
   // One failure does not cancel the rest — a member who missed their wrap is
@@ -242,13 +245,7 @@ export async function rotateChannelKeyForRemoval(
   for (const pubkey of recipients) {
     try {
       await ports.publish(
-        wrapChannelKey({
-          channelId,
-          key,
-          epoch,
-          recipient: pubkey,
-          senderSecretKey: secretKey,
-        }),
+        await ports.wrap({ channelId, key, epoch, recipient: pubkey }),
         KEY_ROTATION_MESSAGES.timeout,
         KEY_ROTATION_MESSAGES.failure,
       );
