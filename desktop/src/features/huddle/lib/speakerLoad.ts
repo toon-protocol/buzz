@@ -2,20 +2,26 @@
  * Soft concurrent-speaker guidance for TOON huddles (buzz#23 stage 3).
  *
  * The relay-native design has no media server to enforce a speaker cap, so
- * the limit is *soft* — measured, not configured. The Phase I sizing runs
- * (toon-meta `proto/huddle-multi-speaker`, 2026-08-02) put the devnet edge
- * at: every session ≥95% of frames within 150 ms up to 3 concurrent
- * speakers (the ADR 0003 bar, passed 3/3 runs), degrading but often usable
- * up to ~10 (mixed results), failing beyond. Nothing breaks above the
- * numbers — latency tails grow — so the product surface is a hint, not a
- * gate.
+ * the limit is *soft* — measured, not configured. buzz#10's Phase F
+ * multi-speaker aggregate checkpoint (toon-meta `proto/huddle-multi-speaker`,
+ * RESULTS.md) is the real ADR 0003 measurement, and it came back **NO-GO**:
+ * only a single speaker meets the ADR 0003 bar (99.4% of frames within
+ * 150 ms); 2–3 concurrent speakers still deliver every frame but
+ * increasingly late (90.6% / 73.6% within budget); at 5 the edge fails
+ * outright (frames dropped on ILP-expiry, not just late). The ~140 fps
+ * headroom an earlier single-session-only reading took as *per-speaker*
+ * turned out to be a *global* admission ceiling shared by every session —
+ * see ADR 0008, which records the fallback this result triggered. Nothing
+ * breaks above the numbers — latency tails grow — so the product surface
+ * stays a hint, not a gate, while huddle audio itself runs on the
+ * admission+room relay (ADR 0008) rather than this TOON-native path.
  */
 
-/** Concurrent speakers the measured envelope guarantees (ADR 0003 bar met). */
-export const GUARANTEED_CONCURRENT_SPEAKERS = 3;
+/** Concurrent speakers the measured envelope meets the ADR 0003 bar for (≥95% within 150ms). */
+export const GUARANTEED_CONCURRENT_SPEAKERS = 1;
 
-/** Best-effort ceiling: above this the edge measured outright failure. */
-export const OPPORTUNISTIC_CONCURRENT_SPEAKERS = 10;
+/** Best-effort ceiling: above this the edge measured outright failure (dropped frames, not just late ones). */
+export const OPPORTUNISTIC_CONCURRENT_SPEAKERS = 3;
 
 /**
  * The hint to show for `activeSpeakerCount` people speaking at once, or null
