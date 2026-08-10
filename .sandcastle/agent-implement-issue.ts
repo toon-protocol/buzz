@@ -175,59 +175,59 @@ const FRESH_CREDENTIAL_HELPER =
  * `bestEffort` is for the early publish after the implementer phase: a failure
  * there costs us recoverability but must not abandon a run that still has a
  * review phase to do. The final push is never best-effort — it fails loud.
+ *
+ * Returns true on a successful push, false only on a best-effort failure.
  */
-type Sandbox = Awaited<ReturnType<typeof sandcastle.createSandbox>>;
-
 async function pushBranch(
-  sandbox: Sandbox,
+  sandbox: sandcastle.Sandbox,
   label: string,
   { bestEffort = false }: { bestEffort?: boolean } = {},
 ): Promise<boolean> {
+  // Every failure below takes the same decision, so it lives in one place:
+  // warn and carry on (best-effort), or fail the run loudly.
+  const giveUp = (reason: string): false => {
+    if (!bestEffort) throw new Error(`[${label}] ${reason}`);
+    console.warn(`  WARNING: [${label}] ${reason}`);
+    return false;
+  };
+
   let token: string;
   try {
     const minted = await mintAppToken();
     token = minted.token;
     // Keep the host in step with the container.
     process.env.GH_TOKEN = token;
-    console.log(`  [${label}] credential: freshly minted (source=${minted.source})`);
+    console.log(
+      `  [${label}] push credential: ` +
+        (minted.source === "app"
+          ? "freshly minted"
+          : "ambient GH_TOKEN (no APP_ID/APP_PRIVATE_KEY on the host)"),
+    );
   } catch (err) {
-    const msg = `[${label}] could not obtain a push credential: ${(err as Error).message}`;
-    if (bestEffort) {
-      console.warn(`  WARNING: ${msg}`);
-      return false;
-    }
-    throw new Error(msg);
+    return giveUp(`could not obtain a push credential: ${(err as Error).message}`);
   }
 
   // `umask 077` so the file is 600 from creation — never briefly world-readable.
   const stage = await sandbox.exec(`umask 077 && cat > ${TOKEN_PATH}`, { stdin: token });
-  if (stage.exitCode !== 0) {
-    const msg = `[${label}] failed to stage the push credential (exit ${stage.exitCode}).`;
-    if (bestEffort) {
-      console.warn(`  WARNING: ${msg}`);
-      return false;
-    }
-    throw new Error(msg);
-  }
-
   try {
+    if (stage.exitCode !== 0) {
+      return giveUp(`failed to stage the push credential (exit ${stage.exitCode}).`);
+    }
+
     const push = await sandbox.exec(
       `git -c credential.helper= -c credential.helper='${FRESH_CREDENTIAL_HELPER}' ` +
         `push -u origin ${branch}`,
       { onLine: (line) => console.log(`  [${label}] ${line}`) },
     );
     if (push.exitCode !== 0) {
-      const msg = `[${label}] git push of '${branch}' failed (exit ${push.exitCode}).\n${push.stderr}`;
-      if (bestEffort) {
-        console.warn(`  WARNING: ${msg}`);
-        return false;
-      }
-      throw new Error(msg);
+      return giveUp(
+        `git push of '${branch}' failed (exit ${push.exitCode}).\n${push.stderr}`,
+      );
     }
     return true;
   } finally {
     // Do not leave a usable credential on disk in the container for the agent
-    // phases that follow.
+    // phases that follow — including when staging itself failed part-way.
     await sandbox.exec(`rm -f ${TOKEN_PATH}`);
   }
 }
