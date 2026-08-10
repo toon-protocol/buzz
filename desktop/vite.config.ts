@@ -34,6 +34,15 @@ export default defineConfig(async () => ({
         __dirname,
         "src/shared/api/minaUnavailable.ts",
       ),
+      // @toon-protocol/rig's factory-job delivery port calls Node's
+      // `crypto.createHash` directly (no browser build). Left unaliased,
+      // Vite externalizes the bare `crypto` specifier to an empty stub —
+      // see `src/shared/api/nodeCryptoBrowserShim.ts` for exactly which
+      // call shape this covers.
+      crypto: path.resolve(
+        __dirname,
+        "src/shared/api/nodeCryptoBrowserShim.ts",
+      ),
     },
   },
 

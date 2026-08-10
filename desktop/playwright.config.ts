@@ -77,6 +77,7 @@ export default defineConfig({
         "**/factory-jobs-provider-toggle-regression.spec.ts",
         "**/factory-jobs-provider-availability.spec.ts",
         "**/factory-jobs-buyer-journey.spec.ts",
+        "**/factory-jobs-provider-delivery.spec.ts",
         "**/relay-connectivity.spec.ts",
         "**/unread-pill.spec.ts",
         "**/sidebar-more-unread-overlap.spec.ts",
