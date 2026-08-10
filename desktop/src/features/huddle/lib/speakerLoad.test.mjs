@@ -31,12 +31,15 @@ test("within the guaranteed envelope there is nothing to warn about", () => {
 test("the opportunistic band warns softly", () => {
   const hint = speakerLoadHint(2, true);
   assert.match(hint, /2 people are speaking/);
-  assert.match(hint, /may degrade above 1/);
+  assert.match(hint, /may degrade above 1 concurrent speaker\./);
   assert.match(speakerLoadHint(3, true), /may degrade/);
 });
 
 test("beyond the opportunistic band the warning sharpens", () => {
-  assert.match(speakerLoadHint(4, true), /degrades sharply above 3/);
+  assert.match(
+    speakerLoadHint(4, true),
+    /degrades sharply above 3 concurrent speakers\./,
+  );
 });
 
 test("the relay transport never shows the TOON envelope's hint", () => {

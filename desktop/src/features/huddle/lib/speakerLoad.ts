@@ -17,11 +17,17 @@
  * admission+room relay (ADR 0008) rather than this TOON-native path.
  */
 
-/** Concurrent speakers the measured envelope meets the ADR 0003 bar for (≥95% within 150ms). */
+/** Concurrent speakers that meet the ADR 0003 bar (≥95% of frames within 150ms). */
 export const GUARANTEED_CONCURRENT_SPEAKERS = 1;
 
-/** Best-effort ceiling: above this the edge measured outright failure (dropped frames, not just late ones). */
+/** Best-effort ceiling: above this the edge measured outright failure — frames
+ * dropped, not merely late. */
 export const OPPORTUNISTIC_CONCURRENT_SPEAKERS = 3;
+
+/** `1 concurrent speaker` / `3 concurrent speakers` — the envelope reads as prose. */
+function concurrentSpeakers(count: number): string {
+  return `${count} concurrent speaker${count === 1 ? "" : "s"}`;
+}
 
 /**
  * The hint to show for `activeSpeakerCount` people speaking at once, or null
@@ -35,7 +41,7 @@ export function speakerLoadHint(
   if (!isToon) return null;
   if (activeSpeakerCount <= GUARANTEED_CONCURRENT_SPEAKERS) return null;
   if (activeSpeakerCount <= OPPORTUNISTIC_CONCURRENT_SPEAKERS) {
-    return `${activeSpeakerCount} people are speaking — audio may degrade above ${GUARANTEED_CONCURRENT_SPEAKERS} concurrent speakers.`;
+    return `${activeSpeakerCount} people are speaking — audio may degrade above ${concurrentSpeakers(GUARANTEED_CONCURRENT_SPEAKERS)}.`;
   }
-  return `${activeSpeakerCount} people are speaking — audio degrades sharply above ${OPPORTUNISTIC_CONCURRENT_SPEAKERS} concurrent speakers.`;
+  return `${activeSpeakerCount} people are speaking — audio degrades sharply above ${concurrentSpeakers(OPPORTUNISTIC_CONCURRENT_SPEAKERS)}.`;
 }
