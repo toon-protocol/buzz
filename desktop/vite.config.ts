@@ -43,6 +43,16 @@ export default defineConfig(async () => ({
         __dirname,
         "src/shared/api/nodeCryptoBrowserShim.ts",
       ),
+      // @toon-protocol/rig's package root also pulls in its local-git
+      // plumbing, which evaluates `promisify(execFile)` at module scope.
+      // Externalized to an empty stub that is `promisify(undefined)`, which
+      // THROWS during the rig import — failing every paid-write client start,
+      // not just factory-job delivery. See
+      // `src/shared/api/nodeChildProcessBrowserShim.ts`.
+      child_process: path.resolve(
+        __dirname,
+        "src/shared/api/nodeChildProcessBrowserShim.ts",
+      ),
     },
   },
 
