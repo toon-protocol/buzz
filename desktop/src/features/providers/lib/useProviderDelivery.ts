@@ -9,6 +9,7 @@ import {
   publishFactoryJobNarration,
   publishFactoryJobResult,
 } from "@/features/providers/lib/deliverFactoryJobIncrement";
+import type { LocalNarration } from "@/features/providers/lib/providerNarrationFeed";
 import type { InboundFactoryJob } from "@/features/providers/lib/useInboundFactoryJobs";
 import type { ToonEventTransport } from "@/shared/api/toonEventTransport";
 
@@ -28,6 +29,12 @@ import type { ToonEventTransport } from "@/shared/api/toonEventTransport";
  * the moment the final quoted increment is paid, `abandoned-buyer` the
  * moment an offered increment's payment window elapses unpaid (§5.2) — the
  * two outcomes an interactive delivery surface can honestly reach.
+ *
+ * Narration is the one thing this hook renders optimistically: `sendUpdate`
+ * records the entry in `localNarration` before the write starts, marks it
+ * `sent`/`failed` when the publish settles, and stamps the signed event id on
+ * it so `mergeOwnNarration` can drop it once the relay echo arrives. See
+ * `providerNarrationFeed.ts` for why narration and nothing else.
  */
 
 export type ProviderDeliveryPhase =
@@ -63,6 +70,20 @@ export function useProviderDelivery({
   const [sessionOffers, setSessionOffers] = React.useState<SessionOffer[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [narrating, setNarrating] = React.useState(false);
+  const [localNarration, setLocalNarration] = React.useState<LocalNarration[]>(
+    [],
+  );
+
+  const patchLocalNarration = (
+    localKey: string,
+    patch: Partial<LocalNarration>,
+  ) => {
+    setLocalNarration((prev) =>
+      prev.map((entry) =>
+        entry.localKey === localKey ? { ...entry, ...patch } : entry,
+      ),
+    );
+  };
 
   const totalIncrements = quote?.increments.length ?? 0;
 
@@ -161,14 +182,41 @@ export function useProviderDelivery({
 
   const sendUpdate = async (message: string) => {
     if (parentEventId === null || narrating) return;
+
+    // Render it in the provider's own thread NOW — before signing, before the
+    // paid write, and long before the relay echoes it back.
+    const localKey = `local-narration-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}`;
+    setLocalNarration((prev) => [
+      ...prev,
+      {
+        localKey,
+        eventId: null,
+        message,
+        createdAt: Math.floor(Date.now() / 1000),
+        delivery: "sending",
+      },
+    ]);
     setNarrating(true);
     setError(null);
     try {
-      await publishFactoryJobNarration(
+      const published = await publishFactoryJobNarration(
         { job, parentEventId, message },
         transport,
+        // Stamp the id at SIGNING time, not on publish success: a write that
+        // fails after the relay stored the event must still dedupe against
+        // the echo instead of rendering the message twice.
+        (signed) => patchLocalNarration(localKey, { eventId: signed.id }),
       );
+      patchLocalNarration(localKey, {
+        eventId: published.id,
+        delivery: "sent",
+      });
     } catch (narrationError) {
+      // Never leave an undelivered update looking delivered (§6 is the
+      // buyer's only progress signal — a phantom one is worse than none).
+      patchLocalNarration(localKey, { delivery: "failed" });
       setError(
         narrationError instanceof Error
           ? narrationError.message
@@ -183,6 +231,8 @@ export function useProviderDelivery({
     phase,
     error,
     narrating,
+    /** This session's own narration, for optimistic render + reconciliation. */
+    localNarration,
     /** The next increment to deliver, or null when the schedule is exhausted (or unquoted). */
     nextIncrement,
     deliverNext,

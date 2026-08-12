@@ -121,10 +121,19 @@ export async function deliverFactoryJobIncrement(
   };
 }
 
-/** Publish a free §6 narration event — no artifact, nothing to pay against. */
+/**
+ * Publish a free §6 narration event — no artifact, nothing to pay against.
+ *
+ * `onSigned` fires with the signed event BEFORE the write leaves the machine
+ * (the `onOfferPublished` precedent above). That is what lets a caller render
+ * the narration optimistically and still reconcile it against the relay echo
+ * by event id — including when the publish leg fails after the relay already
+ * stored the event.
+ */
 export async function publishFactoryJobNarration(
   input: { job: FactoryJobRequest; parentEventId: string; message: string },
   transport: ToonEventTransport,
+  onSigned?: (event: RelayEvent) => void,
 ): Promise<RelayEvent> {
   const template = buildNarrationEvent({
     job: toRigFactoryJobRequest(input.job),
@@ -132,6 +141,7 @@ export async function publishFactoryJobNarration(
     message: input.message,
   });
   const event = await signRelayEvent(asSignableTemplate(template));
+  onSigned?.(event);
   return transport.publish(event, {
     timeoutMessage: "Timed out while sending the update.",
     sendErrorMessage: "Failed to send the update.",
