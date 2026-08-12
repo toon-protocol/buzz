@@ -38,7 +38,7 @@ The only form of delete: an event marking content withdrawn. The bytes on the st
 _Avoid_: delete (unqualified)
 
 **Relay-native huddle**:
-Live audio as dust-priced ephemeral paid frames published over BTP, with listeners on free relay subscriptions. There is no media server.
+Live audio as dust-priced ephemeral paid frames published over BTP, with listeners on free relay subscriptions. There is no media server. Target design of ADR 0003, now superseded — see ADR 0008; live huddle audio runs on the admission+room relay until multi-speaker aggregate load is re-validated.
 _Avoid_: room service, SFU, media server
 
 **Pay-for-what-persists**:
