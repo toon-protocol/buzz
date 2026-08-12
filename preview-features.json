@@ -36,6 +36,12 @@
       "name": "Jobs",
       "description": "Post a factory job, compare quotes, and pay increment by increment (TOON only)",
       "platforms": ["desktop"]
+    },
+    {
+      "id": "meshComputeSelling",
+      "name": "Sell compute",
+      "description": "Set a posted price for this machine's compute and advertise it on the open market. Preview: nothing advertises, quotes or charges yet — the publisher is buzz#91.",
+      "platforms": ["desktop"]
     }
   ]
 }

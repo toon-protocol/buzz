@@ -39,6 +39,13 @@ on:
 # using the GitHub App token generated below (a PR opened by the default
 # GITHUB_TOKEN would NOT trigger ci.yml, so the green gate would never run on
 # the agent's PR). These scopes cover the guard job's read-only gh api calls.
+#
+# `contents: read` is DELIBERATE and stays read (reviewed for toon-meta#331/
+# #248, matching connector#463). Push authority comes only from the GitHub App
+# token(s) minted below — the one-shot job token and the fresh mint
+# .sandcastle/mint-app-token.ts makes immediately before every push — never
+# from this GITHUB_TOKEN. Keeping it read means a bug or a prompt injection
+# inside an agent phase cannot push using the ambient job token.
 permissions:
   contents: read
   issues: read
@@ -126,15 +133,25 @@ jobs:
     # maxIterations: 100 is a runaway-loop guard, not a time budget — an
     # iteration has no fixed duration, so no iteration count can "fit" a wall
     # clock. The wall clock is the real budget, and it is deliberately split:
-    # the runner STEP below gets timeout-minutes: 50 so an overlong run dies
-    # as an ordinary step FAILURE, leaving the rest of the job budget for the
-    # always() forensics steps (redact + upload) — a job-level kill would take
-    # those down with it. The job stays at 60 (NOT raised to connector's 180)
-    # because this repo still pushes with the App token minted at job start,
-    # which expires ONE HOUR in (connector#462): with a longer clock a run
-    # would finish its work and still lose the push. Raise to 180/170 only
-    # when the mid-run token mint is ported here (toon-meta#248).
-    timeout-minutes: 60
+    # the runner STEP below gets its own (smaller) timeout so an overlong run
+    # dies as an ordinary step FAILURE, leaving the rest of the job budget for
+    # the always() forensics steps (redact + upload) — a job-level kill would
+    # take those down with it.
+    #
+    # Raised 60 -> 180 (toon-meta#331/#248, ported from connector#463): this
+    # repo used to push with the single App token minted at job start, which
+    # expires ONE HOUR in (connector#462) — with a longer clock alone, a run
+    # would finish its work and still lose the push. That trap is now closed:
+    # .sandcastle/agent-implement-issue.ts mints a FRESH token immediately
+    # before every push (.sandcastle/mint-app-token.ts) and publishes the
+    # branch right after the implementer phase, so a run's total length no
+    # longer determines whether the push succeeds, and a kill during review
+    # leaves the work recoverable on the remote branch instead of losing it
+    # with the sandbox. buzz is the fleet's only polyglot row (26-crate cargo
+    # workspace + pnpm + Flutter, `clippy -D warnings` + `test-unit` +
+    # desktop/web gates), so 180 gives a Rust-heavy ticket room for a cold
+    # compile plus the actual work, not just the compile.
+    timeout-minutes: 180
     concurrency:
       group: agent-implement-issue-${{ github.event.issue.number }}
       cancel-in-progress: false
@@ -158,9 +175,14 @@ jobs:
       - name: Build sandcastle agent image
         run: npx --yes @ai-hero/sandcastle@0.12.0 docker build-image
 
-      # The engine opens the PR via this App token. A PR opened by it (unlike one
-      # opened by the default GITHUB_TOKEN) triggers ci.yml, so the green gate
-      # runs on the agent's PR. Requires the org secrets APP_ID +
+      # This token is the STARTING credential only. It expires one hour after
+      # issue, and long runs push at the END of the implementer/review phases —
+      # which is exactly what lost buzz#43's work (toon-meta#331). The runner
+      # therefore mints its OWN fresh token immediately before each push, from
+      # APP_ID + APP_PRIVATE_KEY below. See .sandcastle/mint-app-token.ts. This
+      # step's token remains what opens the PR's checks: a PR opened via the App
+      # (unlike one opened by the default GITHUB_TOKEN) triggers ci.yml, so the
+      # green gate runs on the agent's PR. Requires the org secrets APP_ID +
       # APP_PRIVATE_KEY (org-level, shared by every factory repo).
       - name: Generate GitHub App token
         id: app-token
@@ -172,7 +194,10 @@ jobs:
       - name: Run sandcastle implement runner
         # Step-level timeout (toon-meta#278): below the job's, so a wall-clock
         # kill is a step failure and the always() forensics steps still run.
-        timeout-minutes: 50
+        # Raised 50 -> 170 alongside the job's 60 -> 180 (toon-meta#331/#248) —
+        # see the job-level timeout-minutes comment above for why this is now
+        # safe to raise.
+        timeout-minutes: 170
         env:
           SANDCASTLE_ISSUE_NUMBER: ${{ github.event.issue.number }}
           # PR mode (default). To re-enable auto-merge later, uncomment:
@@ -184,6 +209,13 @@ jobs:
           # .sandcastle/sandbox-secrets.ts) — the agent must never hold the
           # credential that approves its own output.
           FACTORY_OPS_TOKEN: ${{ secrets.FACTORY_OPS_TOKEN }}
+          # For minting a fresh push credential mid-run (toon-meta#331/#248).
+          # These stay on the HOST: PASSTHROUGH_KEYS in
+          # .sandcastle/sandbox-secrets.ts lists only CLAUDE_CODE_OAUTH_TOKEN
+          # and GH_TOKEN, so the private key is never forwarded into the
+          # agent's container.
+          APP_ID: ${{ secrets.APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
         run: pnpm sandcastle:implement
 
       # REDACT BEFORE UPLOAD — this repository is PUBLIC.

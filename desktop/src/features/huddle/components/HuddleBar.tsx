@@ -584,8 +584,9 @@ export function HuddleBar({
           )}
 
         {/* Soft concurrent-speaker guidance (buzz#23): on TOON the measured
-            envelope guarantees ≤3 concurrent speakers and degrades above —
-            a hint, never a gate, because nothing server-side enforces it. */}
+            envelope guarantees only a single speaker and degrades above —
+            a hint, never a gate, because nothing server-side enforces it
+            (buzz#10 Phase F, NO-GO — see ADR 0008). */}
         {(() => {
           const hint = speakerLoadHint(
             activeSpeakers.length,

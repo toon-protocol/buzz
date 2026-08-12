@@ -1,8 +1,8 @@
 # TASK
 
-Push branch `{{BRANCH}}` and open a pull request against `main` for issue
-#{{TASK_ID}} ({{ISSUE_TITLE}}). **Do NOT merge anything. Do NOT close the
-issue.** A human reviews and merges the PR.
+Confirm branch `{{BRANCH}}` is published and open a pull request against
+`main` for issue #{{TASK_ID}} ({{ISSUE_TITLE}}). **Do NOT merge anything. Do
+NOT close the issue.** A human reviews and merges the PR.
 
 # STEPS
 
@@ -15,23 +15,21 @@ issue.** A human reviews and merges the PR.
    If there are no commits ahead of `main`, output `<promise>COMPLETE</promise>`
    and stop — there is nothing to open a PR for.
 
-2. Wire `git push` authentication so the push below is NOT unauthenticated.
-   `gh` is authenticated from `GH_TOKEN`, but a bare `git push` uses git's own
-   credential system. Install `gh` as git's credential helper (idempotent; the
-   onSandboxReady hook already did this, but re-run it here so this step is
-   self-contained):
+2. The runner already pushed this branch to origin moments ago, using a
+   credential minted fresh for that push (toon-meta#331/#248). **Do NOT run
+   `git push` yourself** — the container's own git credential helper
+   (`gh auth setup-git`, wired at sandbox start) still holds the token from
+   job start, which may be stale by now on a long run; re-pushing with it
+   could fail even though the branch is already up to date on origin.
 
-   `gh auth setup-git`
+3. CONFIRM the remote ref actually exists instead:
 
-3. Push the branch to origin, then CONFIRM the remote ref actually exists — a
-   push can fail without an obvious error:
-
-   `git push -u origin {{BRANCH}}`
    `git ls-remote --heads origin {{BRANCH}}`
 
-   If `git ls-remote` prints NO line for `{{BRANCH}}`, the push FAILED. Do
-   **not** output `<promise>COMPLETE</promise>`. Instead print the push error
-   and stop — the runner will detect the missing PR and fail the job.
+   If `git ls-remote` prints NO line for `{{BRANCH}}`, the push the runner did
+   before this step FAILED. Do **not** output `<promise>COMPLETE</promise>`.
+   Instead print what you see and stop — the runner will detect the missing
+   PR and fail the job.
 
 4. Check whether a PR for this branch already exists:
 
@@ -73,10 +71,10 @@ issue.** A human reviews and merges the PR.
 
 - Never run `git merge`, `gh pr merge`, or `gh issue close`.
 - Do not modify code here — implementation and review already happened on this
-  branch. This step only publishes the branch and opens the PR.
+  branch. This step only confirms the branch is published and opens the PR.
 - Only output `<promise>COMPLETE</promise>` once you have CONFIRMED (step 3 +
-  step 6) that the branch is pushed AND an open PR exists. A failed push or a
-  missing PR is a failure, not a COMPLETE.
+  step 6) that the branch is on origin AND an open PR exists. A missing ref or
+  a missing PR is a failure, not a COMPLETE.
 
-Once the branch is pushed and an open PR is confirmed to exist, output
-`<promise>COMPLETE</promise>`.
+Once the branch is confirmed on origin and an open PR is confirmed to exist,
+output `<promise>COMPLETE</promise>`.
