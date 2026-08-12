@@ -1,6 +1,6 @@
 //! Unit tests for `mesh_llm/mod.rs` private helpers (kept in a sibling file so
 //! `mod.rs` stays under the 500-line budget; `#[path]`-included from there).
-use super::find_progressish_reason;
+use super::status_view::find_progressish_reason;
 use serde_json::json;
 
 fn pending_client_runtime(
