@@ -45,6 +45,13 @@ function malformed(eventId: string, reason: string): FactoryJobResultMalformed {
   return { status: "malformed", eventId, reason };
 }
 
+/** Narrows a `parseFactoryJobResult` hit to its malformed report. */
+export function isFactoryJobResultMalformed(
+  parsed: FactoryJobResult | FactoryJobResultMalformed,
+): parsed is FactoryJobResultMalformed {
+  return "status" in parsed;
+}
+
 /**
  * Parse a kind:6097 event. `null` for the wrong kind; a `{status:
  * "malformed"}` reporting which field failed for anything else — mirrors
@@ -62,11 +69,15 @@ export function parseFactoryJobResult(event: {
   const rootJobId = eTag(event.tags, "root");
   if (!rootJobId) return malformed(event.id, "missing root e-tag");
 
-  const parentEventId = eTag(event.tags, "reply");
-  if (!parentEventId) return malformed(event.id, "missing reply e-tag");
-
-  const buyerPubkey = firstTag(event.tags, "p")?.[1];
-  if (!buyerPubkey) return malformed(event.id, "missing buyer p tag");
+  // §5.1 Required, presence-checked only: no reader here needs the offer this
+  // replies to or the buyer, but a 6097 without them is malformed — the same
+  // bar `parseFactoryJobFeedback` holds a §4.1 partial offer to.
+  if (!eTag(event.tags, "reply")) {
+    return malformed(event.id, "missing reply e-tag");
+  }
+  if (!firstTag(event.tags, "p")?.[1]) {
+    return malformed(event.id, "missing buyer p tag");
+  }
 
   const outcomeRaw = firstTag(event.tags, "outcome")?.[1];
   if (!outcomeRaw) return malformed(event.id, "missing outcome tag");
@@ -77,8 +88,11 @@ export function parseFactoryJobResult(event: {
   const incrementTag = firstTag(event.tags, "increment");
   if (!incrementTag) return malformed(event.id, "missing increment tag");
 
-  const requestJson = firstTag(event.tags, "request")?.[1];
-  if (!requestJson) return malformed(event.id, "missing request tag");
+  // Also presence-only: the embedded kind:5097 is there for auditors of the
+  // thread, and no reader here looks inside it.
+  if (!firstTag(event.tags, "request")?.[1]) {
+    return malformed(event.id, "missing request tag");
+  }
 
   const reached = Number.parseInt(incrementTag[1] ?? "", 10);
   const of = Number.parseInt(incrementTag[2] ?? "", 10);

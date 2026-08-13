@@ -8,6 +8,7 @@ import {
 import { parseFactoryJobRequest } from "@/features/factory-jobs/lib/factoryJobRequest";
 import {
   type FactoryJobResult,
+  isFactoryJobResultMalformed,
   parseFactoryJobResult,
 } from "@/features/factory-jobs/lib/factoryJobResult";
 import type { ToonEventTransport } from "@/shared/api/toonEventTransport";
@@ -185,7 +186,7 @@ export function useFactoryJobResults(
       if (seenEventIds.current.has(raw.id)) return;
       seenEventIds.current.add(raw.id);
       const parsed = parseFactoryJobResult(raw);
-      if (parsed && !("status" in parsed)) {
+      if (parsed && !isFactoryJobResultMalformed(parsed)) {
         setResults((prev) => [...prev, parsed]);
       }
     };
@@ -250,7 +251,7 @@ export function useProviderJobHistory(
           const result = parseFactoryJobResult(event);
           if (
             result &&
-            !("status" in result) &&
+            !isFactoryJobResultMalformed(result) &&
             result.outcome === "completed"
           ) {
             counts.set(
