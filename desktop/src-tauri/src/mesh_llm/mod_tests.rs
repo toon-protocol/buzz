@@ -1,6 +1,6 @@
 //! Unit tests for `mesh_llm/mod.rs` private helpers (kept in a sibling file so
 //! `mod.rs` stays under the 500-line budget; `#[path]`-included from there).
-use super::find_progressish_reason;
+use super::status_view::find_progressish_reason;
 use serde_json::json;
 
 fn pending_client_runtime(
@@ -14,6 +14,7 @@ fn pending_client_runtime(
         mesh_name: None,
         relay_url: None,
         trusted_owner_ids: None,
+        admission: super::MeshAdmission::Community,
     };
     super::DesktopMeshRuntime {
         id: 7,
@@ -236,23 +237,35 @@ fn add_test_owner_bindings(
     )));
 }
 
-#[test]
-fn normalized_roster_none_means_no_enforcement() {
-    let identity = super::identity::OwnerIdentity {
+/// The identity every roster/admission test resolves against: `owner-self` is
+/// this node's own owner id, so anything else in a roster is "not us".
+fn self_owner_identity() -> super::identity::OwnerIdentity {
+    super::identity::OwnerIdentity {
         keystore_path: std::path::PathBuf::from("/tmp/ks.json"),
         owner_id: "owner-self".to_string(),
         verifying_key_hex: String::new(),
-    };
+    }
+}
+
+#[test]
+fn mesh_ingress_stays_on_loopback_regardless_of_admission_mode() {
+    // AC3 (buzz#171): both ingress URLs `DesktopMeshRuntime::start` hands back
+    // to callers interpolate this one constant, with no `MeshAdmission` branch
+    // at either call site — a Sell Compute (SelfOnly) node reports the same
+    // loopback host a Share Compute (Community) node does. This pins the
+    // value; the "one unconditional constant" half is structural.
+    assert_eq!(super::MESH_LOOPBACK_HOST, "127.0.0.1");
+}
+
+#[test]
+fn normalized_roster_none_means_no_enforcement() {
+    let identity = self_owner_identity();
     assert_eq!(super::normalized_roster(&None, &identity), None);
 }
 
 #[test]
 fn normalized_roster_always_includes_self_and_dedupes() {
-    let identity = super::identity::OwnerIdentity {
-        keystore_path: std::path::PathBuf::from("/tmp/ks.json"),
-        owner_id: "owner-self".to_string(),
-        verifying_key_hex: String::new(),
-    };
+    let identity = self_owner_identity();
     // Empty roster (fresh relay, nobody published yet) still admits self —
     // otherwise the first sharer locks themselves out.
     assert_eq!(
@@ -276,6 +289,80 @@ fn normalized_roster_always_includes_self_and_dedupes() {
             "owner-b".to_string(),
             "owner-self".to_string(),
         ])
+    );
+}
+
+#[test]
+fn sell_compute_locks_trust_owners_to_self_and_ignores_any_roster() {
+    // AC1 + AC2 (buzz#171): a SelfOnly (Sell Compute) request must resolve
+    // to an allowlist containing exactly this node's own owner id, and never
+    // widen to admit anyone else — even when `trusted_owner_ids` carries
+    // other members, which stands in for the failure mode this test guards
+    // against: a stale community roster, a caller bug, or a future refactor
+    // that starts threading community state through a sell request. Under
+    // `TrustPolicy::Allowlist`, an owner id absent from this list is refused
+    // admission, so "self is the only entry" IS "a non-owner is refused".
+    let identity = self_owner_identity();
+    let community_roster_with_other_members = Some(vec![
+        "owner-a-not-self".to_string(),
+        "owner-b-not-self".to_string(),
+    ]);
+
+    assert_eq!(
+        super::resolve_serve_trust_owners(
+            super::MeshAdmission::SelfOnly,
+            &community_roster_with_other_members,
+            &identity,
+        ),
+        Some(vec!["owner-self".to_string()]),
+        "sell compute must admit exactly self, regardless of any resolved roster"
+    );
+    assert_eq!(
+        super::resolve_serve_trust_owners(super::MeshAdmission::SelfOnly, &None, &identity),
+        Some(vec!["owner-self".to_string()]),
+        "sell compute must enforce the allowlist even with no roster resolved at all \
+         (this is the case where Community admission would run OPEN, matching an open \
+         relay — SelfOnly must never inherit that fallback)"
+    );
+}
+
+#[test]
+fn community_admission_is_unchanged_by_the_new_admission_field() {
+    // AC5 (buzz#171): Community must still defer to `normalized_roster`
+    // byte-for-byte, the pre-existing Share Compute behavior.
+    let identity = self_owner_identity();
+    assert_eq!(
+        super::resolve_serve_trust_owners(super::MeshAdmission::Community, &None, &identity),
+        None,
+        "Community with no resolved roster must stay OPEN, exactly as before this ticket"
+    );
+    assert_eq!(
+        super::resolve_serve_trust_owners(
+            super::MeshAdmission::Community,
+            &Some(vec!["owner-b".to_string(), "owner-a".to_string()]),
+            &identity,
+        ),
+        Some(vec![
+            "owner-a".to_string(),
+            "owner-b".to_string(),
+            "owner-self".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn mesh_admission_defaults_to_community_when_absent_from_json() {
+    // Backward compatibility: a StartMeshNodeRequest payload from before this
+    // field existed (persisted config, older frontend build) has no
+    // `admission` key at all and must resolve to Community, never SelfOnly.
+    let request: super::StartMeshNodeRequest = serde_json::from_value(json!({
+        "mode": "serve",
+    }))
+    .expect("a request missing `admission` must still deserialize");
+    assert_eq!(request.admission, super::MeshAdmission::Community);
+    assert_eq!(
+        super::MeshAdmission::default(),
+        super::MeshAdmission::Community
     );
 }
 

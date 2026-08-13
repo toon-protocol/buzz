@@ -43,6 +43,8 @@ test("an abandoned-provider result has no final artifact even if an i tag were p
     kind: 6097,
     tags: [
       ["e", ROOT_ID, "", "root"],
+      ["e", "last-offer-id", "", "reply"],
+      ["p", "buyer-pubkey"],
       ["request", REQUEST_JSON],
       ["outcome", "abandoned-provider"],
       ["increment", "1", "3"],
@@ -56,7 +58,7 @@ test("an abandoned-provider result has no final artifact even if an i tag were p
 });
 
 test("an unrecognized outcome value is rejected", () => {
-  assert.equal(
+  assert.deepEqual(
     parseFactoryJobResult({
       id: "result-id",
       pubkey: "p",
@@ -64,17 +66,23 @@ test("an unrecognized outcome value is rejected", () => {
       kind: 6097,
       tags: [
         ["e", ROOT_ID, "", "root"],
+        ["e", "last-offer-id", "", "reply"],
+        ["p", "buyer-pubkey"],
         ["request", REQUEST_JSON],
         ["outcome", "cancelled"],
         ["increment", "1", "1"],
       ],
     }),
-    null,
+    {
+      status: "malformed",
+      eventId: "result-id",
+      reason: "unrecognized outcome tag: cancelled",
+    },
   );
 });
 
 test("a result missing the request tag is rejected (§5.1 Required)", () => {
-  assert.equal(
+  assert.deepEqual(
     parseFactoryJobResult({
       id: "result-id",
       pubkey: "provider-pubkey",
@@ -82,17 +90,23 @@ test("a result missing the request tag is rejected (§5.1 Required)", () => {
       kind: 6097,
       tags: [
         ["e", ROOT_ID, "", "root"],
+        ["e", "last-offer-id", "", "reply"],
+        ["p", "buyer-pubkey"],
         ["outcome", "completed"],
         ["increment", "1", "1"],
         ["i", "final-arweave-tx", "url"],
       ],
     }),
-    null,
+    {
+      status: "malformed",
+      eventId: "result-id",
+      reason: "missing request tag",
+    },
   );
 });
 
-test("a completed outcome whose reached increment does not equal the total is rejected", () => {
-  assert.equal(
+test("a result missing the reply e-tag is rejected (§5.1 Required)", () => {
+  assert.deepEqual(
     parseFactoryJobResult({
       id: "result-id",
       pubkey: "provider-pubkey",
@@ -100,13 +114,67 @@ test("a completed outcome whose reached increment does not equal the total is re
       kind: 6097,
       tags: [
         ["e", ROOT_ID, "", "root"],
+        ["p", "buyer-pubkey"],
+        ["request", REQUEST_JSON],
+        ["outcome", "completed"],
+        ["increment", "1", "1"],
+        ["i", "final-arweave-tx", "url"],
+      ],
+    }),
+    {
+      status: "malformed",
+      eventId: "result-id",
+      reason: "missing reply e-tag",
+    },
+  );
+});
+
+test("a result missing the buyer p tag is rejected (§5.1 Required)", () => {
+  assert.deepEqual(
+    parseFactoryJobResult({
+      id: "result-id",
+      pubkey: "provider-pubkey",
+      created_at: 0,
+      kind: 6097,
+      tags: [
+        ["e", ROOT_ID, "", "root"],
+        ["e", "last-offer-id", "", "reply"],
+        ["request", REQUEST_JSON],
+        ["outcome", "completed"],
+        ["increment", "1", "1"],
+        ["i", "final-arweave-tx", "url"],
+      ],
+    }),
+    {
+      status: "malformed",
+      eventId: "result-id",
+      reason: "missing buyer p tag",
+    },
+  );
+});
+
+test("a completed outcome whose reached increment does not equal the total is rejected", () => {
+  assert.deepEqual(
+    parseFactoryJobResult({
+      id: "result-id",
+      pubkey: "provider-pubkey",
+      created_at: 0,
+      kind: 6097,
+      tags: [
+        ["e", ROOT_ID, "", "root"],
+        ["e", "last-offer-id", "", "reply"],
+        ["p", "buyer-pubkey"],
         ["request", REQUEST_JSON],
         ["outcome", "completed"],
         ["increment", "2", "3"],
         ["i", "final-arweave-tx", "url"],
       ],
     }),
-    null,
+    {
+      status: "malformed",
+      eventId: "result-id",
+      reason: "completed outcome with reached increment !== of",
+    },
   );
 });
 

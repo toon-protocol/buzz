@@ -120,6 +120,7 @@ fn sharing_config_keeps_the_community_where_sharing_was_enabled() {
         mesh_name: Some("buzz-community-test".to_string()),
         relay_url: Some("wss://community.example".to_string()),
         trusted_owner_ids: Some(Vec::new()),
+        admission: mesh_llm::MeshAdmission::Community,
     };
 
     let config = sharing_config_from_request(&request).expect("valid sharing config");
@@ -415,6 +416,7 @@ fn ensure_serve_runtime_serves_other_model() {
                         mesh_name: None,
                         relay_url: None,
                         trusted_owner_ids: None,
+                        admission: mesh_llm::MeshAdmission::Community,
                     })
                     .await
                     .expect("serve runtime should start");

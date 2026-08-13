@@ -69,37 +69,7 @@ fn load_mesh_sharing_config(app: &AppHandle) -> Result<Option<MeshSharingConfig>
 const RELAY_MESH_RUNTIME_NO_TARGET: &str =
     "Buzz shared compute requires a live serving member; start serving the selected model on a member, then try again";
 
-/// Whether the Share-compute "stop sharing" path (`mesh_stop_node`) should tear
-/// down the runtime currently occupying the single slot.
-///
-/// Serve nodes (this machine SHARING compute) are torn down. Client nodes (this
-/// machine CONSUMING a peer's compute) share the same slot and MUST be left
-/// running — stopping "Share compute" must never kill a consume session the
-/// user didn't start from this switch.
-#[cfg(feature = "mesh-llm")]
-fn share_stop_should_teardown(mode: mesh_llm::MeshNodeMode) -> bool {
-    matches!(mode, mesh_llm::MeshNodeMode::Serve)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MeshStartPlan {
-    Start,
-    RestartToReplaceClient,
-    RejectOccupied,
-}
-
-fn mesh_start_plan(
-    requested_mode: mesh_llm::MeshNodeMode,
-    existing_mode: Option<mesh_llm::MeshNodeMode>,
-) -> MeshStartPlan {
-    match (requested_mode, existing_mode) {
-        (_, None) => MeshStartPlan::Start,
-        (mesh_llm::MeshNodeMode::Serve, Some(mesh_llm::MeshNodeMode::Client)) => {
-            MeshStartPlan::RestartToReplaceClient
-        }
-        _ => MeshStartPlan::RejectOccupied,
-    }
-}
+use super::mesh_llm_plan::{mesh_start_plan, share_stop_should_teardown, MeshStartPlan};
 
 fn sharing_config_from_request(
     request: &mesh_llm::StartMeshNodeRequest,
@@ -374,6 +344,7 @@ pub(crate) async fn restore_mesh_sharing(app: &AppHandle, state: &AppState) -> C
         mesh_name: Some(buzz_mesh_name_for_relay(&relay_url)),
         relay_url: Some(relay_url),
         trusted_owner_ids: Some(trusted_owner_ids),
+        admission: mesh_llm::MeshAdmission::Community,
     };
     let started = mesh_llm::DesktopMeshRuntime::start(request)
         .await
@@ -407,7 +378,19 @@ pub async fn mesh_start_node(
     if let Some(model_id) = request.model_id.as_mut() {
         *model_id = mesh_llm::canonical_curated_model_id(model_id).to_string();
     }
-    let sharing_config = if request.mode == mesh_llm::MeshNodeMode::Serve {
+    // Persist across-restart "Share Compute" state only for Community: this
+    // machinery predates Sell Compute, has no locked-to-self representation,
+    // and `restore_mesh_sharing` always restores Community — routing a
+    // SelfOnly request through it would silently widen it back on relaunch.
+    // Two consequences, both the follow-up ticket's scope rather than this
+    // one's: a SelfOnly node does not survive a restart, and it cannot take
+    // over a slot already held by a client runtime, because that swap is
+    // performed by re-launching from this same persisted config
+    // (`MeshStartPlan::RestartToReplaceClient` below). Starting a SelfOnly
+    // node into a free slot works.
+    let sharing_config = if request.mode == mesh_llm::MeshNodeMode::Serve
+        && request.admission == mesh_llm::MeshAdmission::Community
+    {
         Some(sharing_config_from_request(&request)?)
     } else {
         None
@@ -440,7 +423,13 @@ pub async fn mesh_start_node(
 
     // Frontend requests never carry a roster. Resolve it and the bootstrap
     // endpoint from one snapshot so UI startup does not repeat relay probes.
-    if request.trusted_owner_ids.is_none() || request.join_token.is_none() {
+    // SelfOnly skips this entirely: `resolve_serve_trust_owners` never
+    // consults `trusted_owner_ids` under SelfOnly, so resolving a roster
+    // would be wasted, and a resolved `join_token` would dial a community
+    // member into a node whose point is that iroh admits nobody but its owner.
+    if request.admission == mesh_llm::MeshAdmission::Community
+        && (request.trusted_owner_ids.is_none() || request.join_token.is_none())
+    {
         let (trusted_owner_ids, join_token) =
             resolve_buzz_mesh_startup_at(&state, &relay_url).await;
         request.trusted_owner_ids.get_or_insert(trusted_owner_ids);
@@ -716,6 +705,7 @@ pub(crate) async fn ensure_client_node_for_model(
         mesh_name: Some(buzz_mesh_name(state)),
         relay_url: Some(relay::relay_ws_url_with_override(state)),
         trusted_owner_ids: Some(resolve_trusted_owner_ids_or_self_only(state).await),
+        admission: mesh_llm::MeshAdmission::Community,
     };
     let mut runtime = state.mesh_llm_runtime.lock().await;
     if let Some(existing) = runtime.as_ref() {

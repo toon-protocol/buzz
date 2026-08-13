@@ -6,7 +6,10 @@ import {
 import { formatUsdcBaseUnits } from "@/features/onboarding/toon/toonOnboardingFormat";
 import { parseFactoryJobFeedback } from "./factoryJobFeedback";
 import { parseFactoryJobRequest } from "./factoryJobRequest";
-import { parseFactoryJobResult } from "./factoryJobResult";
+import {
+  isFactoryJobResultMalformed,
+  parseFactoryJobResult,
+} from "./factoryJobResult";
 
 /**
  * Derives the compact channel-timeline card for a NIP-90 factory job event
@@ -91,7 +94,14 @@ function deriveResultCard(event: FactoryJobCardEvent): FactoryJobCardContent {
     return {
       variant: "unrecognized",
       title: "Job result",
-      description: "This job result is missing its outcome.",
+      description: "This job result could not be read.",
+    };
+  }
+  if (isFactoryJobResultMalformed(parsed)) {
+    return {
+      variant: "unrecognized",
+      title: "Job result",
+      description: `This job result could not be read: ${parsed.reason}.`,
     };
   }
   return {

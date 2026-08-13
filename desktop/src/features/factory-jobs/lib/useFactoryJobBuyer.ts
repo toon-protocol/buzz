@@ -6,7 +6,11 @@ import {
   parseFactoryJobFeedback,
 } from "@/features/factory-jobs/lib/factoryJobFeedback";
 import { parseFactoryJobRequest } from "@/features/factory-jobs/lib/factoryJobRequest";
-import { parseFactoryJobResult } from "@/features/factory-jobs/lib/factoryJobResult";
+import {
+  type FactoryJobResult,
+  isFactoryJobResultMalformed,
+  parseFactoryJobResult,
+} from "@/features/factory-jobs/lib/factoryJobResult";
 import type { ToonEventTransport } from "@/shared/api/toonEventTransport";
 import {
   KIND_FACTORY_JOB_FEEDBACK,
@@ -164,9 +168,7 @@ export function useFactoryJobResults(
   transport: ToonEventTransport | null,
   jobId: string | null,
 ) {
-  const [results, setResults] = React.useState<
-    NonNullable<ReturnType<typeof parseFactoryJobResult>>[]
-  >([]);
+  const [results, setResults] = React.useState<FactoryJobResult[]>([]);
   const seenEventIds = React.useRef(new Set<string>());
 
   React.useEffect(() => {
@@ -184,7 +186,9 @@ export function useFactoryJobResults(
       if (seenEventIds.current.has(raw.id)) return;
       seenEventIds.current.add(raw.id);
       const parsed = parseFactoryJobResult(raw);
-      if (parsed) setResults((prev) => [...prev, parsed]);
+      if (parsed && !isFactoryJobResultMalformed(parsed)) {
+        setResults((prev) => [...prev, parsed]);
+      }
     };
 
     let disposed = false;
@@ -245,7 +249,11 @@ export function useProviderJobHistory(
         const counts = new Map<string, number>();
         for (const event of events) {
           const result = parseFactoryJobResult(event);
-          if (result?.outcome === "completed") {
+          if (
+            result &&
+            !isFactoryJobResultMalformed(result) &&
+            result.outcome === "completed"
+          ) {
             counts.set(
               result.providerPubkey,
               (counts.get(result.providerPubkey) ?? 0) + 1,

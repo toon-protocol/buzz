@@ -6,10 +6,11 @@ import { deriveFactoryJobCard } from "./factoryJobCard.ts";
 const ROOT_ID = "a".repeat(64);
 const PROVIDER_PUBKEY = "b".repeat(64);
 const BUYER_PUBKEY = "c".repeat(64);
-// The quote this branch's partial offer replies to (§4.1 Required `reply`
-// e-tag). buzz#126 made the parsers reject spec-Required omissions, so a
-// fixture missing this — or the buyer `p` tag, or 6097's `request` tag —
-// now parses as malformed and renders "unrecognized" rather than its card.
+// The quote this branch's partial offer (§4.1) or result (§5.1) replies to
+// via the `reply` e-tag. buzz#126 (kind:7000) and buzz#150 (kind:6097) made
+// both parsers reject spec-Required omissions, so a fixture missing this —
+// or the buyer `p` tag, or 6097's `request` tag — now parses as malformed
+// and renders "unrecognized" rather than its card.
 const QUOTE_ID = "f".repeat(64);
 const REQUEST_JSON = JSON.stringify({
   repo: "toon-protocol/buzz",
@@ -58,6 +59,8 @@ test("6097 result: completed outcome renders a labeled result card", () => {
       pubkey: PROVIDER_PUBKEY,
       tags: [
         ["e", ROOT_ID, "", "root"],
+        ["e", QUOTE_ID, "", "reply"],
+        ["p", BUYER_PUBKEY],
         ["outcome", "completed"],
         ["increment", "3", "3"],
         ["i", "https://arweave.net/abc", "url"],
@@ -78,6 +81,8 @@ test("6097 result: abandoned-provider outcome renders distinctly from completed"
       pubkey: PROVIDER_PUBKEY,
       tags: [
         ["e", ROOT_ID, "", "root"],
+        ["e", QUOTE_ID, "", "reply"],
+        ["p", BUYER_PUBKEY],
         ["outcome", "abandoned-provider"],
         ["increment", "1", "3"],
         ["request", REQUEST_JSON],
@@ -94,6 +99,24 @@ test("6097 result: empty-content/missing tags still render a labeled card", () =
   );
   assert.equal(card.variant, "unrecognized");
   assert.equal(card.title, "Job result");
+});
+
+test("6097 result: missing the reply e-tag or buyer p tag reports the reason, not just unrecognized", () => {
+  const card = deriveFactoryJobCard(
+    baseEvent({
+      kind: 6097,
+      pubkey: PROVIDER_PUBKEY,
+      tags: [
+        ["e", ROOT_ID, "", "root"],
+        ["outcome", "completed"],
+        ["increment", "3", "3"],
+        ["i", "https://arweave.net/abc", "url"],
+        ["request", REQUEST_JSON],
+      ],
+    }),
+  );
+  assert.equal(card.variant, "unrecognized");
+  assert.match(card.description, /missing reply e-tag/);
 });
 
 test("7000 feedback: quote status renders a labeled quote card", () => {
@@ -130,7 +153,7 @@ test("7000 feedback: partial increment offer renders a labeled increment card", 
         ["status", "partial"],
         ["increment", "1", "2"],
         ["i", "https://arweave.net/xyz", "url"],
-        ["amount", "1000000"],
+        ["amount", "1000000", "usdc"],
         ["condition", "e".repeat(64)],
         ["p", BUYER_PUBKEY],
       ],
