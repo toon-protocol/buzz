@@ -69,37 +69,7 @@ fn load_mesh_sharing_config(app: &AppHandle) -> Result<Option<MeshSharingConfig>
 const RELAY_MESH_RUNTIME_NO_TARGET: &str =
     "Buzz shared compute requires a live serving member; start serving the selected model on a member, then try again";
 
-/// Whether the Share-compute "stop sharing" path (`mesh_stop_node`) should tear
-/// down the runtime currently occupying the single slot.
-///
-/// Serve nodes (this machine SHARING compute) are torn down. Client nodes (this
-/// machine CONSUMING a peer's compute) share the same slot and MUST be left
-/// running — stopping "Share compute" must never kill a consume session the
-/// user didn't start from this switch.
-#[cfg(feature = "mesh-llm")]
-fn share_stop_should_teardown(mode: mesh_llm::MeshNodeMode) -> bool {
-    matches!(mode, mesh_llm::MeshNodeMode::Serve)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MeshStartPlan {
-    Start,
-    RestartToReplaceClient,
-    RejectOccupied,
-}
-
-fn mesh_start_plan(
-    requested_mode: mesh_llm::MeshNodeMode,
-    existing_mode: Option<mesh_llm::MeshNodeMode>,
-) -> MeshStartPlan {
-    match (requested_mode, existing_mode) {
-        (_, None) => MeshStartPlan::Start,
-        (mesh_llm::MeshNodeMode::Serve, Some(mesh_llm::MeshNodeMode::Client)) => {
-            MeshStartPlan::RestartToReplaceClient
-        }
-        _ => MeshStartPlan::RejectOccupied,
-    }
-}
+use super::mesh_llm_plan::{mesh_start_plan, share_stop_should_teardown, MeshStartPlan};
 
 fn sharing_config_from_request(
     request: &mesh_llm::StartMeshNodeRequest,
