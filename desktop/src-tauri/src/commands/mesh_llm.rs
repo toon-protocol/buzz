@@ -412,8 +412,12 @@ pub async fn mesh_start_node(
     // machinery predates Sell Compute, has no locked-to-self representation,
     // and `restore_mesh_sharing` always restores Community — routing a
     // SelfOnly request through it would silently widen it back on relaunch.
-    // A SelfOnly node still starts correctly below; it just doesn't survive
-    // a restart yet (follow-up ticket's scope, not this one's).
+    // Two consequences, both the follow-up ticket's scope rather than this
+    // one's: a SelfOnly node does not survive a restart, and it cannot take
+    // over a slot already held by a client runtime, because that swap is
+    // performed by re-launching from this same persisted config
+    // (`MeshStartPlan::RestartToReplaceClient` below). Starting a SelfOnly
+    // node into a free slot works.
     let sharing_config = if request.mode == mesh_llm::MeshNodeMode::Serve
         && request.admission == mesh_llm::MeshAdmission::Community
     {

@@ -241,6 +241,8 @@ pub struct StartMeshNodeRequest {
     #[serde(default)]
     pub trusted_owner_ids: Option<Vec<String>>,
     /// Who this node's mesh admission trusts; defaults to `Community`.
+    /// Serve-only: a `Client` node enforces no allowlist of its own, so it
+    /// keeps deriving trust from `trusted_owner_ids` whatever this says.
     #[serde(default)]
     pub admission: MeshAdmission,
 }
