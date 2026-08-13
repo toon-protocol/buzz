@@ -23,9 +23,12 @@ test("relay mode (no fee quote) has nothing to warn about", () => {
 });
 
 test("a pending or unavailable quote has nothing to warn about", () => {
-  assert.deepEqual(deriveHuddleCollateralStatus({ kind: "pending" }, 1_000_000n), {
-    kind: "unknown",
-  });
+  assert.deepEqual(
+    deriveHuddleCollateralStatus({ kind: "pending" }, 1_000_000n),
+    {
+      kind: "unknown",
+    },
+  );
   assert.deepEqual(
     deriveHuddleCollateralStatus({ kind: "unavailable" }, 1_000_000n),
     { kind: "unknown" },

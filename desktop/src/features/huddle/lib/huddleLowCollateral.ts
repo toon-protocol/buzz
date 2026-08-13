@@ -36,8 +36,7 @@ export function deriveHuddleCollateralStatus(
   if (quote.perMinuteCeilingBaseUnits <= 0n) return { kind: "unknown" };
 
   const remainingSeconds =
-    (Number(remainingBaseUnits) / Number(quote.perMinuteCeilingBaseUnits)) *
-    60;
+    (Number(remainingBaseUnits) / Number(quote.perMinuteCeilingBaseUnits)) * 60;
 
   return remainingSeconds < HUDDLE_LOW_COLLATERAL_SECONDS
     ? { kind: "low", remainingSeconds }

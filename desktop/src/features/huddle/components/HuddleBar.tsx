@@ -11,7 +11,9 @@ import * as React from "react";
 
 import { useCustomEmoji } from "@/features/custom-emoji/hooks";
 import { EmojiPicker } from "@/features/custom-emoji/ui/EmojiPicker";
+import { netSpendableBaseUnits } from "@/features/profile/lib/agentNetworkFlow";
 import { useProfileQuery } from "@/features/profile/hooks";
+import { useNetworkSpend } from "@/features/profile/lib/useNetworkSpend";
 import { reactionEmojiUrl } from "@/shared/api/customEmoji";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { publishEvent } from "@/shared/api/eventTransport";
@@ -30,6 +32,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { getActiveTransportSelection } from "@/shared/api/transportSelection";
 import { useHuddle } from "../HuddleContext";
+import {
+  huddleCollateralCaption,
+  deriveHuddleCollateralStatus,
+} from "../lib/huddleLowCollateral";
+import { useHuddleFeeQuote } from "../lib/huddleFeeQuote";
 import { speakerLoadHint } from "../lib/speakerLoad";
 import { AddAgentDialog, type AgentAddResult } from "./AddAgentDialog";
 import { MicControls, SpeakerControls } from "./MicControls";
@@ -64,6 +71,7 @@ type HuddleBarProps = {
 const HUDDLE_DRAWER_EXIT_MS = 260;
 const HUDDLE_STATE_FALLBACK_INTERVAL_MS = 30_000;
 const HUDDLE_MODEL_STATUS_INTERVAL_MS = 10_000;
+const HUDDLE_BALANCE_REFRESH_INTERVAL_MS = 10_000;
 const HUDDLE_REACTION_NAME_MAX = 48;
 
 function isVisibleHuddleState(state: HuddleState | null) {
@@ -176,6 +184,21 @@ export function HuddleBar({
   const identityQuery = useIdentityQuery();
   const profileQuery = useProfileQuery();
   const { burstHuddleReaction } = useEmojiBurst();
+
+  // Mid-huddle low-collateral warning (buzz#68): the same per-minute fee
+  // ceiling #67 quotes before joining, checked against the live channel
+  // balance while speaking is ongoing.
+  const feeQuote = useHuddleFeeQuote();
+  const networkSpend = useNetworkSpend(identityQuery.data?.pubkey ?? "", true);
+  const remainingBaseUnits =
+    networkSpend.state.kind === "quoted"
+      ? netSpendableBaseUnits(networkSpend.state.read)
+      : null;
+  const collateralStatus = deriveHuddleCollateralStatus(
+    feeQuote,
+    remainingBaseUnits,
+  );
+  const collateralCaption = huddleCollateralCaption(collateralStatus);
 
   const isPttMode = voiceInputMode === "push_to_talk";
   const [state, setState] = React.useState<HuddleState | null>(null);
@@ -313,6 +336,23 @@ export function HuddleBar({
       setModelStatus(null); // Clear stale status on huddle end/phase change.
     };
   }, [huddlePhase]);
+
+  // Keep the low-collateral warning current while a huddle is up — only
+  // when there's a per-minute rate to check the balance against, so a relay
+  // (free) huddle never polls a channel read it has no use for.
+  const isFeeQuoted = feeQuote.kind === "quoted";
+  const refreshNetworkSpend = networkSpend.refresh;
+  React.useEffect(() => {
+    if (huddlePhase !== "active" && huddlePhase !== "connected") return;
+    if (!isFeeQuoted) return;
+
+    const id = window.setInterval(
+      () => void refreshNetworkSpend(),
+      HUDDLE_BALANCE_REFRESH_INTERVAL_MS,
+    );
+
+    return () => window.clearInterval(id);
+  }, [huddlePhase, isFeeQuoted, refreshNetworkSpend]);
 
   React.useEffect(() => {
     if (localAudioTrack) {
@@ -564,6 +604,16 @@ export function HuddleBar({
               ✕
             </button>
           </div>
+        )}
+
+        {/* Low-collateral warning (buzz#68) */}
+        {collateralCaption && (
+          <output
+            role="alert"
+            className="max-w-[280px] truncate rounded bg-destructive/10 px-2 py-1 text-xs text-destructive"
+          >
+            {collateralCaption}
+          </output>
         )}
 
         {/* Model download progress */}
