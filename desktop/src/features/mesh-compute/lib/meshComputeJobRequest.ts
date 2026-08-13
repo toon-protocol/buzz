@@ -30,7 +30,7 @@ function firstTag(tags: string[][], name: string): string[] | undefined {
 }
 
 /**
- * Parse a kind:5098 event. Returns `null` when a Required tag is missing or
+ * Parse a kind:5098 event. Returns `null` when a required tag is missing or
  * malformed — never throws on untrusted input, same convention as
  * `parseFactoryJobRequest`.
  */

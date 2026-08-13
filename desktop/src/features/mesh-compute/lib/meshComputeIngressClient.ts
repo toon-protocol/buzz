@@ -41,9 +41,14 @@ type FetchLike = (
  * to `"model-not-loaded"`: an unrecognized failure means this seller cannot
  * serve the job right now, which is the closest honest reading of the three
  * options when nothing more specific is known.
+ *
+ * The status code is part of the signature — it is what a refinement over
+ * real mesh-llm failures would key on first — but nothing branches on it
+ * today: every status that is not described by the body's keywords maps to
+ * the same fallback reason.
  */
 export function classifyMeshComputeIngressFailure(
-  status: number,
+  _status: number,
   bodyText: string,
 ): MeshComputeRefusalReason {
   const lower = bodyText.toLowerCase();
@@ -57,9 +62,9 @@ export function classifyMeshComputeIngressFailure(
   ) {
     return "context-exceeded";
   }
-  if (status === 404 || /model.*(not found|not loaded|unknown)/.test(lower)) {
-    return "model-not-loaded";
-  }
+  // Everything else — a 404, a body naming an unknown model, or a failure
+  // this classifier does not recognize at all — lands on the same reason, so
+  // there is nothing to branch on.
   return "model-not-loaded";
 }
 

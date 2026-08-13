@@ -8,7 +8,10 @@ import {
   type MeshComputeJobRequest,
   parseMeshComputeJobRequest,
 } from "@/features/mesh-compute/lib/meshComputeJobRequest";
-import { matchMeshComputeCapability } from "@/features/mesh-compute/lib/meshComputeJobValidation";
+import {
+  matchMeshComputeCapability,
+  type MeshComputeRefusalReason,
+} from "@/features/mesh-compute/lib/meshComputeJobValidation";
 import {
   publishMeshComputeAccepted,
   publishMeshComputeJobResult,
@@ -67,18 +70,15 @@ export function useMeshComputeJobServer(
       if (processedRef.current.has(request.eventId)) return;
       processedRef.current.add(request.eventId);
 
-      const match = matchMeshComputeCapability(
-        request,
-        capabilitiesRef.current,
-        pricingRef.current,
-      );
-
-      if (!match.accepted) {
+      // A decline is two events either way — the kind:7000 the buyer's retry
+      // logic reads, then the terminal kind:6098 replying to it that closes
+      // the job out — whether the seller declined before or after accepting.
+      const refuse = async (reason: MeshComputeRefusalReason) => {
         const refused = await publishMeshComputeRefused(
           {
             rootJobId: request.eventId,
             buyerPubkey: request.buyerPubkey,
-            reason: match.reason,
+            reason,
           },
           transport,
         );
@@ -92,6 +92,16 @@ export function useMeshComputeJobServer(
           },
           transport,
         );
+      };
+
+      const match = matchMeshComputeCapability(
+        request,
+        capabilitiesRef.current,
+        pricingRef.current,
+      );
+
+      if (!match.accepted) {
+        await refuse(match.reason);
         return;
       }
 
@@ -108,24 +118,7 @@ export function useMeshComputeJobServer(
       });
 
       if (outcome.kind === "refused") {
-        const refused = await publishMeshComputeRefused(
-          {
-            rootJobId: request.eventId,
-            buyerPubkey: request.buyerPubkey,
-            reason: outcome.reason,
-          },
-          transport,
-        );
-        await publishMeshComputeJobResult(
-          {
-            rootJobId: request.eventId,
-            lastEventId: refused.id,
-            buyerPubkey: request.buyerPubkey,
-            requestEvent: raw,
-            outcome: "refused",
-          },
-          transport,
-        );
+        await refuse(outcome.reason);
         return;
       }
 
