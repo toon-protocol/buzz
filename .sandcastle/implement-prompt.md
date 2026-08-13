@@ -26,12 +26,23 @@ Pay extra attention to test files that touch the relevant parts of the code.
 
 # EXECUTION
 
-If applicable, use RGR to complete the task.
+Break the issue into an ordered list of small tasks before writing code. For
+each task, use RGR:
 
 1. RED: write one test
 2. GREEN: write the implementation to pass that test
-3. REPEAT until done
+3. REPEAT until the task is done
 4. REFACTOR the code
+
+**Commit AND push after every completed task** — `git push -u origin {{BRANCH}}`
+(use `-u`: the branch has not been pushed to origin yet, so a bare `git push`
+has no upstream to publish to until the first one sets it; every push after
+that reuses it). Do this immediately, before starting the next task and
+without waiting for the full gate below. A run that is killed mid-gate or
+mid-task then leaves every already-finished task on the remote branch
+instead of losing the whole run — see buzz#163. Each task commit only needs
+to describe that task; it does not need to satisfy the full COMMIT section
+below (that applies to the final commit).
 
 # FEEDBACK LOOPS
 
@@ -49,15 +60,20 @@ buzz is a polyglot repo: a Rust workspace (`crates/*`) plus a pnpm workspace for
 
 JS dependencies were already installed by the sandbox setup hook (`pnpm install --frozen-lockfile`); re-run it only if you changed a `package.json`.
 
-If your change is confined to one side (Rust-only or JS-only), you may run only that side's commands during iteration — but run the FULL list above once before your final commit.
+If your change is confined to one side (Rust-only or JS-only), you may run only that side's commands during iteration — but run the FULL list above once after the last task, before your final commit.
 
 OUT OF SCOPE for this gate — do NOT attempt these in the sandbox: Flutter/mobile (`mobile/**`), `desktop/src-tauri` compile-level checks (clippy/check/test need GTK/WebKit system libraries and sidecar stubs the agent image does not ship), Playwright e2e suites, Postgres/Redis-backed integration tests (`just test-integration`, backend-integration, relay-e2e), `cargo-deny`, cross-compilation, and the signing/canary/release pipelines. Upstream `ci.yml` still runs its full matrix on your PR.
 
-Do not commit until every applicable gate command passes.
+Run the full gate once, after all tasks are implemented and pushed per-task
+as above. If a gate command fails, fix it, then commit and push the fix as
+its own follow-up — do not let a failing gate discard tasks that already
+passed and are already on the remote branch.
 
 # COMMIT
 
-Make a git commit. The commit message must:
+Once every task is committed/pushed and the full gate passes, make a final
+git commit (and push it) summarizing the whole change. The commit message
+must:
 
 1. Start with `RALPH:` prefix
 2. Include task completed + PRD reference
@@ -65,7 +81,9 @@ Make a git commit. The commit message must:
 4. Files changed
 5. Blockers or notes for next iteration
 
-Keep it concise.
+Keep it concise. If nothing changed since the last per-task commit (the gate
+passed on the first try), this can be that same commit — no separate empty
+commit is needed just to satisfy this format.
 
 # THE ISSUE
 

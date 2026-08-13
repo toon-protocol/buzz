@@ -295,6 +295,16 @@ try {
   //      here, minutes in, not after the review phase too.
   // Best-effort: a failure is a warning, because the review phase is still
   // worth running and the final push below fails loud.
+  //
+  // This is now a BACKSTOP, not the only recovery point: implement-prompt.md
+  // (buzz#163) has the implementer commit AND push after every completed
+  // task, using the container-global credential `onSandboxReady` wires up at
+  // job start. That closes the gap this early push alone could not — a kill
+  // WITHIN the implementer phase (e.g. mid `just clippy`, the literal buzz#163
+  // scenario) never reaches this line, since the whole `sandbox.run()` call
+  // above has to return first. This push still matters because it re-mints a
+  // FRESH token (mintAppToken) rather than reusing the job-start one the
+  // implementer's own pushes rely on, which may have gone stale on a long run.
   console.log("\nPublishing the implementer branch early (crash-recovery point).");
   await pushBranch(sandbox, "push:early", { bestEffort: true });
 
