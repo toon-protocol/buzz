@@ -49,7 +49,7 @@ use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 
 use crate::error::CliError;
-use crate::search_index::SearchIndex;
+use crate::search_index::{SearchFilters, SearchIndex};
 
 /// Hard ceiling on `limit`, so one query cannot ask the agent to serialize its
 /// whole corpus. Matches the relay bridge's `min(100)` cap.
@@ -132,7 +132,7 @@ impl SearchAgentQuery {
 /// name lives in a channel event the caller already has.
 pub fn search_response(index: &SearchIndex, query: &SearchAgentQuery) -> Value {
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
-    let hits = index.search(&query.q, &query.channels, limit);
+    let hits = index.search(&query.q, &query.channels, &SearchFilters::default(), limit);
     let rows: Vec<Value> = hits
         .iter()
         .map(|hit| {
