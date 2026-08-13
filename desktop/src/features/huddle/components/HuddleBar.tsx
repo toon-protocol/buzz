@@ -11,8 +11,8 @@ import * as React from "react";
 
 import { useCustomEmoji } from "@/features/custom-emoji/hooks";
 import { EmojiPicker } from "@/features/custom-emoji/ui/EmojiPicker";
-import { netSpendableBaseUnits } from "@/features/profile/lib/agentNetworkFlow";
 import { useProfileQuery } from "@/features/profile/hooks";
+import { netSpendableBaseUnits } from "@/features/profile/lib/agentNetworkFlow";
 import { useNetworkSpend } from "@/features/profile/lib/useNetworkSpend";
 import { reactionEmojiUrl } from "@/shared/api/customEmoji";
 import { useIdentityQuery } from "@/shared/api/hooks";
@@ -32,11 +32,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { getActiveTransportSelection } from "@/shared/api/transportSelection";
 import { useHuddle } from "../HuddleContext";
-import {
-  huddleCollateralCaption,
-  deriveHuddleCollateralStatus,
-} from "../lib/huddleLowCollateral";
 import { useHuddleFeeQuote } from "../lib/huddleFeeQuote";
+import {
+  deriveHuddleCollateralStatus,
+  huddleCollateralCaption,
+} from "../lib/huddleLowCollateral";
 import { speakerLoadHint } from "../lib/speakerLoad";
 import { AddAgentDialog, type AgentAddResult } from "./AddAgentDialog";
 import { MicControls, SpeakerControls } from "./MicControls";
@@ -187,7 +187,10 @@ export function HuddleBar({
 
   // Mid-huddle low-collateral warning (buzz#68): the same per-minute fee
   // ceiling #67 quotes before joining, checked against the live channel
-  // balance while speaking is ongoing.
+  // balance while speaking is ongoing. The read is always `isSelf` — this
+  // process pays for its own frames out of its own writer's channel — so the
+  // pubkey argument, which only steers the other-agent read path, is inert
+  // here beyond re-reading once the identity resolves.
   const feeQuote = useHuddleFeeQuote();
   const networkSpend = useNetworkSpend(identityQuery.data?.pubkey ?? "", true);
   const remainingBaseUnits =
