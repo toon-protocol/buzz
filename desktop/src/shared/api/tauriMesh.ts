@@ -17,16 +17,32 @@ export type MeshNodeState =
   | "failed";
 export type MeshNodeMode = "serve" | "client";
 
+/**
+ * Who a `mode: "serve"` node's mesh admission trusts — orthogonal to `mode`.
+ * "community" (default, Share compute) admits the resolved relay roster;
+ * "self_only" (Sell compute) admits nobody but this node's own owner id.
+ * Ignored for `mode: "client"`.
+ */
+export type MeshAdmission = "community" | "self_only";
+
 export type StartMeshNodeRequest = {
   mode: MeshNodeMode;
   modelId?: string;
   maxVramGb?: number;
   joinToken?: string;
+  /** Defaults to "community" on the backend when omitted. */
+  admission?: MeshAdmission;
 };
 
 export type MeshNodeStatus = {
   state: MeshNodeState;
   mode: MeshNodeMode | null;
+  /**
+   * Which admission deal a `mode: "serve"` node is running under — `null`
+   * when off. `mode` alone cannot tell a Sell compute node apart from a
+   * Share compute one; both report `mode: "serve"`.
+   */
+  admission: MeshAdmission | null;
   health: MeshHealth;
   apiBaseUrl: string | null;
   consoleUrl: string | null;
