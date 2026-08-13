@@ -47,6 +47,9 @@ chrono = { workspace = true }
 buzz-sdk = { workspace = true }
 buzz-core = { workspace = true }
 
+# NIP-98 signature verification for the search agent's query endpoint
+buzz-auth = { workspace = true }
+
 # Channel-key primitives (key ids, NIP-44 seal/open) shared byte-for-byte with
 # the desktop app — an agent-member seals and opens the same wire format a
 # human client does.

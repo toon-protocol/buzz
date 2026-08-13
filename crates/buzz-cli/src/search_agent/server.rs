@@ -40,9 +40,12 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::extract::{Query, State};
+use axum::extract::{Query, RawQuery, State};
+use axum::http::{header::AUTHORIZATION, HeaderMap};
 use axum::routing::get;
 use axum::{Json, Router};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
@@ -182,7 +185,43 @@ pub fn search_response(
     json!({ "hits": rows, "found": rows.len() })
 }
 
-type Shared = Arc<RwLock<SearchIndex>>;
+pub type IndexHandle = Arc<RwLock<SearchIndex>>;
+
+/// Everything a request handler needs: the index, and the base URL the agent
+/// itself is bound to (so an incoming NIP-98 `u` tag can be checked against
+/// what the client actually signed, not just parsed and trusted).
+#[derive(Clone)]
+struct QueryState {
+    index: IndexHandle,
+    /// `http://127.0.0.1:<port>`, computed once the listener is actually
+    /// bound — the same string [`crate::search_agent::run`] prints as
+    /// `queryUrl`, so client and server agree on it by construction rather
+    /// than by convention.
+    base_url: String,
+}
+
+/// Verify an `Authorization: Nostr <base64>` header (NIP-98) against the
+/// exact request the caller is making, and return the signer.
+///
+/// `None` covers every way a request can fail to be provably signed — no
+/// header, malformed base64/JSON/event, a signature that does not verify, or
+/// a `u`/`method`/`payload` tag that does not match this exact request — and
+/// they are all the same answer here on purpose. This endpoint never 401s: a
+/// request that is not provably signed gets the same empty result set as one
+/// that named no channels ([`crate::search_index::SearchIndex::search`]),
+/// so probing the header format teaches an attacker nothing a probing the
+/// scope wouldn't already.
+fn authenticate(
+    headers: &HeaderMap,
+    method: &str,
+    url: &str,
+    body: Option<&[u8]>,
+) -> Option<nostr::PublicKey> {
+    let header = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    let encoded = header.strip_prefix("Nostr ")?;
+    let event_json = String::from_utf8(BASE64.decode(encoded).ok()?).ok()?;
+    buzz_auth::verify_nip98_event(&event_json, url, method, body).ok()
+}
 
 /// `GET /search?q=…&channels=a,b&limit=20`.
 ///
@@ -191,28 +230,68 @@ type Shared = Arc<RwLock<SearchIndex>>;
 /// `serde_urlencoded`'s untyped path to reach the array/CSV deserializer below
 /// works by accident more than by contract. [`SearchAgentQuery::from_params`]
 /// says what the mapping is.
+///
+/// The signed `u` tag must match this exact URL, query string included —
+/// [`RawQuery`] carries the string exactly as the client sent it, so the
+/// comparison is byte-for-byte rather than a reserialization that could
+/// disagree with what was actually signed.
 async fn handle_get(
-    State(index): State<Shared>,
+    State(state): State<QueryState>,
+    RawQuery(raw_query): RawQuery,
     Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
 ) -> Json<Value> {
     let query = SearchAgentQuery::from_params(&params);
-    let channels = query.channels.clone();
-    Json(search_response(&*index.read().await, &query, &channels))
+    let expected_url = match raw_query {
+        Some(q) if !q.is_empty() => format!("{}/search?{q}", state.base_url),
+        _ => format!("{}/search", state.base_url),
+    };
+    let signer = authenticate(&headers, "GET", &expected_url, None);
+    let channels = if signer.is_some() {
+        query.channels.clone()
+    } else {
+        Vec::new()
+    };
+    Json(search_response(
+        &*state.index.read().await,
+        &query,
+        &channels,
+    ))
 }
 
+/// `POST /search`, body `SearchAgentQuery` JSON.
+///
+/// The body is read as raw bytes first — not straight into
+/// [`SearchAgentQuery`] — so the same bytes can both deserialize the query
+/// and verify an optional NIP-98 `payload` hash tag against exactly what was
+/// signed. A body that fails to parse as JSON degrades to the default (empty)
+/// query rather than a 400, matching [`SearchAgentQuery::from_params`]'s
+/// "never look like a different failure than an empty index" rule.
 async fn handle_post(
-    State(index): State<Shared>,
-    Json(query): Json<SearchAgentQuery>,
+    State(state): State<QueryState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
 ) -> Json<Value> {
-    let channels = query.channels.clone();
-    Json(search_response(&*index.read().await, &query, &channels))
+    let query: SearchAgentQuery = serde_json::from_slice(&body).unwrap_or_default();
+    let expected_url = format!("{}/search", state.base_url);
+    let signer = authenticate(&headers, "POST", &expected_url, Some(&body));
+    let channels = if signer.is_some() {
+        query.channels.clone()
+    } else {
+        Vec::new()
+    };
+    Json(search_response(
+        &*state.index.read().await,
+        &query,
+        &channels,
+    ))
 }
 
 /// Liveness plus enough state to tell "the agent is up but has indexed
 /// nothing" from "the agent is down", which are the two things an operator
 /// actually needs to distinguish. Channel *ids* only — never content.
-async fn handle_health(State(index): State<Shared>) -> Json<Value> {
-    let index = index.read().await;
+async fn handle_health(State(state): State<QueryState>) -> Json<Value> {
+    let index = state.index.read().await;
     Json(json!({
         "ok": true,
         "documents": index.document_count(),
@@ -222,33 +301,33 @@ async fn handle_health(State(index): State<Shared>) -> Json<Value> {
 
 /// Refuse to bind anywhere but the loopback interface.
 ///
-/// This endpoint serves decrypted private-channel text with no authentication
-/// (see the module docs). Binding it to `0.0.0.0` would publish every private
-/// channel the agent is a member of to the local network, and it is exactly
-/// the kind of mistake that is a one-character flag away — so it is an error
-/// here rather than a warning in a README.
+/// This endpoint serves decrypted private-channel text. Signed queries close
+/// the authorization gap (see the module docs), but the loopback refusal
+/// stays exactly as strict: it is defense in depth against a deployment
+/// mistake, not a substitute for authorization, and relaxing it would still
+/// publish query traffic (and the mere existence of a match) to the local
+/// network. Binding it to `0.0.0.0` is exactly the kind of mistake that is a
+/// one-character flag away — so it is an error here rather than a warning in
+/// a README.
 pub fn assert_loopback(addr: &SocketAddr) -> Result<(), CliError> {
     if addr.ip().is_loopback() {
         return Ok(());
     }
     Err(CliError::Usage(format!(
         "refusing to bind the search agent's query endpoint to {addr}: it serves decrypted \
-private-channel messages and has no authentication, so it may only listen on loopback \
-(127.0.0.1 or ::1). Put a proxy in front of it if you really mean to expose it."
+private-channel messages, so it may only listen on loopback (127.0.0.1 or ::1). Put a real \
+proxy in front of it if you really mean to expose it."
     )))
 }
 
 /// Bind the query endpoint and serve it in the background.
 ///
 /// Returns the address actually bound, so a caller that asked for port 0 —
-/// every test — learns where to talk.
-pub async fn serve(addr: SocketAddr, index: Shared) -> Result<SocketAddr, CliError> {
+/// every test — learns where to talk. Binds before constructing [`QueryState`]
+/// because `base_url` is derived from the real bound address, not the
+/// requested one — port 0 resolves to whatever the OS actually handed back.
+pub async fn serve(addr: SocketAddr, index: IndexHandle) -> Result<SocketAddr, CliError> {
     assert_loopback(&addr)?;
-    let app = Router::new()
-        .route("/health", get(handle_health))
-        .route("/search", get(handle_get).post(handle_post))
-        .with_state(index);
-
     let listener = TcpListener::bind(addr).await.map_err(|e| {
         CliError::Other(format!(
             "could not bind the search agent's query endpoint to {addr}: {e}"
@@ -257,6 +336,16 @@ pub async fn serve(addr: SocketAddr, index: Shared) -> Result<SocketAddr, CliErr
     let bound = listener
         .local_addr()
         .map_err(|e| CliError::Other(format!("could not read the bound address: {e}")))?;
+
+    let state = QueryState {
+        index,
+        base_url: format!("http://{bound}"),
+    };
+    let app = Router::new()
+        .route("/health", get(handle_health))
+        .route("/search", get(handle_get).post(handle_post))
+        .with_state(state);
+
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
@@ -466,7 +555,8 @@ mod tests {
         assert_eq!(out["hits"][0]["eventId"], "in-range");
     }
 
-    /// The endpoint has no auth, so the bind address is the whole perimeter.
+    /// Defense in depth: signed queries close the authorization gap, but the
+    /// bind address stays a hard perimeter regardless.
     #[test]
     fn binding_off_loopback_is_refused() {
         assert!(assert_loopback(&"127.0.0.1:8788".parse().unwrap()).is_ok());
@@ -475,5 +565,94 @@ mod tests {
         let err = assert_loopback(&"0.0.0.0:8788".parse().unwrap()).unwrap_err();
         assert!(matches!(err, CliError::Usage(_)));
         assert!(assert_loopback(&"192.168.1.10:8788".parse().unwrap()).is_err());
+    }
+
+    // ─── NIP-98 authentication ──────────────────────────────────────────────
+
+    const AUTH_URL: &str = "http://127.0.0.1:8788/search";
+
+    fn auth_header(keys: &nostr::Keys, method: &str, url: &str, payload: Option<&[u8]>) -> String {
+        let mut tags = vec![
+            nostr::Tag::parse(["u", url]).unwrap(),
+            nostr::Tag::parse(["method", method]).unwrap(),
+        ];
+        if let Some(body) = payload {
+            use sha2::Digest as _;
+            let hash = hex::encode(sha2::Sha256::digest(body));
+            tags.push(nostr::Tag::parse(["payload", &hash]).unwrap());
+        }
+        let event = nostr::EventBuilder::new(nostr::Kind::HttpAuth, "")
+            .tags(tags)
+            .sign_with_keys(keys)
+            .unwrap();
+        format!(
+            "Nostr {}",
+            BASE64.encode(serde_json::to_string(&event).unwrap())
+        )
+    }
+
+    fn headers_with(auth: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, auth.parse().unwrap());
+        headers
+    }
+
+    #[test]
+    fn a_missing_authorization_header_authenticates_to_nobody() {
+        assert!(authenticate(&HeaderMap::new(), "GET", AUTH_URL, None).is_none());
+    }
+
+    #[test]
+    fn a_well_formed_signature_authenticates_to_its_signer() {
+        let keys = nostr::Keys::generate();
+        let header = auth_header(&keys, "GET", AUTH_URL, None);
+        let signer = authenticate(&headers_with(&header), "GET", AUTH_URL, None);
+        assert_eq!(signer, Some(keys.public_key()));
+    }
+
+    #[test]
+    fn a_payload_tag_is_checked_against_the_actual_body() {
+        let keys = nostr::Keys::generate();
+        let body = br#"{"q":"deploy","channels":["eng"]}"#;
+        let header = auth_header(&keys, "POST", AUTH_URL, Some(body));
+
+        assert!(
+            authenticate(&headers_with(&header), "POST", AUTH_URL, Some(body)).is_some(),
+            "the signed hash matches the real body"
+        );
+        assert!(
+            authenticate(&headers_with(&header), "POST", AUTH_URL, Some(b"tampered")).is_none(),
+            "a body swapped after signing must not authenticate"
+        );
+    }
+
+    #[test]
+    fn a_url_or_method_mismatch_authenticates_to_nobody() {
+        let keys = nostr::Keys::generate();
+        let header = auth_header(&keys, "GET", AUTH_URL, None);
+
+        assert!(authenticate(&headers_with(&header), "POST", AUTH_URL, None).is_none());
+        assert!(authenticate(
+            &headers_with(&header),
+            "GET",
+            "http://127.0.0.1:8788/search?q=other",
+            None
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn garbage_in_the_authorization_header_authenticates_to_nobody() {
+        for auth in [
+            "Nostr not-base64!!",
+            "Nostr ",
+            "Basic dXNlcjpwYXNz",
+            &BASE64.encode("not an event"),
+        ] {
+            assert!(
+                authenticate(&headers_with(auth), "GET", AUTH_URL, None).is_none(),
+                "{auth} must not authenticate"
+            );
+        }
     }
 }

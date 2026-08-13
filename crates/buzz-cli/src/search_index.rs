@@ -780,7 +780,7 @@ mod tests {
         let scope = vec!["eng".to_string()];
 
         let filters = SearchFilters {
-            authors: &[alice.clone()],
+            authors: std::slice::from_ref(&alice),
             ..Default::default()
         };
         assert_eq!(

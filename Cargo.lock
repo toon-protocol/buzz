@@ -909,6 +909,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64",
+ "buzz-auth",
  "buzz-channel-crypto",
  "buzz-core",
  "buzz-persona",
