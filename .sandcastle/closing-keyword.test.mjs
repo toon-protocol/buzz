@@ -4,7 +4,9 @@ import { matchClosingKeywordIssueNumber } from "./closing-keyword.mjs";
 
 test("matches Closes #N", () => {
   assert.equal(
-    matchClosingKeywordIssueNumber("One-line summary.\n\nCloses #170\n\nMore body."),
+    matchClosingKeywordIssueNumber(
+      "One-line summary.\n\nCloses #170\n\nMore body.",
+    ),
     "170",
   );
 });
@@ -31,9 +33,15 @@ test("does not match a bare issue reference with no keyword", () => {
 });
 
 test("returns null for a body with no keyword at all", () => {
-  assert.equal(matchClosingKeywordIssueNumber("Just a plain PR description."), null);
+  assert.equal(
+    matchClosingKeywordIssueNumber("Just a plain PR description."),
+    null,
+  );
 });
 
 test("returns the first match when a body somehow has more than one", () => {
-  assert.equal(matchClosingKeywordIssueNumber("Closes #1\n\nAlso fixes #2"), "1");
+  assert.equal(
+    matchClosingKeywordIssueNumber("Closes #1\n\nAlso fixes #2"),
+    "1",
+  );
 });

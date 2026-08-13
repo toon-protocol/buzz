@@ -52,6 +52,7 @@
 import { execFileSync } from "node:child_process";
 import * as sandcastle from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+import { matchClosingKeywordIssueNumber } from "./closing-keyword.mjs";
 import { mintAppToken } from "./mint-app-token.ts";
 import {
   resolveFactoryOpsIdentity,
@@ -394,21 +395,50 @@ try {
     if (openPrs.length > 0) {
       const pr = openPrs[0]!;
       console.log(`\nVerified: PR #${pr.number} is open — ${pr.url}`);
-      // The formal verdict lands on the PR now that it exists, submitted as
-      // factory-ops (toon-meta#282): clean → APPROVE (a machine verdict —
-      // see toon-meta's FACTORY.md, "What a factory-ops approval attests");
-      // blocking → REQUEST_CHANGES with the findings plus `needs:human`
-      // (toon-meta#275). The author≠approver guard runs inside the submission
-      // and fails the job loudly rather than degrading to a COMMENTED review.
-      submitFactoryOpsVerdict(String(pr.number), review.verdict, {
-        number: issueNumber,
-        title: issueTitle,
-      });
-      console.log(
-        blocking
-          ? "Blocking findings requested changes — a human decides."
-          : "Formal approval submitted.",
+
+      // FAIL LOUD (buzz#170): the PR body must carry a same-repo closing
+      // keyword referencing THIS issue. open-pr-prompt.md instructs the
+      // agent to write `Closes #{{TASK_ID}}`, but the open-pr phase is an
+      // agent step, not deterministic host code — exactly like the open-PR
+      // check above, it must be verified from the host rather than trusted.
+      // Without the keyword, merging this PR would never close the ticket
+      // (the unblock dispatcher never fires) and review-verdict.ts's
+      // resolveIssueFromPrBody would silently drop the Spec axis.
+      const prBody = execFileSync(
+        "gh",
+        ["pr", "view", String(pr.number), "--json", "body", "--jq", ".body"],
+        { encoding: "utf8" },
       );
+      const closesNumber = matchClosingKeywordIssueNumber(prBody);
+
+      if (closesNumber !== String(issueNumber)) {
+        openPrVerificationError =
+          `\nERROR: PR #${pr.number} (${pr.url}) does not close issue ` +
+          `#${issueNumber}.\n` +
+          `  Closing keyword found in body: ${closesNumber ? `#${closesNumber}` : "none"}\n` +
+          `  The PR body must contain \`Closes #${issueNumber}\` (or ` +
+          `\`Fixes\`/\`Resolves\`) — see open-pr-prompt.md. Without it the ` +
+          `merge will not close this ticket and the reviewer cannot resolve ` +
+          `the Spec axis. The Actions job is failing deliberately so this ` +
+          `is not mistaken for success.`;
+      } else {
+        // The formal verdict lands on the PR now that it exists, submitted as
+        // factory-ops (toon-meta#282): clean → APPROVE (a machine verdict —
+        // see toon-meta's FACTORY.md, "What a factory-ops approval attests");
+        // blocking → REQUEST_CHANGES with the findings plus `needs:human`
+        // (toon-meta#275). The author≠approver guard runs inside the
+        // submission and fails the job loudly rather than degrading to a
+        // COMMENTED review.
+        submitFactoryOpsVerdict(String(pr.number), review.verdict, {
+          number: issueNumber,
+          title: issueTitle,
+        });
+        console.log(
+          blocking
+            ? "Blocking findings requested changes — a human decides."
+            : "Formal approval submitted.",
+        );
+      }
     } else {
       // No open PR. Gather diagnostics (all via the authenticated host `gh`).
       const nwo = execFileSync(
