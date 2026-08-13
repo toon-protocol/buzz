@@ -578,3 +578,90 @@ test("opting out of BTP falls back to one-shot ILP-over-HTTP", () => {
     proxyUrl: config.proxyUrl,
   });
 });
+
+/**
+ * buzz#135 — the factory-job delivery seam. The provider-session delivery
+ * port is constructed BEFORE the client (so its `handleJob` can register as
+ * `ToonClientConfig.jobHandler`) and handed to the factory exactly when the
+ * transport runs a BTP session; on one-shot ILP-over-HTTP there is no port
+ * at all, because no server-originated PREPARE could ever reach it.
+ */
+test("the factory receives the delivery port on the default BTP config", async () => {
+  const client = scriptedClient();
+  let factoryJobDelivery;
+  const writer = new ToonPaidWriter(CONFIG, (_config, jobDelivery) => {
+    factoryJobDelivery = jobDelivery;
+    return Promise.resolve(client);
+  });
+
+  const port = await writer.getJobDeliveryPort();
+
+  assert.equal(writer.supportsJobDelivery(), true);
+  assert.equal(typeof factoryJobDelivery.handleJob, "function");
+  assert.equal(typeof port.encryptArtifact, "function");
+  assert.equal(typeof port.waitForPayment, "function");
+  // The port the provider surface drives IS the port whose handleJob was
+  // registered — arming an increment on any other instance would stage a key
+  // no PREPARE ever releases.
+  assert.equal(port, factoryJobDelivery);
+});
+
+test("HTTP-only transport gets no port and refuses delivery with a reason", async () => {
+  const config = resolveToonTransportConfig({
+    BUZZ_TOON_MNEMONIC: "test test test",
+    BUZZ_TOON_BTP_URL: "off",
+  });
+  const client = scriptedClient();
+  let factoryArgs;
+  const writer = new ToonPaidWriter(config, (...args) => {
+    factoryArgs = args;
+    return Promise.resolve(client);
+  });
+
+  assert.equal(writer.supportsJobDelivery(), false);
+  await assert.rejects(
+    () => writer.getJobDeliveryPort(),
+    /BTP session.*quote but never release/s,
+  );
+
+  // Quoting (an ordinary paid write) still works — and passes no port.
+  await writer.publish(EVENT);
+  assert.equal(factoryArgs[1], undefined);
+});
+
+test("the delivery port encrypt→handleJob roundtrip releases exactly the staged key", async () => {
+  const client = scriptedClient();
+  const writer = new ToonPaidWriter(CONFIG, () => Promise.resolve(client));
+  const port = await writer.getJobDeliveryPort();
+
+  const encrypted = await port.encryptArtifact(
+    new TextEncoder().encode("increment artifact"),
+  );
+  const waiting = port.waitForPayment({
+    offerEventId: "offer-1",
+    conditionHex: encrypted.conditionHex,
+    priceUsdc: "1000000",
+  });
+
+  const conditionBytes = Uint8Array.from(
+    encrypted.conditionHex.match(/.{2}/g).map((byte) => parseInt(byte, 16)),
+  );
+  const answer = await port.handleJob({
+    amount: 1000000n,
+    destination: "g.toon.client",
+    executionCondition: conditionBytes,
+    expiresAt: new Date(Date.now() + 30_000),
+    data: new Uint8Array(),
+  });
+
+  assert.equal(await waiting, true);
+  // The fulfillment is the artifact key: decrypting with it must succeed and
+  // is condition-checked by the rig helper the buyer tail uses.
+  const { decryptIncrementArtifact } = await import("@toon-protocol/rig");
+  const plaintext = decryptIncrementArtifact(
+    encrypted.ciphertext,
+    answer.fulfillment,
+    encrypted.conditionHex,
+  );
+  assert.equal(new TextDecoder().decode(plaintext), "increment artifact");
+});

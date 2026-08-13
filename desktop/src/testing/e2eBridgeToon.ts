@@ -1,6 +1,9 @@
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
+
 import { recordNetworkSpendWrite } from "@/features/profile/lib/networkSpendLiveStore";
 import type { ChannelCloseState } from "@/features/payments/lib/paymentsOverview";
 import type { RelaySubscriptionFilter } from "@/shared/api/relayClientShared";
+import type { ProviderJobDeliveryPort } from "@/shared/api/toonJobDelivery";
 import type { PaidClientFactory } from "@/shared/api/toonPaidWriter";
 import type {
   ToonSocket,
@@ -126,73 +129,84 @@ function buildMockClaimStateResult(kind: MockToonClaimStateFixtureKind) {
  * TTL absent and sets `window.__BUZZ_E2E__.mock.toonSessionLeaseTtlMs` live
  * mid-test — the next successful write (quote or heartbeat, whichever lands
  * first) captures the lease, exactly like the real `ToonClient`.
+ *
+ * `onJobDeliveryPort` (buzz#135) is called with the REAL
+ * `ClientJobDeliveryPort` `ToonPaidWriter.ensureClient()` constructs and
+ * would otherwise register as `ToonClientConfig.jobHandler` — this fake
+ * client has no connector to route a server-originated PREPARE through, so
+ * the bridge captures the port instance itself and drives it directly (see
+ * `payArmedFactoryJobIncrement`) to simulate "the buyer paid".
  */
 export function createE2eToonPaidClient(
   getClaimStateFixture: () => MockToonClaimStateFixtureKind | undefined,
   getSessionLeaseTtlMsFixture: () => number | undefined = () => undefined,
+  onJobDeliveryPort?: (port: ProviderJobDeliveryPort) => void,
 ): PaidClientFactory {
-  return async () => ({
-    async start() {
-      return undefined;
-    },
-    async stop() {
-      return undefined;
-    },
-    async getRoutePrice() {
-      return 0n;
-    },
-    async openChannel() {
-      return MOCK_TOON_CHANNEL_ID;
-    },
-    async signBalanceProof(channelId: string, amount: bigint) {
-      return { channelId, nonce: 1, transferredAmount: amount };
-    },
-    async publishEvent(event: RelayEvent) {
-      return { success: true, eventId: event.id };
-    },
-    getLastConnectorRouteTerms() {
-      const sessionLeaseTtlMs = getSessionLeaseTtlMsFixture();
-      return sessionLeaseTtlMs === undefined
-        ? undefined
-        : { extra: { session_lease_ttl_ms: sessionLeaseTtlMs } };
-    },
-    async uploadBlob() {
-      return {
-        success: true,
-        txId: "e2e-mock-toon-tx",
-        eventId: "e2e-mock-toon-blob",
-      };
-    },
-    async sendSwapPacket() {
-      return { accepted: true, fulfillment: btoa("e2e-mock-fulfillment") };
-    },
-    getChannelCumulativeAmount() {
-      return 100000n;
-    },
-    getChannelDepositTotal() {
-      return 500000n;
-    },
-    getChannelCloseState(): ChannelCloseState {
-      return "open";
-    },
-    getSettleableAt() {
-      return undefined;
-    },
-    async getClaimState() {
-      return [buildMockClaimStateResult(getClaimStateFixture() ?? "funded")];
-    },
-    async depositToChannel(channelId: string, amount: string | bigint) {
-      const total = typeof amount === "bigint" ? amount : BigInt(amount);
-      return { channelId, depositTotal: total.toString() };
-    },
-    async closeChannel(channelId: string) {
-      const now = String(Date.now());
-      return { channelId, closedAt: now, settleableAt: now };
-    },
-    async settleChannel(channelId: string) {
-      return { channelId };
-    },
-  });
+  return async (_config, jobDelivery) => {
+    if (jobDelivery) onJobDeliveryPort?.(jobDelivery);
+    return {
+      async start() {
+        return undefined;
+      },
+      async stop() {
+        return undefined;
+      },
+      async getRoutePrice() {
+        return 0n;
+      },
+      async openChannel() {
+        return MOCK_TOON_CHANNEL_ID;
+      },
+      async signBalanceProof(channelId: string, amount: bigint) {
+        return { channelId, nonce: 1, transferredAmount: amount };
+      },
+      async publishEvent(event: RelayEvent) {
+        return { success: true, eventId: event.id };
+      },
+      getLastConnectorRouteTerms() {
+        const sessionLeaseTtlMs = getSessionLeaseTtlMsFixture();
+        return sessionLeaseTtlMs === undefined
+          ? undefined
+          : { extra: { session_lease_ttl_ms: sessionLeaseTtlMs } };
+      },
+      async uploadBlob() {
+        return {
+          success: true,
+          txId: "e2e-mock-toon-tx",
+          eventId: "e2e-mock-toon-blob",
+        };
+      },
+      async sendSwapPacket() {
+        return { accepted: true, fulfillment: btoa("e2e-mock-fulfillment") };
+      },
+      getChannelCumulativeAmount() {
+        return 100000n;
+      },
+      getChannelDepositTotal() {
+        return 500000n;
+      },
+      getChannelCloseState(): ChannelCloseState {
+        return "open";
+      },
+      getSettleableAt() {
+        return undefined;
+      },
+      async getClaimState() {
+        return [buildMockClaimStateResult(getClaimStateFixture() ?? "funded")];
+      },
+      async depositToChannel(channelId: string, amount: string | bigint) {
+        const total = typeof amount === "bigint" ? amount : BigInt(amount);
+        return { channelId, depositTotal: total.toString() };
+      },
+      async closeChannel(channelId: string) {
+        const now = String(Date.now());
+        return { channelId, closedAt: now, settleableAt: now };
+      },
+      async settleChannel(channelId: string) {
+        return { channelId };
+      },
+    };
+  };
 }
 
 /**
@@ -318,4 +332,33 @@ export function seedMockNetworkBurnRateReceipt(amountBaseUnits: bigint): void {
     destination: MOCK_TOON_CHANNEL_ID,
     eventId: "e2e-mock-burn-seed",
   });
+}
+
+/**
+ * Simulate "the buyer paid the armed increment" (buzz#135) by calling the
+ * job-delivery port's `handleJob` directly — the same `JobHandler` a real
+ * `ToonClient` would register as `ToonClientConfig.jobHandler` and a real
+ * connector would invoke as a server-originated BTP MESSAGE carrying the
+ * buyer's paying PREPARE. `conditionHex` must be the offer's own `condition`
+ * tag: `ClientJobDeliveryPort.handleJob` refuses (throws) any condition it
+ * did not just stage via `encryptArtifact` + arm via `waitForPayment` — see
+ * `@toon-protocol/rig`'s `ClientJobDeliveryPort` doc for the one-armed-
+ * increment-at-a-time contract this enforces.
+ *
+ * Resolves the fulfillment (hex) `handleJob` released — the artifact's
+ * decryption key — so a spec can assert it decrypts the offer's ciphertext,
+ * exactly like a real buyer's payment receipt would.
+ */
+export async function payArmedFactoryJobIncrement(
+  port: ProviderJobDeliveryPort,
+  conditionHex: string,
+): Promise<string> {
+  const answer = await port.handleJob({
+    amount: 0n,
+    destination: "e2e-mock-buyer-destination",
+    executionCondition: hexToBytes(conditionHex),
+    expiresAt: new Date(Date.now() + 60_000),
+    data: new Uint8Array(),
+  });
+  return bytesToHex(answer.fulfillment);
 }

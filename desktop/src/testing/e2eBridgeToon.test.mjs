@@ -25,6 +25,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  ClientJobDeliveryPort,
+  decryptIncrementArtifact,
+} from "@toon-protocol/rig";
+
+import {
   getNetworkSpendLiveSnapshot,
   resetNetworkSpendLiveStore,
 } from "@/features/profile/lib/networkSpendLiveStore";
@@ -33,8 +38,13 @@ import {
   createE2eToonPaidClient,
   createE2eToonSocketFactory,
   MOCK_TOON_CHANNEL_ID,
+  payArmedFactoryJobIncrement,
   seedMockNetworkBurnRateReceipt,
 } from "./e2eBridgeToon.ts";
+
+function hexToBytes(hex) {
+  return Uint8Array.from(hex.match(/.{2}/g).map((byte) => parseInt(byte, 16)));
+}
 
 describe("createE2eToonPaidClient", () => {
   it("funded fixture reports a healthy deposit/claimed spread", async () => {
@@ -260,5 +270,82 @@ describe("createE2eToonSocketFactory", () => {
     await delivered;
 
     assert.deepEqual(frames, [["EOSE", "sub-3"]]);
+  });
+});
+
+describe("createE2eToonPaidClient job-delivery capture (buzz#135)", () => {
+  it("calls onJobDeliveryPort with the real port the factory was given", async () => {
+    const jobDelivery = new ClientJobDeliveryPort();
+    let captured = null;
+    const factory = createE2eToonPaidClient(
+      () => "funded",
+      () => undefined,
+      (port) => {
+        captured = port;
+      },
+    );
+
+    await factory({}, jobDelivery);
+
+    assert.equal(captured, jobDelivery);
+  });
+
+  it("never calls onJobDeliveryPort when the factory runs without one", async () => {
+    let called = false;
+    const factory = createE2eToonPaidClient(
+      () => "funded",
+      () => undefined,
+      () => {
+        called = true;
+      },
+    );
+
+    await factory({});
+
+    assert.equal(called, false);
+  });
+});
+
+describe("payArmedFactoryJobIncrement", () => {
+  it("drives handleJob and releases a fulfillment that decrypts the offer's own ciphertext", async () => {
+    const port = new ClientJobDeliveryPort();
+    const encrypted = await port.encryptArtifact(
+      new TextEncoder().encode("the delivered increment"),
+    );
+    const waiting = port.waitForPayment({
+      offerEventId: "offer-1",
+      conditionHex: encrypted.conditionHex,
+      priceUsdc: "1000000",
+    });
+
+    const fulfillmentHex = await payArmedFactoryJobIncrement(
+      port,
+      encrypted.conditionHex,
+    );
+
+    assert.equal(await waiting, true);
+    // Round-trip through the SAME condition-checked decrypt the buyer tail
+    // uses (`factoryJobArtifact.ts`) — proves the released fulfillment is
+    // the real key, not just a plausible-looking hex string.
+    const plaintext = decryptIncrementArtifact(
+      encrypted.ciphertext,
+      hexToBytes(fulfillmentHex),
+      encrypted.conditionHex,
+    );
+    assert.equal(
+      new TextDecoder().decode(plaintext),
+      "the delivered increment",
+    );
+  });
+
+  it("throws when the condition does not match the currently armed increment", async () => {
+    const port = new ClientJobDeliveryPort();
+    await port.encryptArtifact(new TextEncoder().encode("x"));
+    // Staged via encryptArtifact but never armed via waitForPayment.
+
+    await assert.rejects(
+      () => payArmedFactoryJobIncrement(port, "00".repeat(32)),
+      /no factory-job increment is awaiting payment/,
+    );
   });
 });
