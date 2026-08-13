@@ -3,7 +3,6 @@ import {
   startChannelKeyInbox,
 } from "@/shared/api/channelKeyInbox";
 import { seedChannelKeysFromEnv } from "@/shared/api/channelKeyStore";
-import { getIdentitySecretKey } from "@/shared/api/identitySecretKey";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import { getTransportEnv } from "@/shared/api/tauriTransport";
 
@@ -45,11 +44,9 @@ let inbox: ChannelKeyInbox | null = null;
  * for a relay to catch us up, and a relay that is slow or unreachable must
  * delay a channel unlocking, not the window opening.
  *
- * The user's secret key is passed as a *thunk*, not a value. Reading it eagerly
- * would take a keychain round trip on every launch for a thing most sessions
- * never need — and on the mocked E2E bridge it consumed a `get_nsec` result
- * the onboarding-backup specs had sequenced for the UI, which is the concrete
- * version of the same complaint.
+ * Unwrapping goes through the Rust seal/unseal commands (buzz#43), so the
+ * user's secret key never enters the renderer for this — no keychain thunk to
+ * pass, no `get_nsec` round trip to sequence against the mocked E2E bridge.
  *
  * Never throws, and returns whether it started. Three ordinary situations
  * leave it stopped — no Tauri host (a browser dev server), no identity yet
@@ -63,10 +60,7 @@ export async function installChannelKeyInbox(): Promise<boolean> {
 
   try {
     const identity = await getIdentity();
-    inbox = await startChannelKeyInbox({
-      pubkey: identity.pubkey,
-      getSecretKey: getIdentitySecretKey,
-    });
+    inbox = await startChannelKeyInbox({ pubkey: identity.pubkey });
     return true;
   } catch (error) {
     console.warn(

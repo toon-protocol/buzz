@@ -21,6 +21,7 @@ import {
   formatChannelKey,
   generateChannelKey,
 } from "./channelEncryption.ts";
+import { unwrapChannelKey, wrapChannelKey } from "./channelKeyDelivery.ts";
 import { installChannelKeyEpochSync } from "./channelKeyEpoch.ts";
 import { startChannelKeyInbox } from "./channelKeyInbox.ts";
 import { rotateChannelKeyForRemoval } from "./channelKeyRotation.ts";
@@ -84,7 +85,8 @@ function rotationPorts(who, options = {}) {
     minted,
     ports: {
       identity: async () => ({ pubkey: who.pubkey }),
-      secretKey: async () => who.secretKey,
+      wrap: async (input) =>
+        wrapChannelKey({ ...input, senderSecretKey: who.secretKey }),
       sign: async (template) => {
         clock += 1;
         return fromWire(
@@ -445,7 +447,7 @@ test("a survivor unlocks the new epoch with no manual step", async () => {
   transport.deliver(genesisList(oldKey));
   const inbox = await startChannelKeyInbox({
     pubkey: survivor.pubkey,
-    getSecretKey: async () => survivor.secretKey,
+    unwrap: async (event) => unwrapChannelKey(event, survivor.secretKey),
     subscribe: transport.subscribe,
     onEvent: () => {},
   });
@@ -491,7 +493,7 @@ test("a survivor whose list arrives before the wrap still switches", async () =>
   transport.deliver(genesisList(oldKey));
   const inbox = await startChannelKeyInbox({
     pubkey: survivor.pubkey,
-    getSecretKey: async () => survivor.secretKey,
+    unwrap: async (event) => unwrapChannelKey(event, survivor.secretKey),
     subscribe: transport.subscribe,
     onEvent: () => {},
   });
@@ -526,7 +528,7 @@ test("the removed member keeps history and loses everything after", async () => 
   const stopEpochSync = installChannelKeyEpochSync();
   const inbox = await startChannelKeyInbox({
     pubkey: removed.pubkey,
-    getSecretKey: async () => removed.secretKey,
+    unwrap: async (event) => unwrapChannelKey(event, removed.secretKey),
     subscribe: transport.subscribe,
     onEvent: () => {},
   });
