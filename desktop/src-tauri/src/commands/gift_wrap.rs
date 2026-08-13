@@ -88,7 +88,7 @@ async fn unseal_gift_wrap_with_keys(
                 .iter()
                 .map(|tag| tag.as_slice().to_vec())
                 .collect(),
-            created_at: unwrapped.rumor.created_at.as_u64(),
+            created_at: unwrapped.rumor.created_at.as_secs(),
         })),
         // A wrap for another recipient fails the MAC inside `extract_rumor`,
         // exactly like the TS-only path this replaces. That is the common
