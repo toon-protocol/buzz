@@ -37,6 +37,8 @@ mod media_snapshot_png;
 mod media_transcode;
 #[cfg(feature = "mesh-llm")]
 pub(crate) mod mesh_llm;
+#[cfg(feature = "mesh-llm")]
+mod mesh_llm_plan;
 mod messages;
 mod notifications;
 mod observer_archive;

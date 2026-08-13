@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 mod coordinator;
 pub(crate) use coordinator::{publish_current_status_once, publish_stopped_status_once_at};
 pub use coordinator::{start_coordinator, MeshCoordinator, KIND_BUZZ_MESH_MEMBER_STATUS};
@@ -30,6 +28,11 @@ pub(crate) use recovery::{
     MeshRuntimeRecovery,
 };
 
+mod status_view;
+pub(super) use status_view::dedupe_models;
+pub use status_view::models_from_status_payload;
+use status_view::{health_from_payload, node_state_from_payload};
+
 mod usage;
 pub use usage::{serving_usage_from_payload, MeshServingUsage};
 
@@ -44,6 +47,12 @@ use std::time::Duration;
 
 const DEFAULT_MESH_API_PORT: u16 = 9337;
 const DEFAULT_MESH_CONSOLE_PORT: u16 = 3131;
+/// Host of the ingress URLs this runtime reports, identical in both
+/// [`MeshAdmission`] modes. It mirrors where the pinned SDK actually listens:
+/// its `listen_all` defaults to false and Buzz never enables it, so the API
+/// and console listeners stay on loopback. Exposing the ingress off-box is an
+/// unmade decision with a new threat model.
+const MESH_LOOPBACK_HOST: &str = "127.0.0.1";
 const MESH_STATUS_KIND: u64 = KIND_BUZZ_MESH_MEMBER_STATUS as u64;
 const MESH_API_PORT_ENV: &str = "BUZZ_MESH_API_PORT";
 const MESH_CONSOLE_PORT_ENV: &str = "BUZZ_MESH_CONSOLE_PORT";
@@ -177,6 +186,25 @@ pub enum MeshNodeMode {
     Client,
 }
 
+/// Who this node's mesh admission trusts, orthogonal to [`MeshNodeMode`].
+/// Sharing and selling are two admission deals on one `Serve` mode, not two
+/// modes — one enum would make them mutually exclusive on the single
+/// runtime slot, foreclosing running both at once (epic toon-meta#265:
+/// independently switchable).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MeshAdmission {
+    /// Share Compute: admit the resolved community roster (`trusted_owner_ids`).
+    /// Pre-existing behavior; stays the default so no other caller changes shape.
+    #[default]
+    Community,
+    /// Sell Compute: admit exactly this node's own owner id, full stop.
+    /// `trusted_owner_ids` is never consulted (epic toon-meta#265 decision 2:
+    /// "a market seller locks mesh admission to itself"; the DVM is the
+    /// door, iroh is not a door at all).
+    SelfOnly,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MeshNodeState {
@@ -206,14 +234,17 @@ pub struct StartMeshNodeRequest {
     /// workspace switches; moving a share requires an explicit stop/start.
     #[serde(default, skip_deserializing)]
     pub relay_url: Option<String>,
-    /// Mesh owner ids admitted to this node (the member roster from
-    /// member-signed discovery notes). `None` = caller did not resolve a roster
-    /// (tests, direct invocations): the node runs without allowlist
-    /// enforcement, matching an open relay. `Some` = enforce
-    /// `TrustPolicy::Allowlist` over exactly these owners (self is always
-    /// included by the caller).
+    /// Mesh owner ids admitted under `MeshAdmission::Community`. `None` = no
+    /// roster resolved: runs without allowlist enforcement, matching an open
+    /// relay. `Some` = enforce `TrustPolicy::Allowlist` over these owners
+    /// (self always included). Ignored under `MeshAdmission::SelfOnly`.
     #[serde(default)]
     pub trusted_owner_ids: Option<Vec<String>>,
+    /// Who this node's mesh admission trusts; defaults to `Community`.
+    /// Serve-only: a `Client` node enforces no allowlist of its own, so it
+    /// keeps deriving trust from `trusted_owner_ids` whatever this says.
+    #[serde(default)]
+    pub admission: MeshAdmission,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -389,13 +420,16 @@ impl DesktopMeshRuntime {
                 if let Some(join_token) = request.join_token.as_deref() {
                     builder = builder.join_token(join_token);
                 }
-                // Admission: present our owner attestation, and when a member
-                // roster was resolved, admit only those owners. Membership in
-                // the Buzz relay is the source of the roster; possession of a
-                // dial pointer or relay reachability admits nobody.
+                // Admission: present our owner attestation, then decide who
+                // may join — Community admits a resolved member roster,
+                // SelfOnly admits nobody but this node.
                 let identity = ensure_owner_identity()?;
                 builder = builder.owner_key(identity.keystore_path.clone());
-                if let Some(owners) = normalized_roster(&request.trusted_owner_ids, &identity) {
+                if let Some(owners) = resolve_serve_trust_owners(
+                    request.admission,
+                    &request.trusted_owner_ids,
+                    &identity,
+                ) {
                     builder = builder
                         .owner_required(true)
                         .trust_policy(TrustPolicy::Allowlist)
@@ -448,8 +482,8 @@ impl DesktopMeshRuntime {
             id: MESH_RUNTIME_ID_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             handle: tokio::sync::Mutex::new(handle),
             mode: request.mode,
-            api_base_url: format!("http://127.0.0.1:{api_port}/v1"),
-            console_url: format!("http://127.0.0.1:{console_port}"),
+            api_base_url: format!("http://{MESH_LOOPBACK_HOST}:{api_port}/v1"),
+            console_url: format!("http://{MESH_LOOPBACK_HOST}:{console_port}"),
             model_id,
             model_name,
             start_request: request,
@@ -789,166 +823,27 @@ fn normalized_roster(
     Some(owners)
 }
 
+/// Resolve the allowlist enforcement for a `Serve` node by admission mode.
+/// `SelfOnly` ignores `trusted_owner_ids` — always exactly this node's own
+/// owner id, never wider (epic toon-meta#265 decision 2: a market seller's
+/// admission must not be widenable by any roster a caller resolved).
+/// `Community` is unchanged: defers to `normalized_roster`.
+fn resolve_serve_trust_owners(
+    admission: MeshAdmission,
+    trusted_owner_ids: &Option<Vec<String>>,
+    identity: &identity::OwnerIdentity,
+) -> Option<Vec<String>> {
+    match admission {
+        MeshAdmission::SelfOnly => Some(vec![identity.owner_id.clone()]),
+        MeshAdmission::Community => normalized_roster(trusted_owner_ids, identity),
+    }
+}
+
 fn sanitize_no_leak_request(request: &mut StartMeshNodeRequest) -> anyhow::Result<()> {
     if let Some(join_token) = request.join_token.as_mut() {
         *join_token = validate_advertised_endpoint(join_token)?.join_token;
     }
     Ok(())
-}
-
-fn health_from_payload(payload: &serde_json::Value) -> MeshHealth {
-    if let Some(reason) = find_progressish_reason(payload) {
-        return MeshHealth::degraded(reason);
-    }
-    if let Some(status) = payload.get("status").and_then(serde_json::Value::as_str) {
-        if matches!(status, "failed" | "error") {
-            return MeshHealth::failed(status);
-        }
-    }
-    MeshHealth::ok()
-}
-
-fn find_progressish_reason(value: &serde_json::Value) -> Option<String> {
-    // Match a typed phase field (not stringify-and-grep over the whole payload).
-    let phase = ["phase", "status", "state", "stage"]
-        .into_iter()
-        .find_map(|key| value.get(key).and_then(serde_json::Value::as_str))?
-        .to_ascii_lowercase();
-    for needle in ["download", "fetch", "resolv", "prepar"] {
-        if phase.contains(needle) {
-            return Some(match needle {
-                "download" => "downloading model".to_string(),
-                "fetch" => "fetching model".to_string(),
-                "resolv" => "resolving model".to_string(),
-                _ => "preparing model".to_string(),
-            });
-        }
-    }
-    None
-}
-
-fn node_state_from_payload(
-    mode: MeshNodeMode,
-    health: &MeshHealth,
-    payload: &serde_json::Value,
-) -> MeshNodeState {
-    if matches!(health.status, MeshHealthStatus::Failed) {
-        return MeshNodeState::Failed;
-    }
-    if mode == MeshNodeMode::Serve && models_from_status_payload(Some(payload)).is_empty() {
-        return MeshNodeState::Starting;
-    }
-    MeshNodeState::Running
-}
-
-pub fn models_from_status_payload(payload: Option<&serde_json::Value>) -> Vec<MeshModelOption> {
-    let mut out = Vec::new();
-    if let Some(payload) = payload {
-        // The SDK's raw status uses `hosted_models` plus ready entries under
-        // `runtime.models`. Buzz-authored status reports use `models`. Do not
-        // use `serving_models`: MeshLLM fills it with the requested model while
-        // the runtime is still in standby, before inference is available.
-        for key in ["models", "hosted_models"] {
-            if let Some(value) = payload.get(key) {
-                collect_model_options(value, &mut out);
-            }
-        }
-        if let Some(runtime_models) = payload
-            .get("runtime")
-            .and_then(|runtime| runtime.get("models"))
-            .and_then(serde_json::Value::as_array)
-        {
-            for model in runtime_models {
-                if model.get("status").and_then(serde_json::Value::as_str) == Some("ready") {
-                    collect_model_options(model, &mut out);
-                }
-            }
-        }
-    }
-    dedupe_models(out)
-}
-
-fn collect_model_options(value: &serde_json::Value, out: &mut Vec<MeshModelOption>) {
-    match value {
-        serde_json::Value::Object(map) => {
-            if let Some(id) = map
-                .get("model_id")
-                .or_else(|| map.get("modelId"))
-                .or_else(|| map.get("model_ref"))
-                .or_else(|| map.get("modelRef"))
-                .or_else(|| map.get("id"))
-                .or_else(|| map.get("name"))
-                .and_then(serde_json::Value::as_str)
-            {
-                let name = map
-                    .get("display_name")
-                    .or_else(|| map.get("displayName"))
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToString::to_string);
-                push_model(out, id, name);
-            } else {
-                for child in map.values().filter(|child| {
-                    matches!(
-                        child,
-                        serde_json::Value::Array(_) | serde_json::Value::Object(_)
-                    )
-                }) {
-                    collect_model_options(child, out);
-                }
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for child in values {
-                collect_model_options(child, out);
-            }
-        }
-        serde_json::Value::String(value) => {
-            push_model(out, value, None);
-        }
-        _ => {}
-    }
-}
-
-fn push_model(out: &mut Vec<MeshModelOption>, id: &str, name: Option<String>) {
-    let id = id.trim();
-    if id.is_empty() || id.starts_with("http://") || id.starts_with("https://") {
-        return;
-    }
-    out.push(MeshModelOption {
-        id: id.to_string(),
-        name,
-    });
-}
-
-/// Canonical model id for equality/dedup. A serving node advertises the same
-/// model under two strings — `org/model@main:Q4` (serveTargets[].modelId) and
-/// `org/model:Q4` (available_models) — so keying on the raw string leaves BOTH
-/// in the picker. Strip the `@main` ref-qualifier (matching the selection-time
-/// rule in `pick_serve_target_for_model`) so the two collapse to one entry.
-pub(super) fn canonical_model_id(value: &str) -> String {
-    value.trim().replace("@main", "")
-}
-
-pub(super) fn dedupe_models(models: Vec<MeshModelOption>) -> Vec<MeshModelOption> {
-    // Key by canonical id so `@main` / non-`@main` forms of the same model
-    // dedup together. Display the canonical (stripped) id so the UI shows one
-    // stable label; selection still matches because the picker canonicalizes
-    // both sides too.
-    let mut by_id = BTreeMap::<String, Option<String>>::new();
-    for model in models {
-        by_id
-            .entry(canonical_model_id(&model.id))
-            .and_modify(|name| {
-                if name.is_none() {
-                    *name = model.name.clone();
-                }
-            })
-            .or_insert(model.name);
-    }
-    by_id
-        .into_iter()
-        .map(|(id, name)| MeshModelOption { id, name })
-        .collect()
 }
 
 #[cfg(test)]
