@@ -252,6 +252,12 @@ pub struct StartMeshNodeRequest {
 pub struct MeshNodeStatus {
     pub state: MeshNodeState,
     pub mode: Option<MeshNodeMode>,
+    /// Which admission deal `mode: Serve` is running under — `None` when off.
+    /// `mode` alone cannot tell a Sell Compute (SelfOnly) node apart from a
+    /// Share Compute (Community) one; both report `mode: "serve"`. The
+    /// frontend's Share/Sell toggles key off this field to avoid lighting up
+    /// together (buzz#172).
+    pub admission: Option<MeshAdmission>,
     pub health: MeshHealth,
     pub api_base_url: Option<String>,
     pub console_url: Option<String>,
@@ -271,6 +277,7 @@ pub fn stopped_status() -> MeshNodeStatus {
     MeshNodeStatus {
         state: MeshNodeState::Off,
         mode: None,
+        admission: None,
         health: MeshHealth::ok(),
         api_base_url: None,
         console_url: None,
@@ -709,6 +716,7 @@ impl DesktopMeshRuntime {
         Ok(MeshNodeStatus {
             state,
             mode: Some(self.mode),
+            admission: Some(self.start_request.admission),
             health,
             api_base_url: Some(status.api_base_url),
             console_url: Some(status.console_url),
@@ -725,6 +733,7 @@ impl DesktopMeshRuntime {
         MeshNodeStatus {
             state: MeshNodeState::Running,
             mode: Some(MeshNodeMode::Client),
+            admission: Some(self.start_request.admission),
             health: MeshHealth::degraded(format!("OpenAI ingress is live; {reason}")),
             api_base_url: Some(self.api_base_url.clone()),
             console_url: Some(self.console_url.clone()),
@@ -741,6 +750,7 @@ impl DesktopMeshRuntime {
         MeshNodeStatus {
             state: MeshNodeState::Starting,
             mode: Some(MeshNodeMode::Client),
+            admission: Some(self.start_request.admission),
             health: MeshHealth::degraded("OpenAI ingress and management status are still starting"),
             api_base_url: Some(self.api_base_url.clone()),
             console_url: Some(self.console_url.clone()),

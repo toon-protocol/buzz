@@ -58,6 +58,36 @@ async fn pending_client_status_does_not_wait_for_management_timeout() {
 }
 
 #[tokio::test]
+async fn starting_status_carries_the_start_requests_admission() {
+    // buzz#172: `MeshNodeStatus.admission` is how the frontend's Share/Sell
+    // toggles tell a self-only (sell) node apart from a community (share)
+    // one — both report the same mode, so a dropped admission field here
+    // would make the two toggles indistinguishable while a node starts.
+    let task = tokio::spawn(async {
+        std::future::pending::<anyhow::Result<mesh_llm_sdk::EmbeddedNodeHandle>>().await
+    });
+    let mut runtime = pending_client_runtime(task);
+    runtime.start_request.admission = super::MeshAdmission::SelfOnly;
+
+    let status = tokio::time::timeout(std::time::Duration::from_secs(1), runtime.status())
+        .await
+        .expect("status should not wait for the SDK management probe")
+        .expect("pending client should have a synthetic status");
+    assert_eq!(status.admission, Some(super::MeshAdmission::SelfOnly));
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), runtime.stop())
+        .await
+        .expect("stopping a pending client should abort its SDK task")
+        .expect("pending client stop should succeed");
+}
+
+#[test]
+fn stopped_status_has_no_admission() {
+    // Off is off, regardless of which deal a future start would use.
+    assert_eq!(super::stopped_status().admission, None);
+}
+
+#[tokio::test]
 async fn failed_client_startup_is_promoted_without_losing_the_runtime_slot() {
     let task = tokio::spawn(async { anyhow::bail!("controlled startup failure") });
     let runtime = pending_client_runtime(task);

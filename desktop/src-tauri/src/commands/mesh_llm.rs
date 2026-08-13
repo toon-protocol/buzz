@@ -93,6 +93,9 @@ fn restarting_share_status(config: &MeshSharingConfig) -> mesh_llm::MeshNodeStat
     mesh_llm::MeshNodeStatus {
         state: mesh_llm::MeshNodeState::Starting,
         mode: Some(mesh_llm::MeshNodeMode::Serve),
+        // Restart-to-share only ever restores a Community config (see the
+        // caller's comment on why SelfOnly is excluded from this path).
+        admission: Some(mesh_llm::MeshAdmission::Community),
         health: mesh_llm::MeshHealth {
             status: mesh_llm::MeshHealthStatus::Degraded,
             reason: Some("Buzz is restarting to switch this machine to sharing".to_string()),

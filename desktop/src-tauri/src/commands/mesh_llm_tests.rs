@@ -338,6 +338,7 @@ fn client_status_serializes_with_running_state_and_client_mode() {
     let status = mesh_llm::MeshNodeStatus {
         state: mesh_llm::MeshNodeState::Running,
         mode: Some(mesh_llm::MeshNodeMode::Client),
+        admission: Some(mesh_llm::MeshAdmission::Community),
         // `MeshHealth::ok()` is module-private; build via the public fields.
         health: mesh_llm::MeshHealth {
             status: mesh_llm::MeshHealthStatus::Ok,
@@ -355,6 +356,35 @@ fn client_status_serializes_with_running_state_and_client_mode() {
     let value = serde_json::to_value(&status).expect("serialize mesh status");
     assert_eq!(value["state"], serde_json::json!("running"));
     assert_eq!(value["mode"], serde_json::json!("client"));
+}
+
+#[test]
+fn sell_compute_status_serializes_admission_as_self_only() {
+    // Contract pin for the frontend: `deriveMeshSellToggle` (buzz#172) keys
+    // off `admission === "self_only"` to tell a Sell Compute node apart from
+    // a Share Compute one now that both report `mode: "serve"`. If serde
+    // renaming drifts, that predicate silently stops matching the real IPC
+    // payload.
+    let status = mesh_llm::MeshNodeStatus {
+        state: mesh_llm::MeshNodeState::Running,
+        mode: Some(mesh_llm::MeshNodeMode::Serve),
+        admission: Some(mesh_llm::MeshAdmission::SelfOnly),
+        health: mesh_llm::MeshHealth {
+            status: mesh_llm::MeshHealthStatus::Ok,
+            reason: None,
+        },
+        api_base_url: Some("http://127.0.0.1:9337/v1".to_string()),
+        console_url: None,
+        model_id: None,
+        model_name: None,
+        invite_token: None,
+        endpoint_id: None,
+        device_id: None,
+        device_name: None,
+    };
+    let value = serde_json::to_value(&status).expect("serialize mesh status");
+    assert_eq!(value["mode"], serde_json::json!("serve"));
+    assert_eq!(value["admission"], serde_json::json!("self_only"));
 }
 
 #[tokio::test]
