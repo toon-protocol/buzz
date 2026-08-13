@@ -121,9 +121,13 @@ fn generated_passphrase_respects_word_count_and_separator() {
 
     for (count, separator) in [(3, "-"), (4, "-"), (6, " "), (5, "."), (10, "")] {
         let phrase = generate_passphrase(count, separator).unwrap();
-        if separator.is_empty() {
-            // No separator to split on; length gate below still applies.
-        } else {
+        // Splitting only recovers the drawn words for a separator that cannot
+        // occur inside one: "" has nothing to split on, and "-" collides with
+        // `yo-yo` (assets/eff_short_wordlist_2_0.txt:1281 — the flake in
+        // buzz#162, pinned by `yo_yo_round_trips_with_non_hyphen_separator`).
+        // Both cases still go through the length gate below.
+        let separator_splits_cleanly = !separator.is_empty() && separator != "-";
+        if separator_splits_cleanly {
             let parts: Vec<&str> = phrase.split(separator).collect();
             assert_eq!(parts.len(), count);
             for w in &parts {
@@ -136,12 +140,42 @@ fn generated_passphrase_respects_word_count_and_separator() {
 
 #[test]
 fn generated_passphrase_clamps_word_count() {
+    // "::" cannot occur inside a wordlist word, so the split count is exactly
+    // the word count. "-" would not be: it collides with `yo-yo`, which is
+    // what made this assertion flaky (buzz#162, and
+    // `yo_yo_round_trips_with_non_hyphen_separator` below).
     // Below the floor: clamped up to MIN_PASSPHRASE_WORDS, never shorter.
-    let phrase = generate_passphrase(1, "-").unwrap();
-    assert_eq!(phrase.split('-').count(), MIN_PASSPHRASE_WORDS);
+    let phrase = generate_passphrase(1, "::").unwrap();
+    assert_eq!(phrase.split("::").count(), MIN_PASSPHRASE_WORDS);
     // Above the ceiling: clamped down to MAX_PASSPHRASE_WORDS.
-    let phrase = generate_passphrase(50, "-").unwrap();
-    assert_eq!(phrase.split('-').count(), MAX_PASSPHRASE_WORDS);
+    let phrase = generate_passphrase(50, "::").unwrap();
+    assert_eq!(phrase.split("::").count(), MAX_PASSPHRASE_WORDS);
+}
+
+#[test]
+fn yo_yo_round_trips_with_non_hyphen_separator() {
+    // "yo-yo" (assets/eff_short_wordlist_2_0.txt:1281) is the only wordlist
+    // entry containing a hyphen, so any assertion that splits a generated
+    // phrase on "-" over-counts whenever it is drawn (~0.77% per 10-word
+    // draw — the flake in buzz#162). The split-based assertions above use
+    // "::" instead, which holds only while no word can contain it; both
+    // halves of that invariant are pinned here. The generator draws from OS
+    // entropy and cannot be forced to pick "yo-yo", so the round trip itself
+    // is pinned on a hand-built phrase rather than a generated one.
+    let words: Vec<&str> = WORDLIST.lines().filter(|l| !l.is_empty()).collect();
+    let hyphenated: Vec<&str> = words.iter().copied().filter(|w| w.contains('-')).collect();
+    assert_eq!(hyphenated, ["yo-yo"]);
+    assert!(
+        !words.iter().any(|w| w.contains(':')),
+        "the \"::\" separator must not occur inside a word"
+    );
+
+    let phrase = ["yo-yo", "aardvark", "yodel"].join("::");
+    let parts: Vec<&str> = phrase.split("::").collect();
+    assert_eq!(parts, ["yo-yo", "aardvark", "yodel"]);
+    for w in &parts {
+        assert!(words.contains(w), "unknown word {w:?}");
+    }
 }
 
 #[test]
