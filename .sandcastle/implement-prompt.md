@@ -35,18 +35,17 @@ each task, use RGR:
 4. REFACTOR the code
 
 **Commit AND push after every completed task** — `git push -u origin {{BRANCH}}`
-(use `-u`: the branch has not been pushed to origin yet, so a bare `git push`
-has no upstream to publish to until the first one sets it; every push after
-that reuses it). Do this immediately, before starting the next task and
-without waiting for the full gate below. A run that is killed mid-gate or
-mid-task then leaves every already-finished task on the remote branch
-instead of losing the whole run — see buzz#163. Each task commit only needs
-to describe that task; it does not need to satisfy the full COMMIT section
-below (that applies to the final commit).
+(`-u` sets the upstream on the first push, so the pushes after it reuse it).
+Do this immediately, before starting the next task and without waiting for
+the full gate below. A run that is killed mid-gate or mid-task then leaves
+every already-finished task on the remote branch instead of losing the whole
+run — see buzz#163. Each task commit only needs to describe that task; it
+does not need to satisfy the full COMMIT section below (that applies to the
+final commit).
 
 # FEEDBACK LOOPS
 
-buzz is a polyglot repo: a Rust workspace (`crates/*`) plus a pnpm workspace for the JS apps (`desktop` / `web` / `admin-web`), driven by the Justfile. Before committing, run buzz's real gate and make sure every command passes:
+buzz is a polyglot repo: a Rust workspace (`crates/*`) plus a pnpm workspace for the JS apps (`desktop` / `web` / `admin-web`), driven by the Justfile. After the last task, before your final commit, run buzz's real gate and make sure every command passes:
 
 - Rust format: `just fmt-check`
 - Tauri Rust format: `just desktop-tauri-fmt-check`
@@ -64,10 +63,9 @@ If your change is confined to one side (Rust-only or JS-only), you may run only 
 
 OUT OF SCOPE for this gate — do NOT attempt these in the sandbox: Flutter/mobile (`mobile/**`), `desktop/src-tauri` compile-level checks (clippy/check/test need GTK/WebKit system libraries and sidecar stubs the agent image does not ship), Playwright e2e suites, Postgres/Redis-backed integration tests (`just test-integration`, backend-integration, relay-e2e), `cargo-deny`, cross-compilation, and the signing/canary/release pipelines. Upstream `ci.yml` still runs its full matrix on your PR.
 
-Run the full gate once, after all tasks are implemented and pushed per-task
-as above. If a gate command fails, fix it, then commit and push the fix as
-its own follow-up — do not let a failing gate discard tasks that already
-passed and are already on the remote branch.
+If a gate command fails, fix it, then commit and push the fix as its own
+follow-up — do not let a failing gate discard tasks that already passed and
+are already on the remote branch.
 
 # COMMIT
 
