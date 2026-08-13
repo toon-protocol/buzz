@@ -57,8 +57,14 @@ export function deriveMeshShareToggle(
   status: MeshNodeStatus | null,
 ): MeshShareToggleModel {
   const occupied = occupiesSlot(status);
+  // A self_only (Sell compute) serve node occupies the slot but is not
+  // sharing — mode alone cannot tell the two admission deals apart, both
+  // report mode:"serve" (buzz#172). Missing/undefined admission defaults to
+  // "community" for backward compatibility with older status snapshots.
+  const isServeCommunity =
+    status?.mode === "serve" && (status?.admission ?? "community") !== "self_only";
   return {
-    isSharing: occupied && status?.mode === "serve",
+    isSharing: occupied && isServeCommunity,
     isConsuming: occupied && status?.mode === "client",
     slotOccupied: occupied,
   };

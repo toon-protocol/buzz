@@ -88,3 +88,31 @@ test("running with a missing mode occupies the slot but is not sharing", () => {
   assert.equal(model.isConsuming, false);
   assert.equal(model.slotOccupied, true);
 });
+
+test("a self_only (Sell compute) serve node occupies the slot but is NOT sharing (buzz#172)", () => {
+  // Regression: mode alone cannot distinguish Sell compute from Share
+  // compute — both report mode:"serve". Without checking admission, a
+  // running Sell node would incorrectly light the Share toggle too.
+  for (const state of ["running", "starting", "failed"]) {
+    const model = deriveMeshShareToggle(
+      status({ state, mode: "serve", admission: "self_only" }),
+    );
+    assert.equal(
+      model.isSharing,
+      false,
+      `serve+self_only+${state} must NOT light the Share toggle`,
+    );
+    assert.equal(model.slotOccupied, true);
+  }
+});
+
+test("a community serve node reads as sharing whether admission is explicit or absent (buzz#172)", () => {
+  // Backward compatible: older/partial status objects with no admission
+  // field at all must still read as sharing — "community" is the default.
+  for (const admission of ["community", undefined]) {
+    const model = deriveMeshShareToggle(
+      status({ state: "running", mode: "serve", admission }),
+    );
+    assert.equal(model.isSharing, true);
+  }
+});
