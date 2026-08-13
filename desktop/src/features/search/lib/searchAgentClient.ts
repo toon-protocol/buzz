@@ -1,4 +1,4 @@
-import { signRelayEvent } from "@/shared/api/tauri";
+import { nip98PostHeader } from "@/shared/api/nip98";
 import type {
   SearchHit,
   SearchMessagesInput,
@@ -36,40 +36,6 @@ import type {
 
 /** How long to wait before giving up on a local process. */
 const REQUEST_TIMEOUT_MS = 5_000;
-
-const NIP98_KIND = 27235;
-
-async function sha256Hex(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(text),
-  );
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-/**
- * Build the NIP-98 `Authorization` header for a `POST` with `body`.
- *
- * Mirrors `invites.ts`'s `nip98PostHeader` — the `u` tag is the exact request
- * URL and the `payload` tag is `sha256(body)`, both finalized before signing
- * so what is signed and what is sent can never disagree.
- */
-async function nip98PostHeader(url: string, body: string): Promise<string> {
-  const authEvent = await signRelayEvent({
-    kind: NIP98_KIND,
-    content: "",
-    tags: [
-      ["u", url],
-      ["method", "POST"],
-      ["payload", await sha256Hex(body)],
-      ["nonce", crypto.randomUUID()],
-    ],
-  });
-  // NIP-98 events carry empty content and ASCII-only tags, so btoa is safe here.
-  return `Nostr ${btoa(JSON.stringify(authEvent))}`;
-}
 
 type RawAgentHit = {
   eventId?: unknown;

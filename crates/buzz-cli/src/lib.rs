@@ -382,18 +382,25 @@ admitted to is never indexed, and a message sealed under an epoch it does not \
 hold is skipped entirely (its ciphertext is not indexed either). A rotation \
 that excludes this agent stops the index at the epoch boundary while leaving \
 everything it could already read searchable.\n\n\
-Queries are answered over a LOOPBACK-ONLY HTTP endpoint with no \
-authentication: GET/POST /search?q=<text>&channels=<id,id>&limit=<n> and \
-GET /health. The channel scope is required and fail-closed — an empty scope \
-returns nothing. The agent cannot verify the caller's membership, so this is a \
-local-trusted-agent surface only; do not expose it.\n\n\
+Queries are answered over a LOOPBACK-ONLY HTTP endpoint: GET/POST \
+/search?q=<text>&channels=<id,id>&limit=<n> — plus authors=<pubkey,pubkey>, \
+since=<unix> and until=<unix> to narrow further — and GET /health.\n\n\
+Every query must be signed NIP-98-style ('Authorization: Nostr \
+<base64 kind:27235 event>', with the 'u' tag holding the exact URL requested — \
+the queryUrl this command prints at startup, host spelling included). A \
+channel is answered only when the signer appears on that channel's validated \
+kind:39100 admin list; an unsigned request, one whose signature does not \
+verify, or a signer absent from the list gets zero hits for the channels \
+concerned rather than an error. The channel scope is required and fail-closed \
+too — an empty scope returns nothing. Loopback stands regardless of the \
+signature check; do not expose it.\n\n\
 State: the index and its per-channel resume cursors are one file (--index), \
 written atomically, so a restart resumes where it left off and deleting the \
 file rebuilds from relay history with no manual steps.\n\n\
 Examples:\n  buzz toon search-agent\n  \
 buzz toon search-agent --port 9000 --poll-interval 15\n  \
 buzz toon search-agent --once   # one cycle, print the report, exit\n  \
-curl 'http://127.0.0.1:8788/search?q=deploy&channels=<UUID>'"
+curl 'http://127.0.0.1:8788/health'   # /search needs a signed Authorization header"
     )]
     SearchAgent {
         /// Loopback port for the query endpoint. 0 picks a free one.

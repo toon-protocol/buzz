@@ -148,9 +148,9 @@ impl SearchAgentQuery {
 ///
 /// The channel list is a separate argument — not read off `query` — because
 /// by the time this is called it has already been intersected against the
-/// signer's validated membership (see [`handle_get`]/[`handle_post`]): the
-/// caller's *claim* of scope and the *authorized* scope are different values,
-/// and this function only ever sees the latter.
+/// signer's validated membership (see [`answer`]): the caller's *claim* of
+/// scope and the *authorized* scope are different values, and this function
+/// only ever sees the latter.
 ///
 /// Pure given its inputs, and shaped to the desktop's `SearchHit` type
 /// (`desktop/src/shared/api/searchTypes.ts`) so the TS client is a `fetch` and
@@ -288,14 +288,7 @@ async fn handle_get(
         Some(q) if !q.is_empty() => format!("{}/search?{q}", state.base_url),
         _ => format!("{}/search", state.base_url),
     };
-    let signer = authenticate(&headers, "GET", &expected_url, None);
-    let admin_lists = state.admin_lists.read().await;
-    let channels = authorized_channels(&admin_lists, signer.as_ref(), &query.channels);
-    Json(search_response(
-        &*state.index.read().await,
-        &query,
-        &channels,
-    ))
+    answer(&state, &query, &headers, "GET", &expected_url, None).await
 }
 
 /// `POST /search`, body `SearchAgentQuery` JSON.
@@ -313,12 +306,30 @@ async fn handle_post(
 ) -> Json<Value> {
     let query: SearchAgentQuery = serde_json::from_slice(&body).unwrap_or_default();
     let expected_url = format!("{}/search", state.base_url);
-    let signer = authenticate(&headers, "POST", &expected_url, Some(&body));
-    let admin_lists = state.admin_lists.read().await;
-    let channels = authorized_channels(&admin_lists, signer.as_ref(), &query.channels);
+    answer(&state, &query, &headers, "POST", &expected_url, Some(&body)).await
+}
+
+/// Authenticate, narrow the claimed scope to what the signer is on, answer —
+/// the three steps both handlers share, in the one order they are allowed to
+/// happen in. Living here rather than being spelled out twice is the point:
+/// a handler cannot reach [`search_response`] without passing through
+/// [`authorized_channels`] first.
+async fn answer(
+    state: &QueryState,
+    query: &SearchAgentQuery,
+    headers: &HeaderMap,
+    method: &str,
+    url: &str,
+    body: Option<&[u8]>,
+) -> Json<Value> {
+    let signer = authenticate(headers, method, url, body);
+    let channels = {
+        let admin_lists = state.admin_lists.read().await;
+        authorized_channels(&admin_lists, signer.as_ref(), &query.channels)
+    };
     Json(search_response(
         &*state.index.read().await,
-        &query,
+        query,
         &channels,
     ))
 }

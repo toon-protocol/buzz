@@ -1,4 +1,5 @@
 import { publishEvent } from "@/shared/api/eventTransport";
+import { nip98GetHeader } from "@/shared/api/nip98";
 import { getRelayHttpUrl, signRelayEvent } from "@/shared/api/tauri";
 import {
   KIND_MODERATION_BAN,
@@ -17,8 +18,6 @@ import {
 // api/bridge.rs). Command events (9040–9044) carry NO `h` tag — the relay binds
 // the tenant from the connection host, and a stray `h` is rejected as
 // channel-scoping a global-only command.
-
-const NIP98_KIND = 27235;
 
 /** NIP-56 report categories (report.rs `REPORT_TYPES`). */
 export type ReportType =
@@ -210,28 +209,11 @@ export async function resolveReport(input: {
 }
 
 // --- Reads: NIP-98-authed HTTP GETs ---
-
-/**
- * Build the NIP-98 `Authorization` header for a GET.
- *
- * The relay verifies the signed `u` tag against the full request URL including
- * the query string (the read-auth fix), so the URL is finalized by the caller
- * *before* signing and this function never appends parameters afterward — the
- * signed `u` and the fetched URL are guaranteed identical.
- */
-async function nip98GetHeader(url: string): Promise<string> {
-  const authEvent = await signRelayEvent({
-    kind: NIP98_KIND,
-    content: "",
-    tags: [
-      ["u", url],
-      ["method", "GET"],
-      ["nonce", crypto.randomUUID()],
-    ],
-  });
-  // NIP-98 events carry empty content and ASCII-only tags, so btoa is safe here.
-  return `Nostr ${btoa(JSON.stringify(authEvent))}`;
-}
+//
+// The relay verifies the signed `u` tag against the full request URL including
+// the query string (the read-auth fix), so the URL is finalized here *before*
+// `nip98GetHeader` signs it and nothing appends parameters afterward — the
+// signed `u` and the fetched URL are guaranteed identical.
 
 async function moderationGet<T>(pathWithQuery: string): Promise<T> {
   const base = (await getRelayHttpUrl()).replace(/\/+$/, "");

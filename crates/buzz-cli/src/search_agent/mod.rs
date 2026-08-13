@@ -73,10 +73,8 @@ use serde_json::{json, Value};
 use tokio::sync::RwLock;
 
 use crate::agent_keystore::AgentKeystore;
-use crate::channel_admins::{
-    channel_admin_list_filter, resolve_channel_admin_list, tags_as_strings, ChannelAdminList,
-};
-use crate::commands::toon::{open_message, sweep_inbox, Opened, ADMIN_LIST_LIMIT};
+use crate::channel_admins::{resolve_channel_admin_list, tags_as_strings, ChannelAdminList};
+use crate::commands::toon::{fetch_admin_events, open_message, sweep_inbox, Opened};
 use crate::error::CliError;
 use crate::search_index::{is_strictly_older, ChannelCursor, IndexedMessage, SearchIndex};
 use crate::sidecar::SidecarClient;
@@ -354,7 +352,7 @@ async fn cycle(
     keystore.save()?;
 
     // 2. Refresh the query endpoint's membership authority: one read answers
-    //    every held channel (channel_admin_list_filter is not #d-scoped), and
+    //    every held channel (`fetch_admin_events` is not #d-scoped), and
     //    the whole map is replaced atomically so a query never sees half of
     //    one cycle's resolution and half of the last.
     let channels: Vec<String> = keystore.channels().cloned().collect();
@@ -404,7 +402,7 @@ async fn resolve_admin_lists(
     keystore: &AgentKeystore,
     channels: &[String],
 ) -> Result<BTreeMap<String, ChannelAdminList>, CliError> {
-    let events = toon_relay::fetch(relay_url, channel_admin_list_filter(ADMIN_LIST_LIMIT)).await?;
+    let events = fetch_admin_events(relay_url).await?;
     let mut resolved = BTreeMap::new();
     for channel_id in channels {
         if let Some(list) =
