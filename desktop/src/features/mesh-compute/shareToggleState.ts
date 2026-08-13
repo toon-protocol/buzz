@@ -62,7 +62,8 @@ export function deriveMeshShareToggle(
   // report mode:"serve" (buzz#172). Missing/undefined admission defaults to
   // "community" for backward compatibility with older status snapshots.
   const isServeCommunity =
-    status?.mode === "serve" && (status?.admission ?? "community") !== "self_only";
+    status?.mode === "serve" &&
+    (status?.admission ?? "community") !== "self_only";
   return {
     isSharing: occupied && isServeCommunity,
     isConsuming: occupied && status?.mode === "client",
