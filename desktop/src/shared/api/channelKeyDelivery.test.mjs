@@ -22,7 +22,9 @@ import {
   CHANNEL_KEY_RUMOR_KIND,
   channelKeyWrapFilter,
   unwrapChannelKey,
+  unwrapChannelKeyViaRust,
   wrapChannelKey,
+  wrapChannelKeyViaRust,
 } from "./channelKeyDelivery.ts";
 
 const CHANNEL = "3b0f-private-channel";
@@ -247,4 +249,152 @@ test("the wrap filter asks only for wraps addressed to this client", () => {
     "#p": [member.pubkey],
     limit: 5,
   });
+});
+
+// --- the Rust-backed path (buzz#43) ---
+//
+// What these pin down is the seam, not the crypto: the arguments
+// `seal_gift_wrap` is handed, and which field of `unseal_gift_wrap`'s answer
+// becomes which field of the grant. The two NIP-44 layers themselves are the
+// Rust unit tests' job (`desktop/src-tauri/src/commands/gift_wrap.rs`), and
+// there is no Tauri host here to run them.
+
+/** Runs `body` with `window.__TAURI_INTERNALS__.invoke` answered by `handler`. */
+function withMockedInvoke(handler, body) {
+  const previousWindow = globalThis.window;
+  const calls = [];
+  globalThis.window = {
+    __TAURI_INTERNALS__: {
+      invoke: async (command, args) => {
+        calls.push({ command, args });
+        return handler(command, args);
+      },
+    },
+  };
+  return Promise.resolve(body(calls)).finally(() => {
+    globalThis.window = previousWindow;
+  });
+}
+
+test("sealing through Rust hands it the rumor an admin would have signed", async () => {
+  const key = generateChannelKey();
+  const sealed = { id: "wrap-id", kind: 1059, tags: [["p", member.pubkey]] };
+
+  await withMockedInvoke(
+    () => JSON.stringify(sealed),
+    async (calls) => {
+      const wrap = await wrapChannelKeyViaRust({
+        channelId: CHANNEL,
+        key,
+        epoch: 3,
+        recipient: member.pubkey,
+      });
+
+      assert.deepEqual(wrap, sealed);
+      assert.deepEqual(calls, [
+        {
+          command: "seal_gift_wrap",
+          args: {
+            recipient: member.pubkey,
+            kind: CHANNEL_KEY_RUMOR_KIND,
+            content: formatChannelKey(key),
+            tags: [
+              ["h", CHANNEL],
+              ["key", channelKeyId(key), "3"],
+              ["p", member.pubkey],
+            ],
+          },
+        },
+      ]);
+    },
+  );
+});
+
+test("a wrap Rust opens becomes the grant the pure path would have produced", async () => {
+  const key = generateChannelKey();
+  const wrap = fromWire(
+    wrapChannelKey({
+      channelId: CHANNEL,
+      key,
+      epoch: 2,
+      recipient: member.pubkey,
+      senderSecretKey: admin.secretKey,
+    }),
+  );
+
+  await withMockedInvoke(
+    () => ({
+      sender: admin.pubkey,
+      kind: CHANNEL_KEY_RUMOR_KIND,
+      content: formatChannelKey(key),
+      tags: [
+        ["h", CHANNEL],
+        ["key", channelKeyId(key), "2"],
+        ["p", member.pubkey],
+      ],
+      createdAt: 1_700_000_000,
+    }),
+    async (calls) => {
+      const grant = await unwrapChannelKeyViaRust(wrap);
+      const pure = unwrapChannelKey(wrap, member.secretKey);
+
+      // Everything the admin check and the key ring read is identical to what
+      // the pure path produces. `sentAt` is the one field that is not: Rust
+      // reports the rumor's own timestamp, the pure path the seal's — and a
+      // seal's is deliberately tweaked into the past (NIP-59). Nothing but
+      // diagnostics reads it.
+      assert.deepEqual({ ...grant, sentAt: 0 }, { ...pure, sentAt: 0 });
+      assert.equal(grant.sentAt, 1_700_000_000);
+      assert.equal(grant.wrapId, wrap.id);
+      // The whole wrap goes over, so Rust checks the layers against the event
+      // as the relay sent it rather than a reassembled copy.
+      assert.equal(calls[0].command, "unseal_gift_wrap");
+      assert.deepEqual(JSON.parse(calls[0].args.wrapJson), wrap);
+    },
+  );
+});
+
+test("a wrap Rust cannot open is not a grant", async () => {
+  await withMockedInvoke(
+    () => null,
+    async () =>
+      assert.equal(
+        await unwrapChannelKeyViaRust({ id: "wrap-id", kind: 1059 }),
+        null,
+      ),
+  );
+});
+
+test("an event that is not a gift wrap never reaches Rust", async () => {
+  await withMockedInvoke(
+    () => assert.fail("no command should have been invoked"),
+    async (calls) => {
+      assert.equal(
+        await unwrapChannelKeyViaRust({ id: "note-id", kind: 1 }),
+        null,
+      );
+      assert.deepEqual(calls, []);
+    },
+  );
+});
+
+test("a key id that does not match its own bytes is refused on the Rust path too", async () => {
+  await withMockedInvoke(
+    () => ({
+      sender: admin.pubkey,
+      kind: CHANNEL_KEY_RUMOR_KIND,
+      content: formatChannelKey(generateChannelKey()),
+      tags: [
+        ["h", CHANNEL],
+        ["key", "ffffffffffffffff", "0"],
+        ["p", member.pubkey],
+      ],
+      createdAt: 1_700_000_000,
+    }),
+    async () =>
+      assert.equal(
+        await unwrapChannelKeyViaRust({ id: "wrap-id", kind: 1059 }),
+        null,
+      ),
+  );
 });

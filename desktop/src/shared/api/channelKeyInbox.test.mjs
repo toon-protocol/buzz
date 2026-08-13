@@ -13,7 +13,7 @@ import {
 } from "./channelAdminList.ts";
 import { resetChannelAdminLists } from "./channelAdminListStore.ts";
 import { channelKeyId, generateChannelKey } from "./channelEncryption.ts";
-import { wrapChannelKey } from "./channelKeyDelivery.ts";
+import { unwrapChannelKey, wrapChannelKey } from "./channelKeyDelivery.ts";
 import { startChannelKeyInbox } from "./channelKeyInbox.ts";
 import { getChannelKey, setChannelKeyStorage } from "./channelKeyStore.ts";
 import {
@@ -115,15 +115,11 @@ function memoryDisk() {
 
 let transport;
 let reported;
-let secretKeyReads;
 
 function startInbox(who = member) {
   return startChannelKeyInbox({
     pubkey: who.pubkey,
-    getSecretKey: async () => {
-      secretKeyReads += 1;
-      return who.secretKey;
-    },
+    unwrap: async (event) => unwrapChannelKey(event, who.secretKey),
     subscribe: transport.subscribe,
     onEvent: (event) => reported.push(event),
   });
@@ -134,7 +130,6 @@ beforeEach(() => {
   resetChannelAdminLists();
   transport = fakeTransport();
   reported = [];
-  secretKeyReads = 0;
 });
 
 test("an admin's gift wrap unlocks the channel and its history", async () => {
@@ -361,52 +356,14 @@ test("stopping the inbox drops both subscriptions", async () => {
   assert.deepEqual(reported, []);
 });
 
-test("the keychain is not touched until a wrap actually arrives", async () => {
-  const key = generateChannelKey();
-
-  // Admin lists alone are public metadata — no key needed to read them.
-  transport.deliver(signedAdminList(admin, [admin.pubkey], channelKeyId(key)));
-  const inbox = await startInbox();
-  assert.equal(secretKeyReads, 0);
-
-  transport.deliver(
-    fromWire(
-      wrapChannelKey({
-        channelId: CHANNEL,
-        key,
-        recipient: member.pubkey,
-        senderSecretKey: admin.secretKey,
-      }),
-    ),
-  );
-  await inbox.settled();
-  assert.equal(secretKeyReads, 1);
-
-  // A second wrap reuses the resolved key rather than reading it again.
-  transport.deliver(
-    fromWire(
-      wrapChannelKey({
-        channelId: CHANNEL,
-        key,
-        recipient: member.pubkey,
-        senderSecretKey: admin.secretKey,
-      }),
-    ),
-  );
-  await inbox.settled();
-  assert.equal(secretKeyReads, 1);
-
-  await inbox.stop();
-});
-
-test("a keychain that will not open leaves the subscription alive", async () => {
+test("an unwrap failure leaves the subscription alive", async () => {
   const key = generateChannelKey();
   transport.deliver(signedAdminList(admin, [admin.pubkey], channelKeyId(key)));
 
   const inbox = await startChannelKeyInbox({
     pubkey: member.pubkey,
-    getSecretKey: async () => {
-      throw new Error("Keychain locked");
+    unwrap: async () => {
+      throw new Error("could not reach the Rust host");
     },
     subscribe: transport.subscribe,
     onEvent: (event) => reported.push(event),
@@ -434,7 +391,6 @@ test("the admin-list subscription asks for admin lists, the other for wraps", as
   const filters = [];
   const inbox = await startChannelKeyInbox({
     pubkey: member.pubkey,
-    getSecretKey: async () => member.secretKey,
     subscribe: async (filter) => {
       filters.push(filter);
       return async () => {};

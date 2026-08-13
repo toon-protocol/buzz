@@ -10,12 +10,11 @@ import {
 } from "@/shared/api/channelAdminListStore";
 import { type ChannelKey, channelKeyId } from "@/shared/api/channelEncryption";
 import { getChannelKey } from "@/shared/api/channelKeyStore";
-import { wrapChannelKey } from "@/shared/api/channelKeyDelivery";
+import { wrapChannelKeyViaRust } from "@/shared/api/channelKeyDelivery";
 import {
   ensureTransportReady,
   publishEvent,
 } from "@/shared/api/eventTransport";
-import { getIdentitySecretKey } from "@/shared/api/identitySecretKey";
 import { signRelayEvent } from "@/shared/api/tauri";
 import { getIdentity } from "@/shared/api/tauriIdentity";
 import type { RelayEvent } from "@/shared/api/types";
@@ -231,18 +230,16 @@ export async function grantChannelKeyToMembers(
   }
 
   await ensureTransportReady();
-  const secretKey = await getIdentitySecretKey();
 
   const outcome: ChannelKeyGrantOutcome = { delivered: [], skipped: [] };
   for (const pubkey of pubkeys) {
     if (pubkey === identity.pubkey) continue;
     try {
-      const wrap = wrapChannelKey({
+      const wrap = await wrapChannelKeyViaRust({
         channelId,
         key,
         epoch: adminList.epoch,
         recipient: pubkey,
-        senderSecretKey: secretKey,
       });
       await publishEvent(
         wrap,

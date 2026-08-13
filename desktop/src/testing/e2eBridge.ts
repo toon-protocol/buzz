@@ -12,12 +12,14 @@ import {
   createE2eToonPaidClient,
   createE2eToonSocketFactory,
   MOCK_TOON_CHANNEL_ID,
+  payArmedFactoryJobIncrement,
   seedMockNetworkBurnRateReceipt,
   type MockToonClaimStateFixtureKind,
 } from "./e2eBridgeToon.ts";
 
 import { relayClient } from "@/shared/api/relayClient";
 import type { ConnectionState } from "@/shared/api/relayClientShared";
+import type { ProviderJobDeliveryPort } from "@/shared/api/toonJobDelivery";
 import type { ChannelTemplate, RelayEvent } from "@/shared/api/types";
 import { getMarkdownParseCount } from "@/shared/ui/markdown/nodeCache";
 import { syncAgentTurnsFromEvents } from "@/features/agents/activeAgentTurnsStore";
@@ -1124,6 +1126,17 @@ declare global {
       kind: number;
       tags: string[][];
     }>;
+    /**
+     * Simulate "the buyer paid the currently-armed factory-job increment"
+     * (buzz#135) — drives the registered delivery port's `handleJob` for
+     * `conditionHex` (the offer's own `condition` tag) exactly like a real
+     * connector-originated PREPARE would. Resolves the released fulfillment,
+     * hex-encoded. Throws if no delivery port has started yet, or if
+     * `conditionHex` does not match the increment currently armed.
+     */
+    __BUZZ_E2E_PAY_ARMED_INCREMENT__?: (
+      conditionHex: string,
+    ) => Promise<string>;
     /** Project event kinds rejected once, in order, to exercise retry flows. */
     __BUZZ_E2E_REJECT_PROJECT_EVENT_KINDS__?: number[];
     /** Structured merge error returned by the mock native merge command. */
@@ -2890,6 +2903,15 @@ let mockClosedChannelLiveSubscription = false;
 const realSockets = new Map<number, WebSocket>();
 let mockManagedAgents: MockManagedAgent[] = [];
 let mockManagedAgentRuntimes: MockManagedAgentRuntimeRow[] = [];
+
+/**
+ * The real `ClientJobDeliveryPort` `ToonPaidWriter.ensureClient()` most
+ * recently constructed (buzz#135) — captured off the fake TOON paid client's
+ * factory call so `__BUZZ_E2E_PAY_ARMED_INCREMENT__` can drive its
+ * `handleJob` directly. `null` until a provider's first paid write starts
+ * the client (the delivery port is constructed lazily, before it).
+ */
+let mockJobDeliveryPort: ProviderJobDeliveryPort | null = null;
 
 // Mutable `save_subscriptions` table mirror — TEST-ONLY.
 //
@@ -9523,6 +9545,7 @@ export function maybeInstallE2eTauriMocks() {
 
   mockClosedChannelLiveSubscription = false;
   mockWebsocketUnavailable = false;
+  mockJobDeliveryPort = null;
   relayWebsocketConnectAttemptStarts.length = 0;
   mockGlobalAgentConfig = config.mock?.globalAgentConfig
     ? { ...config.mock.globalAgentConfig }
@@ -9546,6 +9569,9 @@ export function maybeInstallE2eTauriMocks() {
     paidClientFactory: createE2eToonPaidClient(
       () => getConfig()?.mock?.toonClaimState,
       () => getConfig()?.mock?.toonSessionLeaseTtlMs,
+      (port) => {
+        mockJobDeliveryPort = port;
+      },
     ),
     socketFactory: createE2eToonSocketFactory(
       () => getConfig()?.mock?.toonJobMarketEvents ?? [],
@@ -9566,6 +9592,14 @@ export function maybeInstallE2eTauriMocks() {
   window.__BUZZ_E2E_COMMAND_LOG__ = [];
   window.__BUZZ_E2E_SIGNED_EVENTS__ = [];
   window.__BUZZ_E2E_WEBVIEW_ZOOM__ = 1;
+  window.__BUZZ_E2E_PAY_ARMED_INCREMENT__ = (conditionHex) => {
+    if (!mockJobDeliveryPort) {
+      throw new Error(
+        "No factory-job delivery port has started yet — deliver an increment first.",
+      );
+    }
+    return payArmedFactoryJobIncrement(mockJobDeliveryPort, conditionHex);
+  };
   window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ = ({
     channelName,
     content,

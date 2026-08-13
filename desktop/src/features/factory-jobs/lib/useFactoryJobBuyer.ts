@@ -155,6 +155,68 @@ export function useOwnFactoryJobs(
 }
 
 /**
+ * The terminal kind:6097 results for one job (buzz#135), fetch-then-follow
+ * over the same free read path as the feedback thread — parsed by the
+ * existing `parseFactoryJobResult`, which is exactly the compatibility bar
+ * the provider's published results must clear.
+ */
+export function useFactoryJobResults(
+  transport: ToonEventTransport | null,
+  jobId: string | null,
+) {
+  const [results, setResults] = React.useState<
+    NonNullable<ReturnType<typeof parseFactoryJobResult>>[]
+  >([]);
+  const seenEventIds = React.useRef(new Set<string>());
+
+  React.useEffect(() => {
+    seenEventIds.current = new Set();
+    setResults([]);
+    if (!transport || !jobId) return;
+
+    const ingest = (raw: {
+      id: string;
+      pubkey: string;
+      created_at: number;
+      kind: number;
+      tags: string[][];
+    }) => {
+      if (seenEventIds.current.has(raw.id)) return;
+      seenEventIds.current.add(raw.id);
+      const parsed = parseFactoryJobResult(raw);
+      if (parsed) setResults((prev) => [...prev, parsed]);
+    };
+
+    let disposed = false;
+    let dispose: (() => Promise<void>) | null = null;
+    const filter = {
+      kinds: [KIND_FACTORY_JOB_RESULT],
+      "#e": [jobId],
+      limit: 50,
+    };
+
+    void transport.fetchEvents(filter).then((events) => {
+      if (disposed) return;
+      for (const event of events) ingest(event);
+    });
+    void transport.subscribeLive(filter, ingest).then((result) => {
+      if (disposed) {
+        void result();
+        return;
+      }
+      dispose = result;
+    });
+
+    return () => {
+      disposed = true;
+      void dispose?.();
+    };
+  }, [transport, jobId]);
+
+  return results;
+}
+
+/**
  * Ambient job history per candidate provider — decision 8's first reputation
  * signal. Counts completed kind:6097 results authored by that pubkey,
  * across any job, over the same free read path.

@@ -7,6 +7,12 @@ import {
   factoryJobAvailabilityCaption,
   useFactoryJobAvailability,
 } from "@/features/factory-jobs/lib/factoryJobAvailability";
+import {
+  decryptFactoryJobArtifact,
+  describeFactoryJobArtifact,
+  fetchFactoryJobCiphertext,
+  type PaidArtifactState,
+} from "@/features/factory-jobs/lib/factoryJobArtifact";
 import type { FactoryJobIncrementOffer } from "@/features/factory-jobs/lib/factoryJobFeedback";
 import {
   useFactoryJobFeedback,
@@ -24,6 +30,12 @@ import { Card } from "@/shared/ui/card";
  * Buyer surface (buzz#85): post a job, compare quotes, pay increment by
  * increment. TOON-only — the factory job market has no relay-transport
  * fallback (see `factoryJobAvailability.ts`).
+ *
+ * Paying an increment stores the FULFILL's preimage (`fulfillmentHex`) —
+ * which IS the artifact key (§4.2) — and buzz#135 closes the loop: the
+ * ciphertext is fetched from the offer's Arweave reference and decrypted
+ * with that stored fulfillment alone, so the paid artifact actually
+ * surfaces in the thread.
  */
 
 function JobDetail({
@@ -75,6 +87,43 @@ function JobDetail({
     number | null
   >(null);
   const [payError, setPayError] = React.useState<string | null>(null);
+  const [artifactByIncrement, setArtifactByIncrement] = React.useState<
+    Map<number, PaidArtifactState>
+  >(new Map());
+
+  const setArtifactState = (n: number, state: PaidArtifactState) => {
+    setArtifactByIncrement((prev) => new Map(prev).set(n, state));
+  };
+
+  /** Fetch + decrypt a just-paid offer's artifact with only the stored fulfillment. */
+  const surfacePaidArtifact = async (
+    offer: FactoryJobIncrementOffer,
+    fulfillmentHex: string,
+  ) => {
+    setArtifactState(offer.increment.n, { kind: "loading" });
+    try {
+      const ciphertext = await fetchFactoryJobCiphertext(offer.artifactUrl, {
+        expectedSha256Hex: offer.artifactHash,
+      });
+      const plaintext = decryptFactoryJobArtifact(
+        ciphertext,
+        fulfillmentHex,
+        offer.conditionHex,
+      );
+      setArtifactState(offer.increment.n, {
+        kind: "ready",
+        content: describeFactoryJobArtifact(plaintext),
+      });
+    } catch (error) {
+      setArtifactState(offer.increment.n, {
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Couldn't decrypt the paid artifact.",
+      });
+    }
+  };
 
   const selectedQuote = React.useMemo(
     () =>
@@ -90,6 +139,7 @@ function JobDetail({
     setSelectedProviderPubkey(providerPubkey);
     setPaidIncrementNumbers(new Set());
     setFulfillmentByIncrement(new Map());
+    setArtifactByIncrement(new Map());
     setPayError(null);
   };
 
@@ -108,6 +158,7 @@ function JobDetail({
       setFulfillmentByIncrement((prev) =>
         new Map(prev).set(offer.increment.n, receipt.fulfillmentHex),
       );
+      void surfacePaidArtifact(offer, receipt.fulfillmentHex);
     } catch (error) {
       setPayError(
         error instanceof Error
@@ -136,6 +187,7 @@ function JobDetail({
       />
       {selectedProviderPubkey && selectedQuote ? (
         <FactoryJobThread
+          artifactByIncrement={artifactByIncrement}
           fulfillmentByIncrement={fulfillmentByIncrement}
           narration={narrationByProvider.get(selectedProviderPubkey) ?? []}
           offers={offersByProvider.get(selectedProviderPubkey) ?? []}
