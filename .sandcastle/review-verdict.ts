@@ -29,6 +29,7 @@
 import { execFileSync } from "node:child_process";
 import * as sandcastle from "@ai-hero/sandcastle";
 import { z } from "zod";
+import { matchClosingKeywordIssueNumber } from "./closing-keyword.mjs";
 import { shouldClearNeedsHuman } from "./needs-human-evaluator.mjs";
 
 // ---------------------------------------------------------------------------
@@ -267,11 +268,8 @@ function repoNwo(): string {
  */
 export function resolveIssueFromPrBody(prNumber: string): TargetIssue | null {
   const body = gh(["pr", "view", prNumber, "--json", "body", "--jq", ".body"]);
-  const match = body.match(
-    /\b(?:clos(?:e|es|ed)|fix(?:es|ed)?|resolv(?:e|es|ed))[ \t]*:?[ \t]+#(\d+)/i,
-  );
-  if (!match) return null;
-  const number = match[1]!;
+  const number = matchClosingKeywordIssueNumber(body);
+  if (!number) return null;
   try {
     const title = gh([
       "issue",

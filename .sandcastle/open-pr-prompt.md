@@ -51,9 +51,11 @@ NOT close the issue.** A human reviews and merges the PR.
 
    PR body must:
    - Start with a one-line summary of what changed.
-   - Reference the issue with `Part of #{{TASK_ID}}` — **NOT** `Closes #` or
-     `Fixes #`. The issue only closes once a human has reviewed and merged this
-     PR; do not auto-close it.
+   - Reference the issue with `Closes #{{TASK_ID}}`. The merge itself is the
+     reviewed, gated event (factory-ops submits the formal verdict before a
+     human merges) — the closing keyword is what makes the merge close the
+     ticket and fire the unblock dispatcher, and it is also how the reviewer
+     resolves the Spec axis (`review-verdict.ts`'s `resolveIssueFromPrBody`).
    - Note that this PR was produced by the sandcastle `agent:implement` runner
      and is awaiting human review.
    - End with the line:
