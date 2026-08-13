@@ -409,13 +409,18 @@ try {
         ["pr", "view", String(pr.number), "--json", "body", "--jq", ".body"],
         { encoding: "utf8" },
       );
-      const closesNumber = matchClosingKeywordIssueNumber(prBody);
+      const closesIssueNumber = matchClosingKeywordIssueNumber(prBody);
 
-      if (closesNumber !== String(issueNumber)) {
+      if (closesIssueNumber !== issueNumber) {
+        // Deliberately WITHOUT submitting the factory-ops verdict: an APPROVE
+        // here would satisfy the required-review protection and let the
+        // auto-merge shim merge a PR whose merge leaves the ticket open —
+        // re-creating exactly the dead-end this guard exists to prevent. The
+        // job fails instead, and a human fixes the body.
         openPrVerificationError =
           `\nERROR: PR #${pr.number} (${pr.url}) does not close issue ` +
           `#${issueNumber}.\n` +
-          `  Closing keyword found in body: ${closesNumber ? `#${closesNumber}` : "none"}\n` +
+          `  Closing keyword found in body: ${closesIssueNumber ? `#${closesIssueNumber}` : "none"}\n` +
           `  The PR body must contain \`Closes #${issueNumber}\` (or ` +
           `\`Fixes\`/\`Resolves\`) — see open-pr-prompt.md. Without it the ` +
           `merge will not close this ticket and the reviewer cannot resolve ` +

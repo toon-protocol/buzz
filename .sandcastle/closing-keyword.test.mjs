@@ -28,6 +28,13 @@ test("does not match 'Part of #N'", () => {
   assert.equal(matchClosingKeywordIssueNumber("Part of #170"), null);
 });
 
+test("does not match a cross-repo closing reference", () => {
+  assert.equal(
+    matchClosingKeywordIssueNumber("Closes toon-protocol/toon-meta#342"),
+    null,
+  );
+});
+
 test("does not match a bare issue reference with no keyword", () => {
   assert.equal(matchClosingKeywordIssueNumber("See #170 for context."), null);
 });
