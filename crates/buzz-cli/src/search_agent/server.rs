@@ -62,8 +62,8 @@ const DEFAULT_LIMIT: usize = 20;
 const KIND_CHANNEL_MESSAGE: u16 = 9;
 
 /// A query, in either of the two shapes the endpoint accepts: a `POST` body,
-/// or `GET` parameters with `channels` as a comma-separated list (which is
-/// what makes the endpoint usable from `curl` without a heredoc).
+/// or `GET` parameters with `channels`/`authors` as comma-separated lists
+/// (which is what makes the endpoint usable from `curl` without a heredoc).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchAgentQuery {
@@ -71,26 +71,32 @@ pub struct SearchAgentQuery {
     pub q: String,
     /// Channels the caller claims membership of. Required — see the module
     /// docs. Accepts a JSON array (POST) or a comma-separated string (GET).
-    #[serde(default, deserialize_with = "channel_list")]
+    #[serde(default, deserialize_with = "string_list")]
     pub channels: Vec<String>,
+    /// Hex pubkeys the `from:` operator narrowed to. Same two spellings as
+    /// `channels`. Empty means every author.
+    #[serde(default, deserialize_with = "string_list")]
+    pub authors: Vec<String>,
+    /// Inclusive lower bound on `created_at` (`after:`).
+    #[serde(default)]
+    pub since: Option<u64>,
+    /// Inclusive upper bound on `created_at` (`before:`).
+    #[serde(default)]
+    pub until: Option<u64>,
     #[serde(default)]
     pub limit: Option<usize>,
 }
 
 /// Accept `["a","b"]`, `"a,b"`, or absent. One deserializer rather than two
-/// request types, because the two spellings are the same question.
-fn channel_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+/// request types, because the two spellings are the same question. Shared by
+/// `channels` and `authors` — both are comma-or-array lists of strings.
+fn string_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let value = Option::<Value>::deserialize(deserializer)?;
     Ok(match value {
-        Some(Value::String(raw)) => raw
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .collect(),
+        Some(Value::String(raw)) => split_csv(&raw),
         Some(Value::Array(items)) => items
             .into_iter()
             .filter_map(|item| item.as_str().map(str::trim).map(str::to_string))
@@ -100,39 +106,64 @@ where
     })
 }
 
+/// Split a comma-separated `GET` parameter into a trimmed, non-empty list.
+fn split_csv(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 impl SearchAgentQuery {
-    /// Build a query from `GET` parameters: `channels` is a comma-separated
-    /// list, `limit` a decimal, and anything unparseable falls back to the
-    /// default rather than 400-ing — a bad `limit` should not look like an
-    /// empty index.
+    /// Build a query from `GET` parameters: `channels`/`authors` are
+    /// comma-separated lists, `limit`/`since`/`until` are decimals, and
+    /// anything unparseable falls back to the default rather than 400-ing —
+    /// a bad `limit` should not look like an empty index.
     pub fn from_params(params: &HashMap<String, String>) -> Self {
         Self {
             q: params.get("q").cloned().unwrap_or_default(),
             channels: params
                 .get("channels")
-                .map(|raw| {
-                    raw.split(',')
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_string)
-                        .collect()
-                })
+                .map(|raw| split_csv(raw))
                 .unwrap_or_default(),
+            authors: params
+                .get("authors")
+                .map(|raw| split_csv(raw))
+                .unwrap_or_default(),
+            since: params.get("since").and_then(|raw| raw.parse().ok()),
+            until: params.get("until").and_then(|raw| raw.parse().ok()),
             limit: params.get("limit").and_then(|raw| raw.parse().ok()),
         }
     }
 }
 
-/// Answer one query against `index`.
+/// Answer one query against `index`, scoped to `channels` rather than
+/// `query.channels` directly.
 ///
-/// Pure given the index, and shaped to the desktop's `SearchHit` type
+/// The channel list is a separate argument — not read off `query` — because
+/// by the time this is called it has already been intersected against the
+/// signer's validated membership (see [`handle_get`]/[`handle_post`]): the
+/// caller's *claim* of scope and the *authorized* scope are different values,
+/// and this function only ever sees the latter.
+///
+/// Pure given its inputs, and shaped to the desktop's `SearchHit` type
 /// (`desktop/src/shared/api/searchTypes.ts`) so the TS client is a `fetch` and
 /// a cast rather than a mapping layer. `channelName` is `null` for the same
 /// reason the relay bridge leaves it null: the agent indexes messages, and the
 /// name lives in a channel event the caller already has.
-pub fn search_response(index: &SearchIndex, query: &SearchAgentQuery) -> Value {
+pub fn search_response(
+    index: &SearchIndex,
+    query: &SearchAgentQuery,
+    channels: &[String],
+) -> Value {
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
-    let hits = index.search(&query.q, &query.channels, &SearchFilters::default(), limit);
+    let filters = SearchFilters {
+        authors: &query.authors,
+        since: query.since,
+        until: query.until,
+    };
+    let hits = index.search(&query.q, channels, &filters, limit);
     let rows: Vec<Value> = hits
         .iter()
         .map(|hit| {
@@ -165,14 +196,16 @@ async fn handle_get(
     Query(params): Query<HashMap<String, String>>,
 ) -> Json<Value> {
     let query = SearchAgentQuery::from_params(&params);
-    Json(search_response(&*index.read().await, &query))
+    let channels = query.channels.clone();
+    Json(search_response(&*index.read().await, &query, &channels))
 }
 
 async fn handle_post(
     State(index): State<Shared>,
     Json(query): Json<SearchAgentQuery>,
 ) -> Json<Value> {
-    Json(search_response(&*index.read().await, &query))
+    let channels = query.channels.clone();
+    Json(search_response(&*index.read().await, &query, &channels))
 }
 
 /// Liveness plus enough state to tell "the agent is up but has indexed
@@ -257,14 +290,21 @@ mod tests {
         SearchAgentQuery {
             q: q.to_string(),
             channels: channels.iter().map(|c| (*c).to_string()).collect(),
-            limit: None,
+            ..Default::default()
         }
+    }
+
+    /// Run `search_response` with the query's own `channels` as the
+    /// authorized scope — the world these pre-auth tests live in, where the
+    /// caller's claim and the authorized scope are the same thing.
+    fn respond(index: &SearchIndex, query: &SearchAgentQuery) -> Value {
+        search_response(index, query, &query.channels)
     }
 
     #[test]
     fn a_hit_carries_the_fields_the_desktop_search_hit_type_needs() {
         let index = index_with(&[("e1", "engineering", "the deploy token is in the vault")]);
-        let out = search_response(&index, &query("deploy", &["engineering"]));
+        let out = respond(&index, &query("deploy", &["engineering"]));
 
         assert_eq!(out["found"], 1);
         let hit = &out["hits"][0];
@@ -282,7 +322,7 @@ mod tests {
     #[test]
     fn a_query_with_no_channel_scope_returns_nothing() {
         let index = index_with(&[("e1", "engineering", "the deploy token")]);
-        let out = search_response(&index, &query("deploy", &[]));
+        let out = respond(&index, &query("deploy", &[]));
         assert_eq!(out["found"], 0);
         assert_eq!(out["hits"], json!([]));
     }
@@ -293,7 +333,7 @@ mod tests {
             ("e1", "engineering", "the deploy token"),
             ("c1", "control", "the deploy token"),
         ]);
-        let out = search_response(&index, &query("deploy", &["engineering"]));
+        let out = respond(&index, &query("deploy", &["engineering"]));
         assert_eq!(out["found"], 1);
         assert_eq!(out["hits"][0]["eventId"], "e1");
     }
@@ -315,12 +355,12 @@ mod tests {
             .collect();
         let index = index_with(&borrowed);
 
-        let defaulted = search_response(&index, &query("deploy", &["eng"]));
+        let defaulted = respond(&index, &query("deploy", &["eng"]));
         assert_eq!(defaulted["found"], DEFAULT_LIMIT);
 
         let mut greedy = query("deploy", &["eng"]);
         greedy.limit = Some(10_000);
-        assert_eq!(search_response(&index, &greedy)["found"], MAX_LIMIT);
+        assert_eq!(respond(&index, &greedy)["found"], MAX_LIMIT);
     }
 
     #[test]
@@ -335,6 +375,95 @@ mod tests {
 
         let absent: SearchAgentQuery = serde_json::from_value(json!({"q": "x"})).unwrap();
         assert!(absent.channels.is_empty());
+    }
+
+    /// `authors` takes the same two spellings as `channels`, via the shared
+    /// `string_list` deserializer.
+    #[test]
+    fn authors_parse_from_both_a_json_array_and_a_comma_list() {
+        let from_array: SearchAgentQuery =
+            serde_json::from_value(json!({"q": "x", "authors": ["a", " b ", ""]})).unwrap();
+        assert_eq!(from_array.authors, vec!["a", "b"]);
+
+        let from_csv: SearchAgentQuery =
+            serde_json::from_value(json!({"q": "x", "authors": "a, b,"})).unwrap();
+        assert_eq!(from_csv.authors, vec!["a", "b"]);
+
+        let absent: SearchAgentQuery = serde_json::from_value(json!({"q": "x"})).unwrap();
+        assert!(absent.authors.is_empty());
+    }
+
+    #[test]
+    fn since_and_until_parse_as_plain_integers() {
+        let parsed: SearchAgentQuery =
+            serde_json::from_value(json!({"q": "x", "since": 100, "until": 200})).unwrap();
+        assert_eq!(parsed.since, Some(100));
+        assert_eq!(parsed.until, Some(200));
+
+        let absent: SearchAgentQuery = serde_json::from_value(json!({"q": "x"})).unwrap();
+        assert_eq!(absent.since, None);
+        assert_eq!(absent.until, None);
+    }
+
+    /// `from_params` is the `GET` shape's mapping — same fields, string wire
+    /// format.
+    #[test]
+    fn get_params_carry_authors_since_and_until() {
+        let mut params = HashMap::new();
+        params.insert("q".to_string(), "deploy".to_string());
+        params.insert("authors".to_string(), "aa, bb".to_string());
+        params.insert("since".to_string(), "100".to_string());
+        params.insert("until".to_string(), "200".to_string());
+
+        let parsed = SearchAgentQuery::from_params(&params);
+        assert_eq!(parsed.authors, vec!["aa", "bb"]);
+        assert_eq!(parsed.since, Some(100));
+        assert_eq!(parsed.until, Some(200));
+    }
+
+    /// The filters reach the index: a message outside the author/date
+    /// narrowing does not come back even though it matches the text query and
+    /// the channel scope.
+    #[test]
+    fn authors_since_and_until_narrow_the_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = SearchIndex::open(dir.path().join("search-index.json"));
+        index.insert(IndexedMessage {
+            event_id: "in-range".to_string(),
+            channel_id: "eng".to_string(),
+            pubkey: "aa".repeat(32),
+            created_at: 200,
+            content: "deploy token".to_string(),
+            key_id: None,
+        });
+        index.insert(IndexedMessage {
+            event_id: "wrong-author".to_string(),
+            channel_id: "eng".to_string(),
+            pubkey: "bb".repeat(32),
+            created_at: 200,
+            content: "deploy token".to_string(),
+            key_id: None,
+        });
+        index.insert(IndexedMessage {
+            event_id: "too-old".to_string(),
+            channel_id: "eng".to_string(),
+            pubkey: "aa".repeat(32),
+            created_at: 50,
+            content: "deploy token".to_string(),
+            key_id: None,
+        });
+
+        let q = SearchAgentQuery {
+            q: "deploy".to_string(),
+            channels: vec!["eng".to_string()],
+            authors: vec!["aa".repeat(32)],
+            since: Some(100),
+            until: Some(300),
+            limit: None,
+        };
+        let out = respond(&index, &q);
+        assert_eq!(out["found"], 1, "{out}");
+        assert_eq!(out["hits"][0]["eventId"], "in-range");
     }
 
     /// The endpoint has no auth, so the bind address is the whole perimeter.
