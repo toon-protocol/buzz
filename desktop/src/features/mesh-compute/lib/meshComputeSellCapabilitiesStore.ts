@@ -36,11 +36,6 @@ export type MeshComputeSellCapabilitiesStorage = {
   removeItem(key: string): void;
 };
 
-type StoredRecord = {
-  modelId: string | null;
-  maxVramGb: number | null;
-};
-
 function memoryStorage(): MeshComputeSellCapabilitiesStorage {
   const values = new Map<string, string>();
   return {
@@ -115,6 +110,27 @@ const UNSET_CAPABILITIES: MeshComputeSellCapabilities = {
   maxVramGb: null,
 };
 
+/**
+ * The single definition of what counts as an advertised capability: a blank
+ * model id and a non-positive/non-finite VRAM ceiling are both "unset". Used
+ * on both sides of storage, so a hand-edited record is read under exactly the
+ * rules a revision is written under.
+ */
+function normalizeCapabilities(
+  modelId: unknown,
+  maxVramGb: unknown,
+): MeshComputeSellCapabilities {
+  const trimmedModelId = typeof modelId === "string" ? modelId.trim() : "";
+  const isPositiveNumber =
+    typeof maxVramGb === "number" &&
+    Number.isFinite(maxVramGb) &&
+    maxVramGb > 0;
+  return {
+    modelId: trimmedModelId === "" ? null : trimmedModelId,
+    maxVramGb: isPositiveNumber ? maxVramGb : null,
+  };
+}
+
 function readRecord(): MeshComputeSellCapabilities {
   let raw: string | null = null;
   try {
@@ -140,19 +156,7 @@ function readRecord(): MeshComputeSellCapabilities {
   }
   if (!isJsonObject(parsed)) return { ...UNSET_CAPABILITIES };
 
-  const record = parsed as Partial<StoredRecord>;
-  const modelId =
-    typeof record.modelId === "string" && record.modelId.trim() !== ""
-      ? record.modelId
-      : null;
-  const maxVramGb =
-    typeof record.maxVramGb === "number" &&
-    Number.isFinite(record.maxVramGb) &&
-    record.maxVramGb > 0
-      ? record.maxVramGb
-      : null;
-
-  return { modelId, maxVramGb };
+  return normalizeCapabilities(parsed.modelId, parsed.maxVramGb);
 }
 
 /**
@@ -185,18 +189,7 @@ export function getMeshComputeSellCapabilitiesSnapshot(): MeshComputeSellCapabil
 export function setMeshComputeSellCapabilities(
   next: MeshComputeSellCapabilities,
 ): void {
-  const modelId =
-    typeof next.modelId === "string" && next.modelId.trim() !== ""
-      ? next.modelId.trim()
-      : null;
-  const maxVramGb =
-    typeof next.maxVramGb === "number" &&
-    Number.isFinite(next.maxVramGb) &&
-    next.maxVramGb > 0
-      ? next.maxVramGb
-      : null;
-
-  const record: StoredRecord = { modelId, maxVramGb };
+  const record = normalizeCapabilities(next.modelId, next.maxVramGb);
   try {
     storage.setItem(STORAGE_KEY, JSON.stringify(record));
   } catch (error) {

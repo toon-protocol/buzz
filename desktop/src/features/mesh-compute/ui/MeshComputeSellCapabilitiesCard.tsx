@@ -1,14 +1,13 @@
 import * as React from "react";
 
+import { SettingsOptionGroup } from "@/features/settings/ui/SettingsOptionGroup";
+import { SettingsSectionHeader } from "@/features/settings/ui/SettingsSectionHeader";
 import {
   meshInstalledModels,
   type MeshModelOption,
 } from "@/shared/api/tauriMesh";
-import { SettingsOptionGroup } from "@/features/settings/ui/SettingsOptionGroup";
-import { SettingsSectionHeader } from "@/features/settings/ui/SettingsSectionHeader";
 import { useFeatureEnabled } from "@/shared/features";
 import { Input } from "@/shared/ui/input";
-import { classifyModelRef } from "../classifyModelRef";
 import { useMeshComputeSellCapabilities } from "../hooks/useMeshComputeSellCapabilities";
 import {
   MESH_COMPUTE_SELL_INGRESS_BASE_URL,
@@ -68,13 +67,11 @@ export function MeshComputeSellCapabilitiesCard() {
     revise({ ...capabilities, modelId: id });
   }
 
+  // The store owns the "blank is unset" rule, so both the typed and the picked
+  // path can hand it the raw ref.
   function handleModelChange(next: string) {
     setModelInput(next);
-    const classified = classifyModelRef(next);
-    revise({
-      ...capabilities,
-      modelId: classified.kind === "unknown" ? null : next.trim(),
-    });
+    revise({ ...capabilities, modelId: next });
   }
 
   function handleVramChange(next: string) {

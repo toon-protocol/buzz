@@ -57,6 +57,16 @@ test("a blank model id is stored as unset, not an empty string", () => {
   assert.equal(getMeshComputeSellCapabilities().modelId, null);
 });
 
+test("a stored model id with surrounding whitespace reads back trimmed", () => {
+  const storage = memoryStorage();
+  storage.setItem(
+    "buzz-mesh-compute-sell-capabilities.v1",
+    JSON.stringify({ modelId: "  Qwen3-8B  ", maxVramGb: 16 }),
+  );
+  setMeshComputeSellCapabilitiesStorage(storage);
+  assert.equal(getMeshComputeSellCapabilities().modelId, "Qwen3-8B");
+});
+
 test("a non-positive VRAM ceiling is rejected, falling back to unset", () => {
   setMeshComputeSellCapabilities({ modelId: "Qwen3-8B", maxVramGb: 16 });
   setMeshComputeSellCapabilities({ modelId: "Qwen3-8B", maxVramGb: 0 });
