@@ -75,6 +75,7 @@ import { ExperimentalFeaturesCard } from "./ExperimentalFeaturesCard";
 import { KeyboardShortcutsCard } from "./KeyboardShortcutsCard";
 import { MeshComputeSettingsCard } from "@/features/mesh-compute/ui/MeshComputeSettingsCard";
 import { MeshComputeSellPricingCard } from "@/features/mesh-compute/ui/MeshComputeSellPricingCard";
+import { MeshComputeSellCapabilitiesCard } from "@/features/mesh-compute/ui/MeshComputeSellCapabilitiesCard";
 import { MobilePairingCard } from "./MobilePairingCard";
 import { ModerationQueueCard } from "./ModerationQueueCard";
 import { NotificationSettingsCard } from "./NotificationSettingsCard";
@@ -833,6 +834,7 @@ export function renderSettingsSection(
       return (
         <div className="space-y-12">
           <MeshComputeSettingsCard />
+          <MeshComputeSellCapabilitiesCard />
           <MeshComputeSellPricingCard />
         </div>
       );
