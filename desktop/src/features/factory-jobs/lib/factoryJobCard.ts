@@ -87,11 +87,13 @@ function deriveRequestCard(event: FactoryJobCardEvent): FactoryJobCardContent {
 
 function deriveResultCard(event: FactoryJobCardEvent): FactoryJobCardContent {
   const parsed = parseFactoryJobResult(toParserEvent(event));
-  if (!parsed) {
+  if (!parsed || "status" in parsed) {
     return {
       variant: "unrecognized",
       title: "Job result",
-      description: "This job result is missing its outcome.",
+      description: parsed
+        ? `This job result could not be read: ${parsed.reason}.`
+        : "This job result is missing its outcome.",
     };
   }
   return {
