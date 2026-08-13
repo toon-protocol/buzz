@@ -98,6 +98,26 @@ test("parses a per-increment offer — the relay/connector join", () => {
   });
 });
 
+test("a partial offer whose amount unit is not usdc is malformed (§4.1)", () => {
+  const event = baseEvent({
+    tags: [
+      ["e", ROOT_ID, "", "root"],
+      ["e", "quote-event-id", "", "reply"],
+      ["p", "buyer-pubkey"],
+      ["status", "partial"],
+      ["increment", "1", "1"],
+      ["i", "arweave-tx-id", "url"],
+      ["amount", "5000000", "millisats"],
+      ["condition", "a".repeat(64)],
+    ],
+  });
+  assert.deepEqual(parseFactoryJobFeedback(event), {
+    status: "malformed",
+    eventId: "event-id",
+    reason: "amount must be denominated in usdc",
+  });
+});
+
 test("a partial offer missing the condition tag is malformed, never treated as free", () => {
   const event = baseEvent({
     tags: [

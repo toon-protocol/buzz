@@ -212,6 +212,10 @@ export function parseFactoryJobFeedback(event: {
       return malformed(event.id, "malformed increment tag");
     }
 
+    if (amountTag[2] !== "usdc") {
+      return malformed(event.id, "amount must be denominated in usdc");
+    }
+
     let amountBaseUnits: bigint;
     try {
       amountBaseUnits = BigInt(amountTag[1] ?? "");
