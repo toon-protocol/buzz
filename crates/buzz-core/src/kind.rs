@@ -486,6 +486,20 @@ pub const KIND_FACTORY_JOB_RESULT: u32 = 6097;
 /// narration, disambiguated by the event's `status` tag ("quote" / "partial" / "processing").
 pub const KIND_FACTORY_JOB_FEEDBACK: u32 = 7000;
 
+// NIP-90 mesh-compute job market (toon-meta#265 decision 1 / toon-meta#266 §1.2,
+// `docs/mesh-compute-job-protocol.md` in toon-meta). A sibling allocation to the
+// factory job block above, not a replacement — a different DVM product (posted-price
+// inference vs. reviewed code briefs) on the same NIP-90 wire.
+/// Mesh-compute job request (NIP-90 `kind:5098`).
+pub const KIND_MESH_COMPUTE_JOB_REQUEST: u32 = 5098;
+/// Mesh-compute job result (NIP-90 `kind:6098` = request kind + 1000, per the NIP-90 formula).
+pub const KIND_MESH_COMPUTE_JOB_RESULT: u32 = 6098;
+/// Mesh-compute job feedback (NIP-90 `kind:7000`): accepted / refused / completed-offer /
+/// narration, disambiguated by the event's `status` tag — the same numeric kind as
+/// `KIND_FACTORY_JOB_FEEDBACK` (spec §1.2: "shared feedback kind"), so it is deliberately
+/// NOT added to `ALL_KINDS` below (that would be a duplicate-value entry, not a new kind).
+pub const KIND_MESH_COMPUTE_JOB_FEEDBACK: u32 = 7000;
+
 /// Relay-signed notification: the target pubkey was added to a channel.
 /// Stored globally (channel_id = None) with p-tag = target, h-tag = channel UUID.
 pub const KIND_MEMBER_ADDED_NOTIFICATION: u32 = 44100;
@@ -674,6 +688,8 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_FACTORY_JOB_REQUEST,
     KIND_FACTORY_JOB_RESULT,
     KIND_FACTORY_JOB_FEEDBACK,
+    KIND_MESH_COMPUTE_JOB_REQUEST,
+    KIND_MESH_COMPUTE_JOB_RESULT,
     KIND_MEMBER_ADDED_NOTIFICATION,
     KIND_MEMBER_REMOVED_NOTIFICATION,
     KIND_AGENT_TURN_METRIC,
@@ -853,6 +869,22 @@ mod tests {
         for &k in ALL_KINDS {
             assert!(seen.insert(k), "duplicate kind value: {k}");
         }
+    }
+
+    #[test]
+    fn mesh_compute_job_result_is_request_plus_1000() {
+        assert_eq!(
+            KIND_MESH_COMPUTE_JOB_RESULT,
+            KIND_MESH_COMPUTE_JOB_REQUEST + 1000
+        );
+    }
+
+    #[test]
+    fn mesh_compute_job_feedback_shares_the_factory_feedback_kind() {
+        // docs/mesh-compute-job-protocol.md §1.2: kind:7000 is a shared feedback
+        // kind across both DVM products, disambiguated by the `status` tag, not
+        // a second kind number — so this equality is intentional, not a bug.
+        assert_eq!(KIND_MESH_COMPUTE_JOB_FEEDBACK, KIND_FACTORY_JOB_FEEDBACK);
     }
 
     #[test]

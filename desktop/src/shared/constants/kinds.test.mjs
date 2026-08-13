@@ -16,6 +16,9 @@ import {
   KIND_FACTORY_JOB_REQUEST,
   KIND_FACTORY_JOB_FEEDBACK,
   KIND_FACTORY_JOB_RESULT,
+  KIND_MESH_COMPUTE_JOB_REQUEST,
+  KIND_MESH_COMPUTE_JOB_RESULT,
+  KIND_MESH_COMPUTE_JOB_FEEDBACK,
   KIND_HUDDLE_STARTED,
   KIND_HUDDLE_PARTICIPANT_JOINED,
   KIND_HUDDLE_PARTICIPANT_LEFT,
@@ -64,6 +67,19 @@ test("isConversationalUnreadKind_allFactoryJobKinds_excluded", () => {
   ]) {
     assert.equal(isConversationalUnreadKind(kind), false, `kind ${kind}`);
   }
+});
+
+test("meshComputeJobResult_is_request_plus_1000", () => {
+  assert.equal(
+    KIND_MESH_COMPUTE_JOB_RESULT,
+    KIND_MESH_COMPUTE_JOB_REQUEST + 1000,
+  );
+});
+
+test("meshComputeJobFeedback_shares_the_factory_feedback_kind", () => {
+  // docs/mesh-compute-job-protocol.md §1.2: kind:7000 is shared across both
+  // DVM products, disambiguated by the `status` tag, not a second kind.
+  assert.equal(KIND_MESH_COMPUTE_JOB_FEEDBACK, KIND_FACTORY_JOB_FEEDBACK);
 });
 
 test("isConversationalUnreadKind_huddleLifecycle_excluded", () => {
