@@ -287,6 +287,7 @@ test("a completed result parses through the buyer-side kind:6097 reader with the
       {
         job: JOB,
         requestEvent: REQUEST_EVENT,
+        giftWrapped: false,
         lastEventId: "offer-2",
         outcome: "completed",
         reachedIncrement: 2,
@@ -305,6 +306,43 @@ test("a completed result parses through the buyer-side kind:6097 reader with the
   }
 });
 
+test("a gift-wrapped job's result redacts the brief from the request tag but still parses", async () => {
+  setupTauriStub();
+  const { transport } = scriptedTransport();
+  try {
+    const event = await publishFactoryJobResult(
+      {
+        job: JOB,
+        // For a wrapped brief this is the reconstituted rumor — its content
+        // and tags are the confidential brief and must never reach the relay.
+        requestEvent: REQUEST_EVENT,
+        giftWrapped: true,
+        lastEventId: "offer-2",
+        outcome: "completed",
+        reachedIncrement: 2,
+        totalIncrements: 2,
+        finalArtifactTxId: "tx-final",
+      },
+      transport,
+    );
+    const requestTag = event.tags.find((tag) => tag[0] === "request");
+    assert.ok(requestTag, "the request tag must still be present (§5.1)");
+    const embedded = JSON.parse(requestTag[1]);
+    assert.equal(embedded.content, "");
+    assert.deepEqual(embedded.tags, []);
+    assert.equal(embedded.id, REQUEST_EVENT.id);
+    assert.equal(embedded.pubkey, REQUEST_EVENT.pubkey);
+    assert.ok(
+      !requestTag[1].includes(JOB.brief),
+      "the confidential brief must not appear anywhere in the request tag",
+    );
+    const parsed = parseFactoryJobResult(event);
+    assert.equal(parsed.outcome, "completed");
+  } finally {
+    teardownTauriStub();
+  }
+});
+
 test("an abandoned-buyer result parses with how far the job got and no artifact", async () => {
   setupTauriStub();
   const { transport } = scriptedTransport();
@@ -313,6 +351,7 @@ test("an abandoned-buyer result parses with how far the job got and no artifact"
       {
         job: JOB,
         requestEvent: REQUEST_EVENT,
+        giftWrapped: false,
         lastEventId: "offer-2",
         outcome: "abandoned-buyer",
         reachedIncrement: 1,

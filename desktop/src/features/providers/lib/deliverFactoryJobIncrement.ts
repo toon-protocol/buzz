@@ -160,6 +160,8 @@ export async function publishFactoryJobResult(
     job: FactoryJobRequest;
     /** The original kind:5097 event, verbatim — the result's `request` tag (§5.1). */
     requestEvent: RelayEvent;
+    /** Whether the brief arrived NIP-59 gift-wrapped rather than in the open. */
+    giftWrapped: boolean;
     /** The last kind:7000 event in the thread (offer or narration). */
     lastEventId: string;
     outcome: "completed" | "abandoned-buyer";
@@ -170,9 +172,19 @@ export async function publishFactoryJobResult(
   },
   transport: ToonEventTransport,
 ): Promise<RelayEvent> {
+  // §5.1 embeds the request verbatim so anyone can audit the thread — but a
+  // gift-wrapped brief was never public, and the reconstituted rumor carries
+  // the confidential brief in its content and tags. A wrapped job's result
+  // therefore embeds only the envelope coordinates the thread already exposes
+  // (id, buyer pubkey, kind, timestamp); the buyer-side reader requires the
+  // tag to be present but never reads inside it.
+  const requestEvent = input.giftWrapped
+    ? { ...input.requestEvent, content: "", tags: [] }
+    : input.requestEvent;
+
   const template = buildResultEvent({
     job: toRigFactoryJobRequest(input.job),
-    requestEvent: input.requestEvent,
+    requestEvent,
     lastEventId: input.lastEventId,
     outcome: input.outcome,
     reachedIncrement: input.reachedIncrement,

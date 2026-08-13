@@ -140,6 +140,7 @@ export function useProviderDelivery({
           {
             job,
             requestEvent: job.requestEvent,
+            giftWrapped: job.giftWrapped,
             lastEventId: delivered.offerEvent.id,
             outcome: "abandoned-buyer",
             reachedIncrement: n - 1,
@@ -157,6 +158,7 @@ export function useProviderDelivery({
           {
             job,
             requestEvent: job.requestEvent,
+            giftWrapped: job.giftWrapped,
             lastEventId: delivered.offerEvent.id,
             outcome: "completed",
             reachedIncrement: n,
