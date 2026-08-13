@@ -371,9 +371,35 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       if (selectedDeviceId) {
         audioConstraints.deviceId = { exact: selectedDeviceId };
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: audioConstraints,
-      });
+      // WebKitGTK rejects constraint sets containing keys it does not
+      // implement (sampleRate) with "Invalid constraint", even though these
+      // are ideal-valued and the spec says unsupported ideals are ignored.
+      // The worklet's AudioContext({sampleRate: 48000}) resamples whatever
+      // rate the mic actually delivers, so fall back progressively instead
+      // of failing the huddle on Linux.
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: audioConstraints,
+        });
+      } catch (constraintError) {
+        console.warn(
+          "[huddle] getUserMedia rejected the preferred constraints, retrying without sampleRate:",
+          constraintError,
+        );
+        const { sampleRate: _unsupported, ...withoutRate } = audioConstraints;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: withoutRate,
+          });
+        } catch {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: selectedDeviceId
+              ? { deviceId: { exact: selectedDeviceId } }
+              : true,
+          });
+        }
+      }
       const audioTrack = stream.getAudioTracks()[0];
 
       // Wrap post-getUserMedia steps so the stream is always cleaned up on

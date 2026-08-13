@@ -64,6 +64,7 @@ import {
   isSettingsSection,
 } from "@/features/settings/ui/SettingsPanels";
 import { HuddleBar, HuddleProvider } from "@/features/huddle";
+import { HuddleProbe } from "@/testing/HuddleProbe";
 import { useDueReminderBadgeCount } from "@/features/reminders/hooks";
 import { RemindMeLaterProvider } from "@/features/reminders/ui/RemindMeLaterProvider";
 import { useReminderNotifications } from "@/features/reminders/useReminderNotifications";
@@ -743,6 +744,7 @@ export function AppShell() {
           }}
         >
           <HuddleProvider>
+            {import.meta.env.VITE_HUDDLE_PROBE === "1" ? <HuddleProbe /> : null}
             <RemindMeLaterProvider pubkey={identityQuery.data?.pubkey}>
               <div
                 className="buzz-huddle-shell relative h-dvh overflow-hidden overscroll-none"
