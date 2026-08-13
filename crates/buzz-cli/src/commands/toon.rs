@@ -56,7 +56,7 @@ const KIND_CHANNEL_MESSAGE: u16 = 9;
 /// `channelAdminListFilter`'s default; the filter is not scoped by channel,
 /// because an agent must be able to validate a key wrapped for a channel it
 /// has never heard of.
-const ADMIN_LIST_LIMIT: u32 = 500;
+pub(crate) const ADMIN_LIST_LIMIT: u32 = 500;
 
 /// What desktop renders in place of a message this client cannot open.
 /// Matches `channelMessageCrypto.ts`'s `LOCKED_MESSAGE_PLACEHOLDER`.

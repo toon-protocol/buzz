@@ -11,32 +11,33 @@
 //! localhost endpoint the desktop hits when it is configured with the agent's
 //! URL (`BUZZ_SEARCH_AGENT_URL`).
 //!
-//! ## The trust gap, stated plainly
+//! ## Queries are provable, per channel (buzz#179)
 //!
-//! **There is no authentication on this endpoint, and the scope is the
-//! caller's word.** A request names the channels it wants searched, and the
-//! agent searches exactly those and no others. It does not — cannot, today —
-//! verify that the caller holds keys for them. What keeps that honest in v1:
+//! A query is signed NIP-98-style (`Authorization: Nostr <base64 event>`,
+//! [`authenticate`]) and the signer is checked against each requested
+//! channel's validated `kind:39100` admin list — the same fold
+//! `crate::channel_admins::resolve_channel_admin_list` already runs for key
+//! admission, resolved fresh every ingest cycle
+//! ([`crate::search_agent::run`]) and cached in [`QueryState::admin_lists`].
+//! [`authorized_channels`] is where the two are combined: a channel is
+//! answered only if the signer verified *and* is on that channel's list.
 //!
-//! - The listener is **refused unless it is loopback** ([`assert_loopback`]),
-//!   so the surface is other processes on this machine, not the network. An
-//!   operator who wants it exposed has to put a real proxy in front and own
-//!   that decision.
-//! - Scope is **required and fail-closed**: an empty channel list returns zero
-//!   hits, never everything ([`crate::search_index::SearchIndex::search`]).
-//!   A caller cannot fish by omitting the argument.
-//! - The desktop only ever asks for channels it holds keys for, so in the
-//!   intended deployment the two membership sets already agree.
+//! **Fail-closed is per channel, not per request.** An unsigned or
+//! invalid-signature request gets zero hits for everything it asked about —
+//! there is no signer to check against anything. A validly signed request
+//! from someone who is a member of channel A but not channel B gets A's
+//! results and nothing for B, the same shape the channel-scope intersection
+//! already had before this ticket
+//! ([`crate::search_index::SearchIndex::search`]).
 //!
-//! That is a *local trusted agent* model: the agent trusts every process
-//! running as the same user on the same machine, exactly as the sidecar and
-//! the keystore already do. It is not a multi-user authorization story, and it
-//! must not be deployed as one. The follow-up — a NIP-98-style signed request
-//! whose signer must appear on the channel's validated admin/member list, or
-//! the paid request/response pair that makes the question itself a TOON event
-//! — is filed on the PR.
+//! What this endpoint still does **not** do: verify a full membership list
+//! (only channel *admins* — see `channel_admins.rs`'s module docs on why that
+//! is the only authority that exists today), or expose a network surface —
+//! [`assert_loopback`] is unchanged and unrelaxed by any of this. Public
+//! (unencrypted) channels and the paid request/response TOON shape are
+//! explicitly deferred to buzz#49.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -51,6 +52,7 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 
+use crate::channel_admins::ChannelAdminList;
 use crate::error::CliError;
 use crate::search_index::{SearchFilters, SearchIndex};
 
@@ -187,12 +189,22 @@ pub fn search_response(
 
 pub type IndexHandle = Arc<RwLock<SearchIndex>>;
 
-/// Everything a request handler needs: the index, and the base URL the agent
-/// itself is bound to (so an incoming NIP-98 `u` tag can be checked against
-/// what the client actually signed, not just parsed and trusted).
+/// Every channel's validated admin-list state, keyed by channel id. Refreshed
+/// wholesale once per ingest cycle ([`crate::search_agent::run`]) via
+/// [`crate::channel_admins::resolve_channel_admin_list`] — the same fold key
+/// admission already trusts, not a second implementation of it. A channel
+/// absent from this map has no resolved chain (yet, or ever) and therefore no
+/// one is authorized for it.
+pub type AdminListsHandle = Arc<RwLock<BTreeMap<String, ChannelAdminList>>>;
+
+/// Everything a request handler needs: the index, the resolved admin lists,
+/// and the base URL the agent itself is bound to (so an incoming NIP-98 `u`
+/// tag can be checked against what the client actually signed, not just
+/// parsed and trusted).
 #[derive(Clone)]
 struct QueryState {
     index: IndexHandle,
+    admin_lists: AdminListsHandle,
     /// `http://127.0.0.1:<port>`, computed once the listener is actually
     /// bound — the same string [`crate::search_agent::run`] prints as
     /// `queryUrl`, so client and server agree on it by construction rather
@@ -209,7 +221,7 @@ struct QueryState {
 /// they are all the same answer here on purpose. This endpoint never 401s: a
 /// request that is not provably signed gets the same empty result set as one
 /// that named no channels ([`crate::search_index::SearchIndex::search`]),
-/// so probing the header format teaches an attacker nothing a probing the
+/// so probing the header format teaches an attacker nothing probing the
 /// scope wouldn't already.
 fn authenticate(
     headers: &HeaderMap,
@@ -221,6 +233,36 @@ fn authenticate(
     let encoded = header.strip_prefix("Nostr ")?;
     let event_json = String::from_utf8(BASE64.decode(encoded).ok()?).ok()?;
     buzz_auth::verify_nip98_event(&event_json, url, method, body).ok()
+}
+
+/// Intersect `requested` against what `signer` is actually authorized to
+/// search, per [`AdminListsHandle`].
+///
+/// Pure and independent of transport, so the fail-closed cases are testable
+/// without standing up an HTTP server: no signer authorizes nothing (there is
+/// no one to check membership for); a signer authorizes exactly the requested
+/// channels whose resolved admin list names them, silently dropping the rest
+/// — never erroring, and never falling back to "everything", because a
+/// channel this agent has no resolved chain for is indistinguishable here
+/// from a channel the signer is not on.
+fn authorized_channels(
+    admin_lists: &BTreeMap<String, ChannelAdminList>,
+    signer: Option<&nostr::PublicKey>,
+    requested: &[String],
+) -> Vec<String> {
+    let Some(signer) = signer else {
+        return Vec::new();
+    };
+    let signer_hex = signer.to_hex();
+    requested
+        .iter()
+        .filter(|channel| {
+            admin_lists
+                .get(channel.as_str())
+                .is_some_and(|list| list.is_admin(&signer_hex))
+        })
+        .cloned()
+        .collect()
 }
 
 /// `GET /search?q=…&channels=a,b&limit=20`.
@@ -247,11 +289,8 @@ async fn handle_get(
         _ => format!("{}/search", state.base_url),
     };
     let signer = authenticate(&headers, "GET", &expected_url, None);
-    let channels = if signer.is_some() {
-        query.channels.clone()
-    } else {
-        Vec::new()
-    };
+    let admin_lists = state.admin_lists.read().await;
+    let channels = authorized_channels(&admin_lists, signer.as_ref(), &query.channels);
     Json(search_response(
         &*state.index.read().await,
         &query,
@@ -275,11 +314,8 @@ async fn handle_post(
     let query: SearchAgentQuery = serde_json::from_slice(&body).unwrap_or_default();
     let expected_url = format!("{}/search", state.base_url);
     let signer = authenticate(&headers, "POST", &expected_url, Some(&body));
-    let channels = if signer.is_some() {
-        query.channels.clone()
-    } else {
-        Vec::new()
-    };
+    let admin_lists = state.admin_lists.read().await;
+    let channels = authorized_channels(&admin_lists, signer.as_ref(), &query.channels);
     Json(search_response(
         &*state.index.read().await,
         &query,
@@ -326,7 +362,11 @@ proxy in front of it if you really mean to expose it."
 /// every test — learns where to talk. Binds before constructing [`QueryState`]
 /// because `base_url` is derived from the real bound address, not the
 /// requested one — port 0 resolves to whatever the OS actually handed back.
-pub async fn serve(addr: SocketAddr, index: IndexHandle) -> Result<SocketAddr, CliError> {
+pub async fn serve(
+    addr: SocketAddr,
+    index: IndexHandle,
+    admin_lists: AdminListsHandle,
+) -> Result<SocketAddr, CliError> {
     assert_loopback(&addr)?;
     let listener = TcpListener::bind(addr).await.map_err(|e| {
         CliError::Other(format!(
@@ -339,6 +379,7 @@ pub async fn serve(addr: SocketAddr, index: IndexHandle) -> Result<SocketAddr, C
 
     let state = QueryState {
         index,
+        admin_lists,
         base_url: format!("http://{bound}"),
     };
     let app = Router::new()
@@ -654,5 +695,75 @@ mod tests {
                 "{auth} must not authenticate"
             );
         }
+    }
+
+    // ─── per-channel membership authorization ───────────────────────────────
+
+    fn admin_list(channel_id: &str, admins: &[&str]) -> ChannelAdminList {
+        ChannelAdminList {
+            channel_id: channel_id.to_string(),
+            creator: admins[0].to_string(),
+            admins: admins.iter().map(|a| (*a).to_string()).collect(),
+            key_id: None,
+            epoch: 0,
+            updated_at: 1_700_000_000,
+        }
+    }
+
+    /// The acceptance criterion, stated at the pure-function layer: no signer
+    /// gets nothing, regardless of what was requested.
+    #[test]
+    fn an_unauthenticated_request_is_authorized_for_no_channel() {
+        let keys = nostr::Keys::generate();
+        let member = keys.public_key().to_hex();
+        let mut lists = BTreeMap::new();
+        lists.insert("eng".to_string(), admin_list("eng", &[&member]));
+
+        let out = authorized_channels(&lists, None, &["eng".to_string()]);
+        assert!(out.is_empty());
+    }
+
+    /// A validly signed request is authorized per channel, not per request: a
+    /// member of one channel and not another gets the first and nothing for
+    /// the second, in the same call.
+    #[test]
+    fn a_signer_is_authorized_only_for_channels_naming_them_as_admin() {
+        let member = nostr::Keys::generate();
+        let stranger = nostr::Keys::generate();
+        let member_hex = member.public_key().to_hex();
+
+        let mut lists = BTreeMap::new();
+        lists.insert("eng".to_string(), admin_list("eng", &[&member_hex]));
+        lists.insert(
+            "control".to_string(),
+            admin_list("control", &["ff".repeat(32).as_str()]),
+        );
+
+        let requested = vec!["eng".to_string(), "control".to_string()];
+        assert_eq!(
+            authorized_channels(&lists, Some(&member.public_key()), &requested),
+            vec!["eng".to_string()],
+            "member of eng only, so control must not come back"
+        );
+
+        assert!(
+            authorized_channels(&lists, Some(&stranger.public_key()), &requested).is_empty(),
+            "a signer on neither list is authorized for neither channel"
+        );
+    }
+
+    /// A channel with no resolved admin chain at all (never seen, or the fold
+    /// never rooted) is indistinguishable from "the signer is not on it" —
+    /// never falls back to trusting the request.
+    #[test]
+    fn a_channel_with_no_resolved_admin_list_authorizes_nobody() {
+        let signer = nostr::Keys::generate();
+        let lists = BTreeMap::new();
+        let out = authorized_channels(
+            &lists,
+            Some(&signer.public_key()),
+            &["unknown-channel".to_string()],
+        );
+        assert!(out.is_empty());
     }
 }
