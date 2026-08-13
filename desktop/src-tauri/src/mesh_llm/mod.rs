@@ -29,8 +29,8 @@ pub(crate) use recovery::{
 };
 
 mod status_view;
-pub use status_view::models_from_status_payload;
 pub(super) use status_view::dedupe_models;
+pub use status_view::models_from_status_payload;
 use status_view::{health_from_payload, node_state_from_payload};
 
 mod usage;
