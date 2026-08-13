@@ -521,11 +521,8 @@ pub async fn leave_huddle(state: State<'_, AppState>) -> Result<(), String> {
 
     // Auto-end: if no other human participants remain, end the huddle (emit
     // HUDDLE_ENDED + archive). Otherwise just remove self from membership.
-    // Checked by roster IDENTITY, not a bare count — "1 human remaining"
-    // does not imply WE are that one. If our own membership row never
-    // landed (e.g. a race on the WS join), the one counted member is the
-    // OTHER participant, and a count-based check would end their huddle
-    // out from under them. See buzz#193.
+    // The "am I the last human?" decision goes by roster identity rather than
+    // a bare count — see `should_auto_end_huddle` for why (buzz#193).
     if !parent_channel_id.is_empty() && !ephemeral_channel_id.is_empty() {
         let own_pubkey = state
             .keys

@@ -453,11 +453,8 @@ mod tests {
         ));
     }
 
-    /// buzz#193: our own membership row is missing from the roster (e.g. a
-    /// race on the WS join), so the roster contains only the OTHER
-    /// participant. A count-based check saw "1 remaining" and concluded WE
-    /// were that one; the identity check must not auto-end here — the other
-    /// participant is still live.
+    /// The buzz#193 repro: our own membership row is missing from the roster,
+    /// so the single member counted is the OTHER — still live — participant.
     #[test]
     fn roster_missing_self_with_another_present_does_not_auto_end() {
         assert!(!should_auto_end_huddle(SELF_PK, &[OTHER_PK.to_string()]));
