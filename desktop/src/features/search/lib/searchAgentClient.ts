@@ -1,3 +1,4 @@
+import { signRelayEvent } from "@/shared/api/tauri";
 import type {
   SearchHit,
   SearchMessagesInput,
@@ -16,19 +17,59 @@ import type {
  * the search agent is exactly that: a member, admitted through the standard
  * gift-wrap flow, that indexes what its key ring opens.
  *
- * ## The scope argument is the membership claim
+ * ## The scope argument is a claim, the signature is the proof (buzz#179)
  *
- * The agent answers only for channels the caller names, and it cannot verify
- * that claim — see the trust-gap note in
+ * The agent answers only for channels the caller names *and* whose validated
+ * `kind:39100` admin list names the signer — see the query-surface docs in
  * `crates/buzz-cli/src/search_agent/server.rs`. This module's contract is the
- * client half of that: **only pass channel ids this client holds keys for.**
- * `searchViaAgent` therefore takes the scope explicitly rather than reading it
- * from a store, so a caller cannot widen it by forgetting an argument, and an
- * empty scope short-circuits here rather than travelling to the agent.
+ * client half of that: **only pass channel ids this client holds keys for**
+ * (the claim), and every request is NIP-98-signed with this identity's own
+ * key (the proof). `searchViaAgent` takes the scope explicitly rather than
+ * reading it from a store, so a caller cannot widen it by forgetting an
+ * argument, and an empty scope short-circuits here rather than travelling to
+ * the agent.
+ *
+ * A `POST` carries the query, not a `GET` querystring: the endpoint already
+ * accepted a JSON body (`handle_post` in `server.rs`), and a signed request
+ * needs a body to hash into the NIP-98 `payload` tag anyway.
  */
 
 /** How long to wait before giving up on a local process. */
 const REQUEST_TIMEOUT_MS = 5_000;
+
+const NIP98_KIND = 27235;
+
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Build the NIP-98 `Authorization` header for a `POST` with `body`.
+ *
+ * Mirrors `invites.ts`'s `nip98PostHeader` — the `u` tag is the exact request
+ * URL and the `payload` tag is `sha256(body)`, both finalized before signing
+ * so what is signed and what is sent can never disagree.
+ */
+async function nip98PostHeader(url: string, body: string): Promise<string> {
+  const authEvent = await signRelayEvent({
+    kind: NIP98_KIND,
+    content: "",
+    tags: [
+      ["u", url],
+      ["method", "POST"],
+      ["payload", await sha256Hex(body)],
+      ["nonce", crypto.randomUUID()],
+    ],
+  });
+  // NIP-98 events carry empty content and ASCII-only tags, so btoa is safe here.
+  return `Nostr ${btoa(JSON.stringify(authEvent))}`;
+}
 
 type RawAgentHit = {
   eventId?: unknown;
@@ -88,23 +129,38 @@ export function parseAgentResponse(body: unknown): SearchMessagesResponse {
   return { hits, found: hits.length };
 }
 
+/** The JSON body shape `handle_post` (`server.rs`) deserializes. */
+export type AgentSearchBody = {
+  q: string;
+  channels: string[];
+  limit: number;
+  authors?: string[];
+  since?: number;
+  until?: number;
+};
+
 /**
- * Build the agent's query URL.
+ * Build the agent's query body.
  *
  * Exported for the test: getting `channels` wrong is the one mistake here that
  * fails open rather than closed, because an agent that receives no scope
  * returns nothing — which reads as "no results" and not as a bug.
+ * `authors`/`since`/`until` are passed through as-is (`undefined` drops the
+ * key on serialization) — the agent already treats an absent filter as "no
+ * narrowing".
  */
-export function buildAgentSearchUrl(
-  baseUrl: string,
+export function buildAgentSearchBody(
   input: SearchMessagesInput,
   channelIds: readonly string[],
-): string {
-  const url = new URL("/search", baseUrl);
-  url.searchParams.set("q", input.q);
-  url.searchParams.set("channels", channelIds.join(","));
-  url.searchParams.set("limit", String(input.limit ?? 20));
-  return url.toString();
+): AgentSearchBody {
+  return {
+    q: input.q,
+    channels: [...channelIds],
+    limit: input.limit ?? 20,
+    authors: input.authors,
+    since: input.since,
+    until: input.until,
+  };
 }
 
 /**
@@ -127,7 +183,16 @@ export async function searchViaAgent(
     return { hits: [], found: 0 };
   }
 
-  const response = await fetch(buildAgentSearchUrl(baseUrl, input, scope), {
+  const url = new URL("/search", baseUrl).toString();
+  const body = JSON.stringify(buildAgentSearchBody(input, scope));
+  const authorization = await nip98PostHeader(url, body);
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: authorization,
+      "Content-Type": "application/json",
+    },
+    body,
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) {
