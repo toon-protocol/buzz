@@ -74,6 +74,7 @@ import { HarnessesSettingsPanel } from "./HarnessesSettingsPanel";
 import { ExperimentalFeaturesCard } from "./ExperimentalFeaturesCard";
 import { KeyboardShortcutsCard } from "./KeyboardShortcutsCard";
 import { MeshComputeSettingsCard } from "@/features/mesh-compute/ui/MeshComputeSettingsCard";
+import { MeshComputeSellComputeCard } from "@/features/mesh-compute/ui/MeshComputeSellComputeCard";
 import { MeshComputeSellPricingCard } from "@/features/mesh-compute/ui/MeshComputeSellPricingCard";
 import { MobilePairingCard } from "./MobilePairingCard";
 import { ModerationQueueCard } from "./ModerationQueueCard";
@@ -833,6 +834,7 @@ export function renderSettingsSection(
       return (
         <div className="space-y-12">
           <MeshComputeSettingsCard />
+          <MeshComputeSellComputeCard />
           <MeshComputeSellPricingCard />
         </div>
       );
