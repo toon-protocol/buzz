@@ -746,6 +746,8 @@ pub fn run() {
             create_auth_event,
             nip44_encrypt_to_self,
             nip44_decrypt_from_self,
+            seal_gift_wrap,
+            unseal_gift_wrap,
             get_channels,
             create_channel,
             ensure_starter_channels,

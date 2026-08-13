@@ -3,22 +3,18 @@ import { decode as decodeNip19 } from "nostr-tools/nip19";
 import { getNsec } from "@/shared/api/tauriIdentity";
 
 /**
- * The one place the renderer asks Rust for the user's secret key.
+ * Asks Rust for the user's secret key so the renderer can do a NIP-59 gift
+ * wrap's two NIP-44 layers itself — a plain signature (`sign_event`) is not
+ * enough, since a seal is an ECDH encryption to the recipient under the
+ * *sender's* key, not a signature over anything.
  *
- * Everything else in the app signs by *sending* Rust an unsigned event
- * (`signRelayEvent` → the `sign_event` command) and getting a signed one back,
- * which is the right shape: the key stays in the keychain-backed Rust side and
- * the webview never holds it.
- *
- * Gift wraps cannot use that path, and it is worth being precise about why.
- * A NIP-59 wrap is not one signature — it is a NIP-44 encryption to the
- * recipient under an ECDH secret derived from the *sender's* key (the seal),
- * wrapped in a second encryption under a throwaway key. `sign_event` signs;
- * it does not do ECDH. Unwrapping is worse: the recipient's key is needed to
- * derive the same shared secret, and there is no "decrypt this for me"
- * command at all. Adding both to the Rust surface is the better long-term
- * answer (buzz#27 gave the Rust side a write seam; a crypto seam is the
- * sequel) — until then this is the honest, single, greppable exception.
+ * buzz#43 gave the channel-key gift-wrap paths (`channelKeyInbox.ts`,
+ * `channelKeyRotation.ts`, `channelMembership.ts`) Rust-side `seal_gift_wrap`/
+ * `unseal_gift_wrap` commands that do this ECDH in Rust instead, so this
+ * function's only remaining callers are the factory-jobs gift-wrap flow
+ * (`postFactoryJob.ts`, `useInboundFactoryJobs.ts`) — porting that pair to
+ * the same commands is a natural follow-up, out of buzz#43's scope (it is a
+ * different rumor shape and a different feature).
  *
  * Deliberately not cached. A key held in a module-level variable outlives the
  * screen that needed it and shows up in every heap snapshot taken afterwards;

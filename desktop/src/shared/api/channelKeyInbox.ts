@@ -8,7 +8,7 @@ import {
   acceptChannelKeyGrant,
   type ChannelKeyGrant,
   channelKeyWrapFilter,
-  unwrapChannelKey,
+  unwrapChannelKeyViaRust,
 } from "@/shared/api/channelKeyDelivery";
 import { reconcileChannelKeyEpochs } from "@/shared/api/channelKeyEpoch";
 import { adoptChannelKey, findChannelKey } from "@/shared/api/channelKeyStore";
@@ -79,16 +79,16 @@ export type ChannelKeyInboxOptions = {
   /** This client's pubkey — the `#p` the wraps are addressed to. */
   pubkey: string;
   /**
-   * This client's secret key, for the two NIP-44 unwrap layers.
+   * Opens one gift wrap addressed to this client, or resolves `null` if it is
+   * not one we can use. Defaults to {@link unwrapChannelKeyViaRust} (buzz#43),
+   * which asks Rust to do the two NIP-44 layers against the identity already
+   * held in `AppState` — the secret key never enters the renderer.
    *
-   * A function, and called only when a wrap addressed to this client actually
-   * turns up — most sessions never receive one, and reading the key out of the
-   * keychain for a thing that may never happen is both a needless IPC round
-   * trip and a needless copy of the key in the renderer's heap. Resolved once
-   * and reused for the life of the inbox: the alternative is a keychain read
-   * per inbound wrap.
+   * Injectable because the existing unit-test suite exercises real crypto
+   * against a known secret key with no Tauri host to call into; tests pass
+   * the pure {@link unwrapChannelKey} bound to a test identity instead.
    */
-  getSecretKey: () => Promise<Uint8Array>;
+  unwrap?: (event: RelayEvent) => Promise<ChannelKeyGrant | null>;
   subscribe?: InboxSubscribe;
   /** Told about every decision. Defaults to a console log. */
   onEvent?: (event: ChannelKeyInboxEvent) => void;
@@ -184,17 +184,16 @@ export async function startChannelKeyInbox(
 ): Promise<ChannelKeyInbox> {
   const subscribe = options.subscribe ?? subscribeLiveEvents;
   const report = options.onEvent ?? logInboxEvent;
+  const unwrap = options.unwrap ?? unwrapChannelKeyViaRust;
 
   /** Newest unsettled grant per channel. Older ones are superseded, not queued. */
   const held = new Map<string, ChannelKeyGrant>();
   /** Wrap ids already unwrapped — relays re-deliver, and unwrapping is ECDH. */
   const seenWraps = new Set<string>();
-  /** Resolved on the first wrap that reaches us, then reused. */
-  let secretKey: Promise<Uint8Array> | null = null;
   /**
-   * Serialises wrap handling. Unwrapping became async the moment the key was
-   * fetched lazily, and two wraps for one channel resolving out of order would
-   * decide "held or applied" against a store snapshot that had already moved.
+   * Serialises wrap handling. Unwrapping is async (an IPC round trip to
+   * Rust), and two wraps for one channel resolving out of order would decide
+   * "held or applied" against a store snapshot that had already moved.
    */
   let queue: Promise<void> = Promise.resolve();
 
@@ -205,8 +204,7 @@ export async function startChannelKeyInbox(
   };
 
   const handleWrap = async (event: RelayEvent) => {
-    secretKey ??= options.getSecretKey();
-    const grant = unwrapChannelKey(event, await secretKey);
+    const grant = await unwrap(event);
     // Not for us, or not a key grant. On an open relay that is most wraps.
     if (!grant) return;
     if (!applyGrant(grant, report)) held.set(grant.channelId, grant);
@@ -228,8 +226,9 @@ export async function startChannelKeyInbox(
       seenWraps.add(event.id);
       queue = queue.then(() =>
         handleWrap(event).catch((error) => {
-          // An unreadable keychain must not kill the subscription: the next
-          // wrap, or the next launch, may find it unlocked.
+          // A failed unwrap (a locked identity, an unreachable Rust host)
+          // must not kill the subscription: the next wrap, or the next
+          // launch, may find it unlocked.
           console.warn("[channel-keys] could not open a gift wrap", error);
         }),
       );
