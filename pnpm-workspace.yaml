@@ -8,6 +8,7 @@ allowBuilds:
   # when the addon is absent, and none is on a hot path here — the desktop app
   # signs a handful of balance proofs, it does not run a validator. Left
   # unbuilt so a checkout needs no toolchain and CI cannot fail on node-gyp.
+  '@ar.io/solana-contracts': false
   bigint-buffer: false
   bufferutil: false
   esbuild: true
@@ -15,8 +16,9 @@ allowBuilds:
   secp256k1: false
   utf-8-validate: false
 minimumReleaseAgeExclude:
-  - '@toon-protocol/client@0.28.0'
-  - '@toon-protocol/core@3.1.4'
+  - '@toon-protocol/client@0.29.0'
+  - '@toon-protocol/core@3.2.0'
+  - '@toon-protocol/rig@3.5.1'
 overrides:
   # Force a single copy of the dismissable-layer. Radix packages otherwise
   # resolve different versions (react-menu pulled 1.1.11, react-dialog 1.1.15),

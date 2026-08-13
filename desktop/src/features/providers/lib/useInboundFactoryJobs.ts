@@ -42,9 +42,20 @@ export type InboundFactoryJob = FactoryJobRequest & {
   alreadyQuoted: boolean;
   /** Whether this brief arrived NIP-59 gift-wrapped rather than in the open. */
   giftWrapped: boolean;
+  /**
+   * The kind:5097 request event verbatim (buzz#135) — what a delivery's
+   * terminal kind:6097 result carries in its `request` tag (§5.1). For a
+   * gift-wrapped brief this is the reconstituted rumor (unsigned by NIP-59
+   * design — see `unwrapFactoryJobRequest.ts`), not a public relay event.
+   */
+  requestEvent: RelayEvent;
 };
 
-type Entry = { request: FactoryJobRequest; giftWrapped: boolean };
+type Entry = {
+  request: FactoryJobRequest;
+  giftWrapped: boolean;
+  requestEvent: RelayEvent;
+};
 
 export function useInboundFactoryJobs(
   transport: ToonEventTransport | null,
@@ -73,7 +84,9 @@ export function useInboundFactoryJobs(
 
     const ingestPlain = (raw: RelayEvent) => {
       const parsed = parseFactoryJobRequest(raw);
-      if (parsed) addEntry({ request: parsed, giftWrapped: false });
+      if (parsed) {
+        addEntry({ request: parsed, giftWrapped: false, requestEvent: raw });
+      }
     };
 
     // A raw private key round-trips over Tauri IPC once per wrap rather than
@@ -82,7 +95,13 @@ export function useInboundFactoryJobs(
     const ingestWrap = (raw: RelayEvent) => {
       void getIdentitySecretKey().then((secretKey) => {
         const grant = unwrapFactoryJobRequestGift(raw, secretKey);
-        if (grant) addEntry({ request: grant.request, giftWrapped: true });
+        if (grant) {
+          addEntry({
+            request: grant.request,
+            giftWrapped: true,
+            requestEvent: grant.requestEvent,
+          });
+        }
       });
     };
 
@@ -163,6 +182,7 @@ export function useInboundFactoryJobs(
         .map((entry) => ({
           ...entry.request,
           giftWrapped: entry.giftWrapped,
+          requestEvent: entry.requestEvent,
           alreadyQuoted: quotedRootIds.has(entry.request.eventId),
         }))
         .sort((a, b) => b.createdAt - a.createdAt),

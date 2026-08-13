@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import type { PaidArtifactState } from "@/features/factory-jobs/lib/factoryJobArtifact";
 import {
   checkOfferPayable,
   deriveFactoryJobExposure,
@@ -36,6 +37,8 @@ type FactoryJobThreadProps = {
   payingIncrementNumber: number | null;
   payError: string | null;
   fulfillmentByIncrement: ReadonlyMap<number, string>;
+  /** The decrypt tail per paid increment (buzz#135) — see `FactoryJobsScreen`. */
+  artifactByIncrement: ReadonlyMap<number, PaidArtifactState>;
   onPayIncrement: (offer: FactoryJobIncrementOffer) => void;
 };
 
@@ -47,6 +50,7 @@ export function FactoryJobThread({
   payingIncrementNumber,
   payError,
   fulfillmentByIncrement,
+  artifactByIncrement,
   onPayIncrement,
 }: FactoryJobThreadProps) {
   const exposure = React.useMemo(
@@ -78,19 +82,22 @@ export function FactoryJobThread({
   function renderOfferAction(item: FactoryJobIncrementOffer) {
     if (paidIncrementNumbers.has(item.increment.n)) {
       return (
-        <div className="flex items-center gap-2">
-          <Badge variant="success">Paid</Badge>
-          <span className="font-mono text-xs text-muted-foreground">
-            key {fulfillmentByIncrement.get(item.increment.n)?.slice(0, 16)}…
-          </span>
-          <a
-            className="text-xs text-primary underline"
-            href={item.artifactUrl}
-            rel="noreferrer"
-            target="_blank"
-          >
-            artifact
-          </a>
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <Badge variant="success">Paid</Badge>
+            <span className="font-mono text-xs text-muted-foreground">
+              key {fulfillmentByIncrement.get(item.increment.n)?.slice(0, 16)}…
+            </span>
+            <a
+              className="text-xs text-primary underline"
+              href={item.artifactUrl}
+              rel="noreferrer"
+              target="_blank"
+            >
+              artifact
+            </a>
+          </div>
+          {renderPaidArtifact(artifactByIncrement.get(item.increment.n))}
         </div>
       );
     }
@@ -125,6 +132,29 @@ export function FactoryJobThread({
             ? "Pay & hire"
             : "Pay this increment"}
       </Button>
+    );
+  }
+
+  function renderPaidArtifact(state: PaidArtifactState | undefined) {
+    if (!state) return null;
+    if (state.kind === "loading") {
+      return (
+        <p className="text-xs text-muted-foreground">
+          Fetching and decrypting the paid artifact…
+        </p>
+      );
+    }
+    if (state.kind === "error") {
+      return <p className="text-xs text-destructive">{state.message}</p>;
+    }
+    return state.content.kind === "text" ? (
+      <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-2 text-xs">
+        {state.content.text}
+      </pre>
+    ) : (
+      <p className="text-xs text-muted-foreground">
+        Decrypted a {state.content.byteLength}-byte binary artifact.
+      </p>
     );
   }
 
