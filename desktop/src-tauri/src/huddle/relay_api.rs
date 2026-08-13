@@ -402,14 +402,69 @@ pub(crate) async fn fetch_channel_members(
         .collect())
 }
 
-/// Count human (non-bot) members remaining in a channel.
-pub(crate) async fn count_human_members(
+/// Fetch human (non-bot) member pubkeys remaining in a channel.
+pub(crate) async fn fetch_human_members(
     channel_id: &str,
     state: &AppState,
-) -> Result<usize, String> {
+) -> Result<Vec<String>, String> {
     let all = fetch_channel_members_with_roles(channel_id, state).await?;
     Ok(all
-        .iter()
+        .into_iter()
         .filter(|(_, role)| role.as_deref() != Some("bot"))
-        .count())
+        .map(|(pubkey, _)| pubkey)
+        .collect())
+}
+
+/// Decide whether a leaving participant should trigger the huddle auto-end
+/// path, given the human (non-bot) roster fetched just before they leave.
+///
+/// True only when the roster contains nobody but `own_pubkey` (or is empty).
+/// Checked by identity rather than `human_members.len() <= 1` so a leaver
+/// whose own membership row is missing from the roster is never mistaken
+/// for "the last human" — that misreading is exactly buzz#193 (a non-creator
+/// Leave ending a huddle that another participant is still actively in).
+pub(crate) fn should_auto_end_huddle(own_pubkey: &str, human_members: &[String]) -> bool {
+    human_members.iter().all(|pubkey| pubkey == own_pubkey)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_auto_end_huddle;
+
+    const SELF_PK: &str = "self0000000000000000000000000000000000000000000000000000000000";
+    const OTHER_PK: &str = "other000000000000000000000000000000000000000000000000000000000";
+    const THIRD_PK: &str = "third000000000000000000000000000000000000000000000000000000000";
+
+    #[test]
+    fn empty_roster_auto_ends() {
+        assert!(should_auto_end_huddle(SELF_PK, &[]));
+    }
+
+    #[test]
+    fn roster_of_only_self_auto_ends() {
+        assert!(should_auto_end_huddle(SELF_PK, &[SELF_PK.to_string()]));
+    }
+
+    #[test]
+    fn roster_with_self_and_another_does_not_auto_end() {
+        assert!(!should_auto_end_huddle(
+            SELF_PK,
+            &[SELF_PK.to_string(), OTHER_PK.to_string()]
+        ));
+    }
+
+    /// The buzz#193 repro: our own membership row is missing from the roster,
+    /// so the single member counted is the OTHER — still live — participant.
+    #[test]
+    fn roster_missing_self_with_another_present_does_not_auto_end() {
+        assert!(!should_auto_end_huddle(SELF_PK, &[OTHER_PK.to_string()]));
+    }
+
+    #[test]
+    fn roster_of_multiple_others_does_not_auto_end() {
+        assert!(!should_auto_end_huddle(
+            SELF_PK,
+            &[OTHER_PK.to_string(), THIRD_PK.to_string()]
+        ));
+    }
 }

@@ -78,8 +78,8 @@ use crate::{app_state::AppState, events, relay::submit_event};
 
 use pipeline::{maybe_start_stt_pipeline, maybe_start_tts_pipeline, post_connect_setup};
 use relay_api::{
-    count_human_members, fetch_channel_members, parse_channel_uuid, validate_pubkey_hex,
-    MAX_HUDDLE_AGENTS,
+    fetch_channel_members, fetch_human_members, parse_channel_uuid, should_auto_end_huddle,
+    validate_pubkey_hex, MAX_HUDDLE_AGENTS,
 };
 
 fn normalize_huddle_channel_name(candidate: Option<String>, fallback: &str) -> String {
@@ -519,23 +519,27 @@ pub async fn leave_huddle(state: State<'_, AppState>) -> Result<(), String> {
         )
     };
 
-    // Auto-end: check if any human participants remain. If not, end the huddle
-    // (emit HUDDLE_ENDED + archive). If others remain, just remove self from
-    // membership so the participant roster stays accurate.
-    //
-    // We check BEFORE removing self — the relay counts us as a member until
-    // we leave. So "1 human remaining" means WE are the last one.
+    // Auto-end: if no other human participants remain, end the huddle (emit
+    // HUDDLE_ENDED + archive). Otherwise just remove self from membership.
+    // The "am I the last human?" decision goes by roster identity rather than
+    // a bare count — see `should_auto_end_huddle` for why (buzz#193).
     if !parent_channel_id.is_empty() && !ephemeral_channel_id.is_empty() {
-        let humans_remaining = count_human_members(&ephemeral_channel_id, &state)
-            .await
-            // On fetch failure, assume 2 humans remain (safe default).
-            // unwrap_or(1) would mean "I'm the last human" → triggers auto-archive,
-            // ending the huddle for everyone on a transient REST failure. Using 2
-            // means we skip the auto-end path and just remove ourselves — the huddle
-            // stays alive and the next real leave will clean up correctly.
-            .unwrap_or(2);
+        let own_pubkey = state
+            .keys
+            .lock()
+            .map(|k| k.public_key().to_hex())
+            .unwrap_or_default();
+        // On fetch failure we cannot verify the roster, so skip auto-end
+        // (safe default) — the next real leave will clean up correctly.
+        let auto_end = match fetch_human_members(&ephemeral_channel_id, &state).await {
+            Ok(human_members) => should_auto_end_huddle(&own_pubkey, &human_members),
+            Err(e) => {
+                eprintln!("buzz-desktop: fetch huddle members for auto-end check failed: {e}");
+                false
+            }
+        };
 
-        if humans_remaining <= 1 {
+        if auto_end {
             // We're the last human — end the huddle entirely.
             // Archive subsumes leave (the channel is gone, membership is moot).
             // This avoids the "cannot remove the last owner" relay error that
