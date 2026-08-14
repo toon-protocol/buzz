@@ -454,7 +454,7 @@ void main() {
   test(
     'replays REQ subscriptions after a reconnect, with backoff observed',
     () async {
-      final sockets = <_RecordingSocket>[];
+      final sockets = <_ControlledRelaySocket>[];
       final session = RelaySessionNotifier(
         socketFactory:
             ({
@@ -465,7 +465,7 @@ void main() {
               required onDisconnected,
               required sessionMode,
             }) {
-              final socket = _RecordingSocket(
+              final socket = _ControlledRelaySocket(
                 wsUrl: wsUrl,
                 nsec: nsec,
                 onMessage: onMessage,
@@ -555,7 +555,11 @@ class _AuthenticatedAuthNotifier extends AuthNotifier {
       const AuthState(status: AuthStatus.authenticated);
 }
 
+/// A socket whose connect/disconnect callbacks the test fires by hand, and
+/// which records every outbound frame so reconnect-replay behavior (REQ
+/// resent after a drop) is assertable.
 class _ControlledRelaySocket extends RelaySocket {
+  final List<List<dynamic>> sent = [];
   final void Function() _connected;
   final void Function(Object? error) _disconnected;
 
@@ -573,38 +577,7 @@ class _ControlledRelaySocket extends RelaySocket {
   Future<void> connect() async {}
 
   @override
-  void dispose() {}
-
-  void connectSuccessfully() => _connected();
-
-  void disconnectWith(Object? error) => _disconnected(error);
-}
-
-/// Like [_ControlledRelaySocket], but also records every outbound frame so
-/// reconnect-replay behavior (REQ resent after a drop) is assertable.
-class _RecordingSocket extends RelaySocket {
-  final List<List<dynamic>> sent = [];
-  final void Function() _connected;
-  final void Function(Object? error) _disconnected;
-
-  _RecordingSocket({
-    required super.wsUrl,
-    required super.nsec,
-    required super.onMessage,
-    required super.onConnected,
-    required super.onDisconnected,
-    required super.sessionMode,
-  }) : _connected = onConnected,
-       _disconnected = onDisconnected;
-
-  @override
-  Future<void> connect() async {}
-
-  @override
   void send(List<dynamic> payload) => sent.add(payload);
-
-  @override
-  Future<void> disconnect() async {}
 
   @override
   void dispose() {}

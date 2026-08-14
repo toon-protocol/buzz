@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 /// Tolerant NIP-01 frame decoding for the TOON relay.
 ///
 /// Mirrors `desktop/src/shared/api/toonRelayFrames.ts` and
@@ -16,13 +14,16 @@ import 'dart:convert';
 /// missing trailing fields) is passed through byte-for-byte so downstream
 /// handlers — which already have their own tolerant/fallback logic for
 /// missing fields — see exactly what they saw before this decoder existed.
+library;
+
+import 'dart:convert';
 
 /// `jsonDecode` that also unwraps a value which is itself a JSON string.
 ///
 /// One level of unwrapping only: a legitimately string-valued payload (a
 /// NOTICE's message) must survive, so this stops as soon as the result is
 /// not parseable as JSON.
-dynamic parseMaybeDoubleEncoded(String raw) {
+dynamic _parseMaybeDoubleEncoded(String raw) {
   dynamic parsed;
   try {
     parsed = jsonDecode(raw);
@@ -42,9 +43,9 @@ dynamic parseMaybeDoubleEncoded(String raw) {
 /// Returns a `Map<String, dynamic>` regardless of whether [payload] arrived
 /// already decoded or as a (possibly double-encoded) JSON string, so callers
 /// never need their own `as Map<String, dynamic>` cast.
-Map<String, dynamic>? asRelayEventJson(dynamic payload) {
+Map<String, dynamic>? _asRelayEventJson(dynamic payload) {
   final candidate = payload is String
-      ? parseMaybeDoubleEncoded(payload)
+      ? _parseMaybeDoubleEncoded(payload)
       : payload;
   if (candidate is! Map) return null;
 
@@ -68,13 +69,13 @@ Map<String, dynamic>? asRelayEventJson(dynamic payload) {
 /// JSON string) and shape-checked; the frame is dropped if that payload does
 /// not look like a Nostr event.
 List<dynamic>? decodeToonRelayFrame(String raw) {
-  final frame = parseMaybeDoubleEncoded(raw);
+  final frame = _parseMaybeDoubleEncoded(raw);
   if (frame is! List || frame.isEmpty) return null;
   if (frame[0] is! String) return null;
 
   if (frame[0] == 'EVENT') {
     if (frame.length < 3) return null;
-    final event = asRelayEventJson(frame[2]);
+    final event = _asRelayEventJson(frame[2]);
     if (event == null) return null;
     final normalized = List<dynamic>.from(frame);
     normalized[2] = event;
