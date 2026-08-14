@@ -67,6 +67,19 @@ export type ToonTransportConfig = {
    */
   storeDestination: string;
   /**
+   * ILP address of the free ephemeral write lane — the zero-priced route
+   * relay#129 (toon-meta#393 epic E2) terminates ephemeral kinds (20000–29999)
+   * at, discovered the same way {@link ToonTransportConfig.storeDestination}
+   * is: a config key with a devnet default, since the announce that would
+   * otherwise advertise it moves independently of an app release.
+   *
+   * Separate key rather than a suffix of `destination`, same reasoning as
+   * `storeDestination`: the connector cannot carry two prices on one
+   * `handler_url` (`ConflictingHandlerPrice`), so the free lane is its own
+   * endpoint on the devnet, not a variant of the paid one.
+   */
+  ephemeralDestination: string;
+  /**
    * Ordered Arweave gateways to render permaweb media through, primary first.
    *
    * Empty means "use the shared default list from `@toon-protocol/arweave`".
@@ -146,6 +159,11 @@ export const TOON_DEVNET_DEFAULTS = {
    * sibling of the relay on the devnet, not a child route of it.
    */
   storeDestination: "g.toon.ario",
+  /**
+   * The free ephemeral write lane's ILP address, as relay#129 baked it into
+   * `deploy/connector.toml` at explicit `price = 0` (toon-meta#393 epic E2).
+   */
+  ephemeralDestination: "g.toon.relay.ephemeral",
   chain: "evm:84532",
   chainRpcUrl: "https://base-sepolia-rpc.publicnode.com",
   tokenNetwork: "0x1E95493fEF46707E034b4a1945f25a8C76A1823D",
@@ -163,6 +181,7 @@ export const TOON_TRANSPORT_ENV_KEYS = [
   "BUZZ_TOON_RELAY_URL",
   "BUZZ_TOON_DESTINATION",
   "BUZZ_TOON_STORE_DESTINATION",
+  "BUZZ_TOON_EPHEMERAL_DESTINATION",
   "BUZZ_TOON_ARWEAVE_GATEWAYS",
   "BUZZ_TOON_MNEMONIC",
   "BUZZ_TOON_ACCOUNT_INDEX",
@@ -264,6 +283,9 @@ export function resolveToonTransportConfig(
     storeDestination:
       text(env.BUZZ_TOON_STORE_DESTINATION) ??
       TOON_DEVNET_DEFAULTS.storeDestination,
+    ephemeralDestination:
+      text(env.BUZZ_TOON_EPHEMERAL_DESTINATION) ??
+      TOON_DEVNET_DEFAULTS.ephemeralDestination,
     arweaveGateways: parseGatewayList(env.BUZZ_TOON_ARWEAVE_GATEWAYS),
     mnemonic: text(env.BUZZ_TOON_MNEMONIC),
     accountIndex: accountIndexOf(env.BUZZ_TOON_ACCOUNT_INDEX),

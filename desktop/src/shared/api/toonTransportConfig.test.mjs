@@ -192,6 +192,28 @@ test("the store route defaults to the store box and is independently overridable
   );
 });
 
+test("the ephemeral route defaults to the free lane and is independently overridable", () => {
+  // The free ephemeral lane (relay#129/toon-meta#393 E2) is its own route,
+  // not a child of `destination` — same reasoning as the store route.
+  assert.equal(
+    resolveToonTransportConfig({}).ephemeralDestination,
+    TOON_DEVNET_DEFAULTS.ephemeralDestination,
+  );
+  assert.equal(
+    resolveToonTransportConfig({
+      BUZZ_TOON_DESTINATION: "g.other.relay",
+    }).ephemeralDestination,
+    TOON_DEVNET_DEFAULTS.ephemeralDestination,
+    "moving the publish route must not silently move the ephemeral lane with it",
+  );
+  assert.equal(
+    resolveToonTransportConfig({
+      BUZZ_TOON_EPHEMERAL_DESTINATION: " g.test.ephemeral ",
+    }).ephemeralDestination,
+    "g.test.ephemeral",
+  );
+});
+
 test("the Arweave gateway list is comma-separated, trimmed, and empty when unset", () => {
   assert.deepEqual(resolveToonTransportConfig({}).arweaveGateways, []);
   assert.deepEqual(
