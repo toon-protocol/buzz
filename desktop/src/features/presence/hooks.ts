@@ -2,11 +2,13 @@ import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { sendPresence } from "@/shared/api/eventWrites";
+import { subscribeLiveEvents } from "@/shared/api/eventTransport";
 import { relayClient } from "@/shared/api/relayClient";
 import { isRateLimited } from "@/shared/api/relayRateLimitGate";
 import { useRelayConnection } from "@/shared/api/useRelayConnection";
 import { getOsIdleSeconds } from "@/shared/api/osIdle";
 import { getPresence } from "@/shared/api/tauri";
+import { KIND_PRESENCE } from "@/shared/constants/kinds";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
   mergePresenceUpdate,
@@ -16,7 +18,11 @@ import {
   PRESENCE_TTL_SECONDS,
   resolveAutomaticPresenceStatus,
 } from "@/features/presence/lib/presence";
-import type { PresenceLookup, PresenceStatus } from "@/shared/api/types";
+import type {
+  PresenceLookup,
+  PresenceStatus,
+  RelayEvent,
+} from "@/shared/api/types";
 
 const PRESENCE_STATUS_TICK_INTERVAL_MS = 30_000;
 const PRESENCE_ACTIVITY_THROTTLE_MS = 1_000;
@@ -98,10 +104,14 @@ export function usePresenceQuery(
 }
 
 /**
- * Subscribe to kind:20001 presence events over WebSocket and update the
- * TanStack Query presence cache in-place when updates arrive. Call once
- * in AppShell. Uses setQueriesData for targeted per-pubkey updates without
- * triggering refetches. Retries with exponential backoff on failure.
+ * Subscribe to kind:20001 presence events and update the TanStack Query
+ * presence cache in-place when updates arrive. Call once in AppShell. Uses
+ * setQueriesData for targeted per-pubkey updates without triggering
+ * refetches. Retries with exponential backoff on failure.
+ *
+ * Through the transport seam, not the relay session directly: presence is
+ * unstored (ephemeral, buzz#213/toon-meta#393 epic E3), so a REQ gets live
+ * traffic only, from whichever network the write went to.
  */
 export function usePresenceSubscription() {
   const queryClient = useQueryClient();
@@ -111,7 +121,7 @@ export function usePresenceSubscription() {
     let isCancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
-    function handlePresenceEvent(event: { pubkey: string; content: string }) {
+    function handlePresenceEvent(event: RelayEvent) {
       if (isCancelled) return;
       const parsed = parseLivePresenceEvent(event);
       if (!parsed) return;
@@ -128,8 +138,10 @@ export function usePresenceSubscription() {
 
     function subscribeWithRetry(attempt = 0) {
       if (isCancelled) return;
-      void relayClient
-        .subscribeToPresenceUpdates(handlePresenceEvent)
+      void subscribeLiveEvents(
+        { kinds: [KIND_PRESENCE], limit: 0 },
+        handlePresenceEvent,
+      )
         .then((unsubFn) => {
           if (isCancelled) {
             void unsubFn();
