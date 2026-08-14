@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import { MeshComputeJobServerHost } from "@/features/mesh-compute/ui/MeshComputeJobServerHost";
 import type { Channel } from "@/shared/api/types";
 import type { CreateChannelInput } from "@/features/sidebar/lib/useCreateChannelForm";
 import { useDeferredModalOpen } from "@/shared/ui/deferredModalOpen";
@@ -67,6 +68,11 @@ export function AppShellOverlays({
 
   return (
     <>
+      {/* Not an overlay, but this is the shell's always-mounted corner: the
+          seller's mesh-compute job loop (buzz#92) must outlive any panel, and
+          AppShell.tsx itself sits at its file-size ratchet. */}
+      <MeshComputeJobServerHost />
+
       {browseDialogType !== null ? (
         <React.Suspense fallback={null}>
           <ChannelBrowserDialog

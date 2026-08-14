@@ -14,9 +14,9 @@ import type { MeshComputeRefusalReason } from "@/features/mesh-compute/lib/meshC
  * with no special-casing needed here.
  *
  * Deliberately stops at `{kind: "completed", text}` rather than publishing
- * anything: turning a completion into the paid, hashlocked kind:7000
- * `"completed-offer"` (§6.2) is buzz#93's payment-leg scope, not this
- * ticket's.
+ * anything: the caller (`useMeshComputeJobServer`) encrypts the text and
+ * publishes the §6.2 `"completed-offer"`; arming the key release against the
+ * buyer's paying PREPARE (§7 steps 3–7) is buzz#93's payment-leg scope.
  */
 
 export type MeshComputeJobExecutionOutcome =

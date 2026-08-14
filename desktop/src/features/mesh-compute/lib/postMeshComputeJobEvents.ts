@@ -1,5 +1,6 @@
 import {
   buildMeshComputeAcceptedEvent,
+  buildMeshComputeCompletedOfferEvent,
   buildMeshComputeRefusedEvent,
 } from "@/features/mesh-compute/lib/meshComputeJobFeedback";
 import { buildMeshComputeJobResultEvent } from "@/features/mesh-compute/lib/meshComputeJobResult";
@@ -41,6 +42,25 @@ export async function publishMeshComputeRefused(
   return transport.publish(event, {
     timeoutMessage: "Timed out while declining the job.",
     sendErrorMessage: "Failed to decline the job.",
+  });
+}
+
+export async function publishMeshComputeCompletedOffer(
+  input: {
+    rootJobId: string;
+    acceptedEventId: string;
+    buyerPubkey: string;
+    amountMicroUsdc: bigint;
+    conditionHex: string;
+    ciphertextBase64: string;
+  },
+  transport: ToonEventTransport,
+): Promise<RelayEvent> {
+  const template = buildMeshComputeCompletedOfferEvent(input);
+  const event = await signRelayEvent(template);
+  return transport.publish(event, {
+    timeoutMessage: "Timed out while publishing the completed offer.",
+    sendErrorMessage: "Failed to publish the completed offer.",
   });
 }
 
