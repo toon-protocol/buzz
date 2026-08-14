@@ -5,6 +5,10 @@ import * as React from "react";
 import { setupAudioWorklet, type AudioWorkletHandle } from "./lib/audioWorklet";
 import { useAudioDevices } from "./lib/useAudioDevices";
 import { formatHuddleActionError } from "./lib/huddleError";
+import {
+  captureMicWithFallback,
+  NO_MICROPHONE_MESSAGE,
+} from "./lib/micCapture";
 import { useTtsSubscription } from "./lib/useTtsSubscription";
 
 /**
@@ -346,8 +350,8 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       joinInfo: HuddleJoinInfo,
       myToken: number,
     ): Promise<{
-      worklet: AudioWorkletHandle;
-      stream: MediaStream;
+      worklet: AudioWorkletHandle | null;
+      stream: MediaStream | null;
     }> => {
       // Fetch self pubkey once for TTS filtering
       if (!selfPubkeyRef.current) {
@@ -371,10 +375,15 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
       if (selectedDeviceId) {
         audioConstraints.deviceId = { exact: selectedDeviceId };
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: audioConstraints,
-      });
-      const audioTrack = stream.getAudioTracks()[0];
+      // captureMicWithFallback resolves null (not a throw) when no capture
+      // device is usable at all (buzz#200) — join as a listener rather than
+      // failing the huddle outright.
+      const stream = await captureMicWithFallback(
+        audioConstraints,
+        selectedDeviceId,
+        (constraints) => navigator.mediaDevices.getUserMedia(constraints),
+      );
+      const audioTrack = stream?.getAudioTracks()[0] ?? null;
 
       // Wrap post-getUserMedia steps so the stream is always cleaned up on
       // failure — prevents the mic permission light staying on after errors.
@@ -384,20 +393,20 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         }
 
         setLocalAudioTrack(audioTrack);
-        setMicConnected(true);
+        setMicConnected(audioTrack !== null);
 
-        // Setup AudioWorklet — PCM goes to Rust via push_audio_pcm
-        const initialTransmitting =
-          voiceInputModeRef.current !== "push_to_talk";
-        const worklet = await setupAudioWorklet(
-          audioTrack,
-          initialTransmitting,
-        );
-        worklet.setGain(micGainRef.current);
+        let worklet: AudioWorkletHandle | null = null;
+        if (audioTrack) {
+          // Setup AudioWorklet — PCM goes to Rust via push_audio_pcm
+          const initialTransmitting =
+            voiceInputModeRef.current !== "push_to_talk";
+          worklet = await setupAudioWorklet(audioTrack, initialTransmitting);
+          worklet.setGain(micGainRef.current);
 
-        if (tokenRef.current !== myToken) {
-          worklet.stop();
-          throw new Error("superseded");
+          if (tokenRef.current !== myToken) {
+            worklet.stop();
+            throw new Error("superseded");
+          }
         }
 
         workletRef.current = worklet;
@@ -407,7 +416,7 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         return { worklet, stream };
       } catch (err) {
         // Always stop the mic stream on any failure path.
-        stream.getTracks().forEach((t) => {
+        stream?.getTracks().forEach((t) => {
           t.stop();
         });
         setLocalAudioTrack(null);
@@ -440,7 +449,8 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         });
         rustActiveRef.current = true;
         try {
-          await connectAndSetupMedia(joinInfo, myToken);
+          const { stream } = await connectAndSetupMedia(joinInfo, myToken);
+          if (!stream) setHuddleError(NO_MICROPHONE_MESSAGE);
         } catch (e) {
           if (e instanceof Error && e.message === "superseded") {
             await cleanupFailedStart(workletRef.current, true);
@@ -486,7 +496,8 @@ export function HuddleProvider({ children }: { children: React.ReactNode }) {
         rustActiveRef.current = true;
 
         try {
-          await connectAndSetupMedia(joinInfo, myToken);
+          const { stream } = await connectAndSetupMedia(joinInfo, myToken);
+          if (!stream) setHuddleError(NO_MICROPHONE_MESSAGE);
         } catch (e) {
           if (e instanceof Error && e.message === "superseded") {
             await cleanupFailedStart(workletRef.current, false);
