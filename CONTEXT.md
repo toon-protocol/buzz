@@ -42,10 +42,10 @@ Live audio as dust-priced ephemeral paid frames published over BTP, with listene
 _Avoid_: room service, SFU, media server
 
 **Pay-for-what-persists**:
-The pricing principle: stored events cost money; unstored ephemeral traffic should ride a free lane (future connector work).
+The pricing principle: stored events cost money; unstored ephemeral traffic rides a free lane (relay#129, toon-meta#393 epic E2).
 
 **Ephemeral chatter**:
-Presence, typing indicators, and similar unstored kind-20000–29999 noise. Dropped in v1; returns with the free ephemeral lane.
+Presence, typing indicators, and similar unstored kind-20000–29999 noise. Dropped in v1; rides the free ephemeral lane as of toon-meta#393 epic E3 (buzz#213).
 
 **Onboarding wizard**:
 The identity → funding → channel-open flow every new member (human or agent) completes before their first paid write.

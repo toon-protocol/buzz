@@ -124,10 +124,11 @@ function buildMockClaimStateResult(kind: MockToonClaimStateFixtureKind) {
  * the claim-state fixture: `captureSessionLease` runs after EVERY successful
  * paid write, so a TTL seeded at install would be captured by whichever paid
  * write lands first, before a spec can observe `pending`. (The kind:20001
- * presence heartbeat used to be that first write; as of buzz#212 it is
- * dropped rather than paid for — see `ToonEventTransport.publish` — so it no
- * longer races this fixture, though the same care still applies to any other
- * early write, e.g. a quote.) A spec that wants `available`/`stale` therefore
+ * presence heartbeat used to be that first write; as of buzz#213 it rides the
+ * free ephemeral lane (`ToonPaidWriter.publishEphemeral`, not `publish`),
+ * which never calls `captureSessionLease` — so it still doesn't race this
+ * fixture, though the same care still applies to any other early write, e.g.
+ * a quote.) A spec that wants `available`/`stale` therefore
  * starts with the TTL absent and sets
  * `window.__BUZZ_E2E__.mock.toonSessionLeaseTtlMs` live mid-test — the next
  * successful write captures the lease, exactly like the real `ToonClient`.

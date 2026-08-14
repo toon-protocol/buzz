@@ -60,9 +60,9 @@ export const KIND_GIFT_WRAP = 1059;
 // dispatch on it. Sits in Buzz's 44xxx membership-notification block next to
 // kind:44100 (member added), which is the event it is the private half of.
 export const KIND_CHANNEL_KEY_DELIVERY = 44300;
-// The presence heartbeat. Ephemeral (20000-29999) and unstored, but not free
-// on TOON yet — see the KIND_PRESENCE-specific note in
-// `ToonEventTransport.publish` (toon-meta#393).
+// The presence heartbeat. Ephemeral (20000-29999) and unstored; rides the
+// free ephemeral lane on TOON, same as KIND_TYPING_INDICATOR — see
+// `ToonEventTransport.publish` (toon-meta#393 epic E3).
 export const KIND_PRESENCE = 20001;
 export const KIND_TYPING_INDICATOR = 20002;
 export const KIND_HUDDLE_REACTION = 24810;
