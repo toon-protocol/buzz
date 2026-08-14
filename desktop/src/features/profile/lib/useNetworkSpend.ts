@@ -10,7 +10,6 @@ import {
   type NetworkSpendState,
 } from "@/features/profile/lib/networkSpendState";
 import {
-  EMPTY_SNAPSHOT,
   useNetworkSpendLive,
   type LiveSpendSnapshot,
 } from "@/features/profile/lib/networkSpendLiveStore";
@@ -43,13 +42,26 @@ import type { RawNetworkFlowStatus } from "@/shared/api/toonPaidWriter";
  * buzz#74's provisioning flow, not this refill action — enabling it here
  * would silently deposit into the wrong channel while the panel displays
  * another agent's balance.
+ *
+ * `options.liveBurn: false` skips the live burn-store subscription entirely
+ * (the returned state reads `hasBurnSample: false` and a zero burn rate).
+ * For callers that only need the channel position — deposit/owed/credited,
+ * i.e. `netSpendableBaseUnits` — this avoids re-rendering on every paid
+ * write, which during a huddle means every ~20 ms audio frame (buzz#68).
  */
-export function useNetworkSpend(agentPubkey: string, isSelf: boolean) {
+export function useNetworkSpend(
+  agentPubkey: string,
+  isSelf: boolean,
+  options?: { liveBurn?: boolean },
+) {
   const selection = getActiveTransportSelection();
   const isToon = selection?.mode === "toon";
   const config = selection?.config ?? null;
-  const selfLive = useNetworkSpendLive();
-  const live: LiveSpendSnapshot = isSelf ? selfLive : EMPTY_SNAPSHOT;
+  // Disabled (or non-self) reads get EMPTY_SNAPSHOT from the hook itself,
+  // with no store subscription behind it.
+  const live: LiveSpendSnapshot = useNetworkSpendLive(
+    isSelf && options?.liveBurn !== false,
+  );
 
   const [raw, setRaw] = React.useState<RawNetworkFlowStatus | null | "pending">(
     "pending",
