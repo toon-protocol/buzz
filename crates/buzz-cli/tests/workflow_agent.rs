@@ -77,6 +77,7 @@ impl RelayState {
         };
         let p_values = tag_filter("p");
         let h_values = tag_filter("h");
+        let e_values = tag_filter("e");
         let since = filter.get("since").and_then(Value::as_u64);
         let until = filter.get("until").and_then(Value::as_u64);
         let limit = filter.get("limit").and_then(Value::as_u64).unwrap_or(500) as usize;
@@ -96,7 +97,7 @@ impl RelayState {
                 if since.is_some_and(|floor| at < floor) || until.is_some_and(|cap| at > cap) {
                     return false;
                 }
-                for (name, wanted) in [("p", &p_values), ("h", &h_values)] {
+                for (name, wanted) in [("p", &p_values), ("h", &h_values), ("e", &e_values)] {
                     let Some(wanted) = wanted else { continue };
                     let has = event.tags.iter().any(|tag| {
                         let row = tag.clone().to_vec();
@@ -943,6 +944,106 @@ action:\n  add_reaction:\n    emoji: eyes\n";
             && row.get(1).map(String::as_str) == Some("buzz-workflow")
     });
     assert!(has_marker, "action event must carry the client marker tag");
+
+    agent.stop().await;
+}
+
+/// The end-to-end shape of the relay-scoping workaround
+/// `docs/workflow-agent-parity.md` describes: a reaction landing on a
+/// message the tail walk has already seen fires `reaction_added`, scoped by
+/// `#e` against that message's own id (never `#h` — NIP-25 reactions carry
+/// no channel tag).
+#[tokio::test]
+async fn a_reaction_on_a_seen_message_fires_a_reaction_added_workflow() {
+    let agent_keys = Keys::generate();
+    let (fixture, relay, admin) = fixture(&agent_keys).await;
+    let yaml = "version: 1\nname: triage\ntrigger:\n  reaction_added: true\n  emoji: clipboard\n\
+action:\n  add_reaction:\n    emoji: eyes\n";
+    let workflow = fixture.write_workflow("triage.yaml", yaml);
+
+    let target = sealed_message(
+        &admin,
+        MEMBER,
+        &EPOCH0,
+        "a message to react to",
+        1_700_000_100,
+    );
+    let target_id = target.id.to_hex();
+    relay.publish(target);
+
+    let agent = fixture.start_agent(&workflow, 50, false).await;
+    // Give the agent at least one cycle to observe the message (and so scope
+    // its recently-seen window to it) before the reaction lands.
+    agent.wait_for_cycles(1).await;
+
+    let reaction = EventBuilder::new(Kind::Custom(KIND_REACTION), "clipboard")
+        .tags(vec![Tag::parse(["e", &target_id]).unwrap()])
+        .custom_created_at(Timestamp::from_secs(1_700_000_200))
+        .sign_with_keys(&admin)
+        .unwrap();
+    relay.publish(reaction);
+
+    agent.wait_for_sent(1).await;
+
+    let sent = &agent.sent_actions()[0];
+    assert_eq!(sent["workflow"], "triage");
+
+    let action_id = sent["actionEvent"].as_str().unwrap();
+    let published = relay
+        .all()
+        .into_iter()
+        .find(|e| e.id.to_hex() == action_id)
+        .expect("the add_reaction action should have reached the relay");
+    assert_eq!(published.pubkey, agent_keys.public_key());
+    assert_eq!(published.kind.as_u16(), KIND_REACTION);
+    assert_eq!(published.content, "eyes");
+
+    let e_target = published.tags.iter().find_map(|t| {
+        let row = t.clone().to_vec();
+        (row.first().map(String::as_str) == Some("e")).then(|| row.get(1).cloned())
+    });
+    assert_eq!(e_target.flatten().as_deref(), Some(target_id.as_str()));
+
+    agent.stop().await;
+}
+
+/// The `emoji` filter actually filters: a reaction with a different emoji
+/// never fires a `reaction_added` workflow scoped to one.
+#[tokio::test]
+async fn a_reaction_added_emoji_filter_ignores_other_emoji() {
+    let agent_keys = Keys::generate();
+    let (fixture, relay, admin) = fixture(&agent_keys).await;
+    let yaml = "version: 1\nname: triage\ntrigger:\n  reaction_added: true\n  emoji: clipboard\n\
+action:\n  add_reaction:\n    emoji: eyes\n";
+    let workflow = fixture.write_workflow("triage.yaml", yaml);
+
+    let target = sealed_message(
+        &admin,
+        MEMBER,
+        &EPOCH0,
+        "a message to react to",
+        1_700_000_100,
+    );
+    let target_id = target.id.to_hex();
+    relay.publish(target);
+
+    let agent = fixture.start_agent(&workflow, 50, false).await;
+    agent.wait_for_cycles(1).await;
+
+    let reaction = EventBuilder::new(Kind::Custom(KIND_REACTION), "thumbsup")
+        .tags(vec![Tag::parse(["e", &target_id]).unwrap()])
+        .custom_created_at(Timestamp::from_secs(1_700_000_200))
+        .sign_with_keys(&admin)
+        .unwrap();
+    relay.publish(reaction);
+
+    agent.wait_for_cycles(4).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        agent.sent_actions().is_empty(),
+        "a reaction with the wrong emoji must not fire an emoji-filtered workflow: {:?}",
+        agent.log.lock().unwrap()
+    );
 
     agent.stop().await;
 }

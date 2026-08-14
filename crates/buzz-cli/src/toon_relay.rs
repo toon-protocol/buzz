@@ -153,6 +153,28 @@ pub fn channel_history_filter(
     filter
 }
 
+/// A NIP-01 filter for NIP-25 reactions (`kind:7`) targeting any of
+/// `event_ids` (buzz#52).
+///
+/// Unlike [`channel_message_filter`], there is no `#h` form: a reaction's `e`
+/// tag names the message it targets, not a channel, so scoping "reactions in
+/// a channel this agent holds a key for" means scoping by the exact message
+/// ids already seen in that channel's tail walk — see
+/// `docs/workflow-agent-parity.md`'s `reaction_added` row for why, and
+/// `crate::workflow_agent`'s reaction pass for how the id set is built and
+/// bounded.
+pub fn reaction_filter(event_ids: &[String], limit: u32, since: Option<u64>) -> Value {
+    let mut filter = serde_json::json!({
+        "kinds": [7],
+        "#e": event_ids,
+        "limit": limit,
+    });
+    if let Some(since) = since {
+        filter["since"] = serde_json::json!(since);
+    }
+    filter
+}
+
 /// A NIP-01 filter for the gift wraps addressed to `pubkey`. Mirrors
 /// `channelKeyWrapFilter`; the wrap's outer pubkey is ephemeral, so the `#p`
 /// tag is the only thing that routes one to its recipient.
@@ -332,6 +354,16 @@ mod tests {
         let wraps = gift_wrap_filter("ab", 200);
         assert_eq!(wraps["kinds"], serde_json::json!([1059]));
         assert_eq!(wraps["#p"], serde_json::json!(["ab"]));
+
+        let ids = vec!["e1".to_string(), "e2".to_string()];
+        let reactions = reaction_filter(&ids, 50, Some(1_700_000_000));
+        assert_eq!(reactions["kinds"], serde_json::json!([7]));
+        assert_eq!(reactions["#e"], serde_json::json!(["e1", "e2"]));
+        assert_eq!(reactions["limit"], 50);
+        assert_eq!(reactions["since"], 1_700_000_000u64);
+
+        let reactions_no_since = reaction_filter(&ids, 50, None);
+        assert!(reactions_no_since.get("since").is_none());
     }
 
     #[test]

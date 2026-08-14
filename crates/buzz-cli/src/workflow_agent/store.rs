@@ -55,6 +55,18 @@ struct StateFile {
     /// this off of, since it is never driven by a channel walk.
     #[serde(default)]
     scheduled: BTreeMap<String, u64>,
+    /// The `reaction_added` trigger's own forward-tail cursor per channel
+    /// (buzz#52) — kept separate from `channels` (the message cursor)
+    /// because the reaction pass walks a different kind on its own
+    /// schedule; see `crate::workflow_agent`'s reaction pass.
+    #[serde(default)]
+    reaction_cursors: BTreeMap<String, ChannelCursor>,
+    /// Recently-seen message ids per channel, newest first and capped to the
+    /// page size (buzz#52) — the `#e` scope a reaction fetch is bounded to.
+    /// See `docs/workflow-agent-parity.md`'s `reaction_added` row for why a
+    /// reaction fetch cannot simply scope by channel.
+    #[serde(default)]
+    reaction_targets: BTreeMap<String, Vec<String>>,
 }
 
 /// The agent's resume state: one file, one identity, written atomically.
@@ -65,6 +77,8 @@ pub struct WorkflowState {
     cursors: BTreeMap<String, ChannelCursor>,
     evaluated: BTreeSet<String>,
     scheduled: BTreeMap<String, u64>,
+    reaction_cursors: BTreeMap<String, ChannelCursor>,
+    reaction_targets: BTreeMap<String, Vec<String>>,
 }
 
 impl WorkflowState {
@@ -106,6 +120,8 @@ pass --state or set BUZZ_WORKFLOW_STATE"
                 cursors: file.channels,
                 evaluated: file.evaluated,
                 scheduled: file.scheduled,
+                reaction_cursors: file.reaction_cursors,
+                reaction_targets: file.reaction_targets,
             },
             None => Self {
                 path,
@@ -113,6 +129,8 @@ pass --state or set BUZZ_WORKFLOW_STATE"
                 cursors: BTreeMap::new(),
                 evaluated: BTreeSet::new(),
                 scheduled: BTreeMap::new(),
+                reaction_cursors: BTreeMap::new(),
+                reaction_targets: BTreeMap::new(),
             },
         }
     }
@@ -174,6 +192,43 @@ is {pubkey} — point --state / BUZZ_WORKFLOW_STATE at this agent's own file",
         self.scheduled.insert(workflow_name.to_string(), at);
     }
 
+    /// The `reaction_added` trigger's forward-tail cursor for `channel_id`
+    /// (buzz#52) — separate from [`Self::cursor`], the message cursor.
+    pub fn reaction_cursor(&self, channel_id: &str) -> ChannelCursor {
+        self.reaction_cursors
+            .get(channel_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn set_reaction_cursor(&mut self, channel_id: &str, cursor: ChannelCursor) {
+        self.reaction_cursors.insert(channel_id.to_string(), cursor);
+    }
+
+    /// The bounded window of recently-seen message ids for `channel_id` —
+    /// what a reaction fetch's `#e` filter is scoped to (buzz#52).
+    pub fn reaction_targets(&self, channel_id: &str) -> &[String] {
+        self.reaction_targets
+            .get(channel_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Record `event_id` as a recently-seen message in `channel_id`: moved
+    /// to the front (newest first, deduplicated) and truncated to `cap`
+    /// entries. `cap` is the caller's page size — see
+    /// `crate::workflow_agent`'s module doc's "buzz#52" section for why the
+    /// window is bounded that way.
+    pub fn observe_reaction_target(&mut self, channel_id: &str, event_id: &str, cap: usize) {
+        let ids = self
+            .reaction_targets
+            .entry(channel_id.to_string())
+            .or_default();
+        ids.retain(|id| id != event_id);
+        ids.insert(0, event_id.to_string());
+        ids.truncate(cap.max(1));
+    }
+
     /// Write cursors and the evaluated set to disk in one atomic replacement.
     /// Temp file in the same directory, owner-only, `fsync`, then `rename` —
     /// identical shape to [`crate::search_index::SearchIndex::save`], for the
@@ -191,6 +246,8 @@ is {pubkey} — point --state / BUZZ_WORKFLOW_STATE at this agent's own file",
             channels: self.cursors.clone(),
             evaluated: self.evaluated.clone(),
             scheduled: self.scheduled.clone(),
+            reaction_cursors: self.reaction_cursors.clone(),
+            reaction_targets: self.reaction_targets.clone(),
         };
         let json = serde_json::to_string(&file).map_err(|e| {
             CliError::Other(format!("failed to serialize the workflow agent state: {e}"))
@@ -330,5 +387,55 @@ mod tests {
         state.save().unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    // ─── buzz#52: reaction cursor + target window ───────────────────────────
+
+    #[test]
+    fn a_channel_with_no_reaction_activity_has_an_empty_target_window() {
+        let (_dir, path) = scratch();
+        let state = WorkflowState::open(path);
+        assert!(state.reaction_targets("engineering").is_empty());
+        assert_eq!(
+            state.reaction_cursor("engineering").tail_since(),
+            ChannelCursor::default().tail_since()
+        );
+    }
+
+    #[test]
+    fn observed_reaction_targets_are_newest_first_and_deduplicated() {
+        let (_dir, path) = scratch();
+        let mut state = WorkflowState::open(path);
+        state.observe_reaction_target("eng", "e1", 10);
+        state.observe_reaction_target("eng", "e2", 10);
+        // Re-observing e1 (e.g. it still shows up in the next tail page)
+        // must not duplicate it or leave it stuck at the back.
+        state.observe_reaction_target("eng", "e1", 10);
+        assert_eq!(state.reaction_targets("eng"), ["e1", "e2"]);
+    }
+
+    #[test]
+    fn the_reaction_target_window_is_capped() {
+        let (_dir, path) = scratch();
+        let mut state = WorkflowState::open(path);
+        state.observe_reaction_target("eng", "e1", 2);
+        state.observe_reaction_target("eng", "e2", 2);
+        state.observe_reaction_target("eng", "e3", 2);
+        assert_eq!(state.reaction_targets("eng"), ["e3", "e2"]);
+    }
+
+    #[test]
+    fn reaction_cursor_and_targets_round_trip_through_one_atomic_save() {
+        let (_dir, path) = scratch();
+        let mut state = WorkflowState::open(path.clone());
+        let mut cursor = ChannelCursor::default();
+        cursor.observe_newest(200, "r1");
+        state.set_reaction_cursor("eng", cursor.clone());
+        state.observe_reaction_target("eng", "m1", 10);
+        state.save().unwrap();
+
+        let reopened = WorkflowState::open(path);
+        assert_eq!(reopened.reaction_cursor("eng"), cursor);
+        assert_eq!(reopened.reaction_targets("eng"), ["m1"]);
     }
 }

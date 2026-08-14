@@ -175,6 +175,12 @@ pub enum SkipReason {
     /// [`is_own_event`]: an action event is exactly as ineligible as one's
     /// own, whichever identity signed it.
     WorkflowAction,
+    /// A kind:7 event with no `e` tag naming its target, or whose target
+    /// falls outside the channel's recently-seen message window (buzz#52) —
+    /// never fires a `reaction_added` trigger. The second case should never
+    /// happen given the fetch's own `#e` filter; checked anyway because
+    /// nothing here trusts the relay to have enforced it (ADR 0001).
+    NoTarget,
 }
 
 impl SkipReason {
@@ -185,6 +191,7 @@ impl SkipReason {
             Self::Empty => "empty",
             Self::NoMatch => "no-match",
             Self::WorkflowAction => "workflow-action",
+            Self::NoTarget => "no-target",
         }
     }
 }
@@ -281,6 +288,58 @@ pub fn plan_trigger(
     TriggerOutcome::Skip(SkipReason::NoMatch)
 }
 
+/// The `["e", target_event_id]` tag naming what a NIP-25 reaction is on. The
+/// last matching tag wins, mirroring `crate::channel_admins::first_tag_value`'s
+/// convention elsewhere in this codebase of taking one canonical reading of a
+/// possibly-repeated tag; `buzz_sdk::builders::build_reaction` only ever
+/// writes one, so this only matters for a reaction this agent did not itself
+/// construct.
+fn reaction_target(tags: &[Vec<String>]) -> Option<String> {
+    tags.iter()
+        .rev()
+        .find(|tag| tag.first().map(String::as_str) == Some("e"))
+        .and_then(|tag| tag.get(1).cloned())
+}
+
+/// Decide whether an already-known-not-own, already-known-not-a-workflow-
+/// action, already-target-scoped kind:7 reaction fires a `reaction_added`
+/// workflow (buzz#52). Pure, mirroring [`plan_trigger`]'s shape — the
+/// membership/own-event/marker-tag checks all happen at the call site
+/// (`reaction_pass`) before this is ever reached, the same division
+/// `plan_trigger` and [`walk_channel`] keep.
+///
+/// Unlike `plan_trigger`, there is no `holds_key`/`Opened` check: a reaction
+/// pass only ever runs against a channel already walked this cycle, which
+/// only happens for a held channel — see `reaction_pass`'s call site in
+/// [`cycle`].
+pub fn plan_reaction_trigger(
+    emoji: &str,
+    workflows: &[Workflow],
+    channel_id: &str,
+) -> TriggerOutcome {
+    for workflow in workflows {
+        let Some(filter) = workflow.reaction_added() else {
+            continue;
+        };
+        if workflow
+            .channel
+            .as_deref()
+            .is_some_and(|only| only != channel_id)
+        {
+            continue;
+        }
+        if filter.is_some_and(|wanted| wanted != emoji) {
+            continue;
+        }
+        return TriggerOutcome::Fire {
+            workflow: workflow.name.clone(),
+            action: workflow.action.clone(),
+            channel_override: workflow.action_channel.clone(),
+        };
+    }
+    TriggerOutcome::Skip(SkipReason::NoMatch)
+}
+
 // ─── reports ─────────────────────────────────────────────────────────────────
 
 /// What one channel's walk did, for the cycle report.
@@ -301,6 +360,20 @@ pub struct ChannelReport {
 impl ChannelReport {
     fn skip(&mut self, reason: SkipReason) {
         *self.skipped.entry(reason.code()).or_insert(0) += 1;
+    }
+
+    /// Fold another channel's activity into this one — used to combine the
+    /// message walk's report with the same channel's reaction pass (buzz#52),
+    /// since both act on the same channel within one cycle.
+    fn merge(&mut self, other: ChannelReport) {
+        self.seen += other.seen;
+        self.fired += other.fired;
+        self.sent += other.sent;
+        self.dropped += other.dropped;
+        self.refused += other.refused;
+        for (code, count) in other.skipped {
+            *self.skipped.entry(code).or_insert(0) += count;
+        }
     }
 }
 
@@ -591,11 +664,14 @@ async fn cycle(
     // through it) without a second `&mut` in scope.
     let keystore: &AgentKeystore = keystore;
 
-    // 2. Walk each held channel's tail and act on what fires.
+    // 2. Walk each held channel's tail and act on what fires, then run that
+    //    same channel's reaction pass (buzz#52) — a second fetch scoped to
+    //    the message ids the walk above just observed (see `reaction_pass`'s
+    //    doc), folded into the same per-channel report.
     let channels: Vec<String> = keystore.channels().cloned().collect();
     for channel_id in channels {
         let ring = keystore.ring(&channel_id).to_vec();
-        match walk_channel(
+        let mut channel_report = match walk_channel(
             opts,
             client,
             identity,
@@ -607,13 +683,30 @@ async fn cycle(
         )
         .await
         {
-            Ok(channel_report) => {
-                report.channels.insert(channel_id, channel_report);
-            }
+            Ok(channel_report) => channel_report,
             Err(error) => {
                 report.errors.insert(channel_id, error.to_string());
+                continue;
+            }
+        };
+
+        match reaction_pass(
+            opts,
+            client,
+            identity,
+            keystore,
+            &channel_id,
+            workflows,
+            state,
+        )
+        .await
+        {
+            Ok(reaction_report) => channel_report.merge(reaction_report),
+            Err(error) => {
+                report.errors.insert(channel_id.clone(), error.to_string());
             }
         }
+        report.channels.insert(channel_id, channel_report);
     }
 
     // 3. Fire any `schedule:` workflows that are due (buzz#22) — a separate
@@ -840,6 +933,12 @@ async fn walk_channel(
                 newest = Some((created_at, event_id.clone()));
             }
 
+            // Every message seen — own, locked, already evaluated, whatever
+            // — is fair game for a later reaction, so the reaction pass's
+            // scoping window (buzz#52) is updated unconditionally, ahead of
+            // every early-continue below.
+            state.observe_reaction_target(channel_id, &event_id, page as usize);
+
             // The tail re-walks from the head every cycle (NIP-01 `since` is
             // inclusive), so most of what it sees was already evaluated. This
             // is the check that stops the boundary event from re-firing on
@@ -951,6 +1050,174 @@ async fn walk_channel(
         }
     }
     state.set_cursor(channel_id, cursor);
+
+    Ok(report)
+}
+
+/// One page of kind:7 reactions targeting `target_ids`, newest first — the
+/// reaction-fetch analogue of [`fetch_window`], reusing
+/// `crate::search_agent::relay_order`'s dedupe/sort for the same reason that
+/// module does: never assume the relay itself sorted or deduped.
+async fn fetch_reactions(
+    relay_url: &str,
+    target_ids: &[String],
+    since: Option<u64>,
+    limit: u32,
+) -> Result<Vec<nostr::Event>, CliError> {
+    let filter = crate::toon_relay::reaction_filter(target_ids, limit, since);
+    Ok(crate::search_agent::relay_order(
+        crate::toon_relay::fetch(relay_url, filter).await?,
+    ))
+}
+
+/// The `reaction_added` trigger's own pass for one channel (buzz#52): one
+/// extra relay round trip per cycle, scoped by `#e` to the message ids
+/// [`walk_channel`] has recently observed in this same channel (see
+/// `docs/workflow-agent-parity.md`'s `reaction_added` row for why a reaction
+/// fetch cannot simply scope by channel the way the message walk does).
+///
+/// Deliberately a single fetch, not a paged walk like [`walk_channel`]: the
+/// `#e` scope is already bounded to at most a page's worth of target ids, so
+/// there is no unbounded backlog to page through the way a channel's message
+/// history can have.
+///
+/// Shares [`walk_channel`]'s ordering of checks — evaluated, then own-event,
+/// then workflow-action-marker, then (here, in place of decrypt) target
+/// scoping — before [`plan_reaction_trigger`] is ever consulted.
+#[allow(clippy::too_many_arguments)]
+async fn reaction_pass(
+    opts: &WorkflowAgentOptions<'_>,
+    client: &SidecarClient,
+    identity: &str,
+    keystore: &AgentKeystore,
+    channel_id: &str,
+    workflows: &[Workflow],
+    state: &mut WorkflowState,
+) -> Result<ChannelReport, CliError> {
+    let mut report = ChannelReport::default();
+    let targets = state.reaction_targets(channel_id).to_vec();
+    if targets.is_empty() {
+        return Ok(report);
+    }
+
+    let mut cursor = state.reaction_cursor(channel_id);
+    let since = cursor.tail_since();
+    let events = fetch_reactions(opts.relay_url, &targets, since, opts.page_size.max(1)).await?;
+
+    let mut newest: Option<(u64, String)> = None;
+    for event in &events {
+        report.seen += 1;
+        let created_at = event.created_at.as_secs();
+        let event_id = event.id.to_hex();
+        if newest
+            .as_ref()
+            .is_none_or(|(at, id)| created_at > *at || (created_at == *at && event_id < *id))
+        {
+            newest = Some((created_at, event_id.clone()));
+        }
+
+        if state.is_evaluated(&event_id) {
+            continue;
+        }
+
+        let event_pubkey = event.pubkey.to_hex();
+        if is_own_event(identity, &event_pubkey) {
+            state.mark_evaluated(&event_id);
+            continue;
+        }
+
+        let tags = tags_as_strings(event);
+        if is_workflow_action_event(&tags) {
+            report.skip(SkipReason::WorkflowAction);
+            state.mark_evaluated(&event_id);
+            continue;
+        }
+
+        let target = reaction_target(&tags).filter(|target| targets.contains(target));
+        let Some(target_event_id) = target else {
+            report.skip(SkipReason::NoTarget);
+            state.mark_evaluated(&event_id);
+            continue;
+        };
+
+        let outcome = plan_reaction_trigger(&event.content, workflows, channel_id);
+        match outcome {
+            TriggerOutcome::Skip(reason) => report.skip(reason),
+            TriggerOutcome::Fire {
+                workflow,
+                action,
+                channel_override,
+            } => {
+                report.fired += 1;
+                let target_channel = channel_override.as_deref().unwrap_or(channel_id);
+                let attempt = match action {
+                    schema::ActionKind::Reply(text) => ActAttempt::Reply(text),
+                    schema::ActionKind::AddReaction { emoji } => ActAttempt::AddReaction {
+                        target_event_id: target_event_id.clone(),
+                        emoji,
+                    },
+                };
+                match act(client, opts.relay_url, keystore, target_channel, attempt).await {
+                    ActionResult::Sent {
+                        event_id: action_id,
+                    } => {
+                        report.sent += 1;
+                        println!(
+                            "{}",
+                            json!({
+                                "event": "workflow-action-sent",
+                                "workflow": workflow,
+                                "trigger": "reaction_added",
+                                "channel": channel_id,
+                                "targetChannel": target_channel,
+                                "triggerEvent": event_id,
+                                "reactionTarget": target_event_id,
+                                "actionEvent": action_id,
+                            })
+                        );
+                    }
+                    ActionResult::Dropped { reason } => {
+                        report.dropped += 1;
+                        eprintln!(
+                            "{}",
+                            json!({
+                                "event": "workflow-action-dropped",
+                                "workflow": workflow,
+                                "trigger": "reaction_added",
+                                "channel": channel_id,
+                                "targetChannel": target_channel,
+                                "triggerEvent": event_id,
+                                "reactionTarget": target_event_id,
+                                "reason": reason,
+                            })
+                        );
+                    }
+                    ActionResult::Refused { reason } => {
+                        report.refused += 1;
+                        eprintln!(
+                            "{}",
+                            json!({
+                                "event": "workflow-action-refused",
+                                "workflow": workflow,
+                                "trigger": "reaction_added",
+                                "channel": channel_id,
+                                "targetChannel": target_channel,
+                                "triggerEvent": event_id,
+                                "reactionTarget": target_event_id,
+                                "reason": reason,
+                            })
+                        );
+                    }
+                }
+            }
+        }
+        state.mark_evaluated(&event_id);
+    }
+
+    if let Some((created_at, event_id)) = newest {
+        cursor.observe_newest(created_at, &event_id);
+    }
+    state.set_reaction_cursor(channel_id, cursor);
 
     Ok(report)
 }
@@ -1114,6 +1381,7 @@ this is exactly why is_own_event must run first, unconditionally"
             SkipReason::Empty,
             SkipReason::NoMatch,
             SkipReason::WorkflowAction,
+            SkipReason::NoTarget,
         ];
         let mut codes: Vec<&str> = all.iter().map(|r| r.code()).collect();
         codes.sort_unstable();
@@ -1353,5 +1621,114 @@ action:\n  add_reaction:\n    emoji: eyes\n",
         )
         .await;
         assert!(matches!(result, ActionResult::Refused { .. }));
+    }
+
+    // ─── buzz#52: reaction_added trigger ─────────────────────────────────────
+
+    #[test]
+    fn reaction_target_reads_the_last_e_tag() {
+        let tags = vec![
+            vec!["e".to_string(), "old-target".to_string()],
+            vec!["e".to_string(), "new-target".to_string()],
+        ];
+        assert_eq!(reaction_target(&tags).as_deref(), Some("new-target"));
+    }
+
+    #[test]
+    fn reaction_target_is_none_without_an_e_tag() {
+        let tags = vec![vec!["p".to_string(), "somebody".to_string()]];
+        assert_eq!(reaction_target(&tags), None);
+    }
+
+    #[test]
+    fn a_matching_emoji_fires_a_reaction_added_workflow() {
+        let workflows = vec![workflow(
+            "version: 1\nname: triage\ntrigger:\n  reaction_added: true\n  emoji: clipboard\n\
+action:\n  add_reaction:\n    emoji: eyes\n",
+        )];
+        let outcome = plan_reaction_trigger("clipboard", &workflows, "eng");
+        assert_eq!(
+            outcome,
+            TriggerOutcome::Fire {
+                workflow: "triage".to_string(),
+                action: schema::ActionKind::AddReaction {
+                    emoji: "eyes".to_string()
+                },
+                channel_override: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_non_matching_emoji_does_not_fire_a_filtered_reaction_added_workflow() {
+        let workflows = vec![workflow(
+            "version: 1\ntrigger:\n  reaction_added: true\n  emoji: clipboard\n\
+action:\n  reply: noted\n",
+        )];
+        let outcome = plan_reaction_trigger("thumbsup", &workflows, "eng");
+        assert_eq!(outcome, TriggerOutcome::Skip(SkipReason::NoMatch));
+    }
+
+    #[test]
+    fn an_unfiltered_reaction_added_workflow_fires_on_any_emoji() {
+        let workflows = vec![workflow(
+            "version: 1\ntrigger:\n  reaction_added: true\naction:\n  reply: someone reacted\n",
+        )];
+        assert!(matches!(
+            plan_reaction_trigger("anything", &workflows, "eng"),
+            TriggerOutcome::Fire { .. }
+        ));
+    }
+
+    #[test]
+    fn a_reaction_added_workflow_scoped_to_another_channel_is_not_consulted() {
+        let workflows = vec![workflow(concat!(
+            "version: 1\n",
+            "trigger:\n  channel: 6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b\n  reaction_added: true\n",
+            "action:\n  reply: noted\n",
+        ))];
+        let outcome = plan_reaction_trigger(
+            "clipboard",
+            &workflows,
+            "0c3b7e41-5d2f-4b18-9a06-2e7f5c4d3b1a",
+        );
+        assert_eq!(outcome, TriggerOutcome::Skip(SkipReason::NoMatch));
+    }
+
+    #[test]
+    fn a_message_triggered_workflow_is_never_consulted_by_the_reaction_pass() {
+        let workflows = vec![workflow(
+            "version: 1\ntrigger:\n  contains: clipboard\naction:\n  reply: hi\n",
+        )];
+        let outcome = plan_reaction_trigger("clipboard", &workflows, "eng");
+        assert_eq!(outcome, TriggerOutcome::Skip(SkipReason::NoMatch));
+    }
+
+    #[test]
+    fn channel_report_merge_sums_both_reports() {
+        let mut a = ChannelReport {
+            seen: 1,
+            fired: 1,
+            sent: 1,
+            ..Default::default()
+        };
+        a.skip(SkipReason::NoMatch);
+        let mut b = ChannelReport {
+            seen: 2,
+            dropped: 1,
+            refused: 1,
+            ..Default::default()
+        };
+        b.skip(SkipReason::NoMatch);
+        b.skip(SkipReason::NoTarget);
+
+        a.merge(b);
+        assert_eq!(a.seen, 3);
+        assert_eq!(a.fired, 1);
+        assert_eq!(a.sent, 1);
+        assert_eq!(a.dropped, 1);
+        assert_eq!(a.refused, 1);
+        assert_eq!(a.skipped.get(SkipReason::NoMatch.code()), Some(&2));
+        assert_eq!(a.skipped.get(SkipReason::NoTarget.code()), Some(&1));
     }
 }
