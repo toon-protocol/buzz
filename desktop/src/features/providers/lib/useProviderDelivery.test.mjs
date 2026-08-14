@@ -156,7 +156,10 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 
-import { useProviderDelivery } from "./useProviderDelivery.ts";
+import {
+  resetProviderDeliveryState,
+  useProviderDelivery,
+} from "./useProviderDelivery.ts";
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -297,8 +300,32 @@ function mountDeliveryHook({ transport, job, quote, wireOffers }) {
   };
 }
 
+/**
+ * The increment-1 offer as `useInboundFactoryJobs` would read it back off the
+ * relay — the hydrated-`wireOffers` remount input. `increment.n: 1` makes a
+ * fresh mount compute increment 2 as next, which is exactly the case where an
+ * increment-equality guard would fail to protect the outstanding offer.
+ */
+const WIRE_OFFER_1 = {
+  eventId: "signed-1",
+  providerPubkey: "p".repeat(64),
+  createdAt: 1_700_000_002,
+  rootJobId: "job-190",
+  status: "partial",
+  parentEventId: "quote-190",
+  buyerPubkey: "b".repeat(64),
+  increment: { n: 1, of: 2 },
+  artifactUrl: "ar://tx-cipher",
+  artifactHash: "ab".repeat(32),
+  amountBaseUnits: 1_000_000n,
+  conditionHex: "cd".repeat(32),
+};
+
 test.beforeEach(() => {
   setupTauriStub();
+  // Module-level cross-mount guard — cleared between tests the same way a
+  // community switch clears it in production (resetCommunityState).
+  resetProviderDeliveryState();
 });
 
 test.afterEach(() => {
@@ -419,6 +446,78 @@ test("a remount mid-awaiting-payment does not re-arm the port over the live offe
 
   // The original, still-outstanding payment now resolves — the system must
   // settle cleanly even though the mount that started it is long gone.
+  resolvers[0](true);
+  await act(async () => {
+    await deliverPromiseA;
+  });
+
+  await b.unmount();
+});
+
+test("a remount after the offer's relay echo landed does not arm the NEXT increment over the live offer (buzz#190 item 2)", async () => {
+  const { transport, log, resolvers } = scriptedTransport();
+
+  // Mount A: start delivering increment 1 and let it reach awaiting-payment.
+  const a = mountDeliveryHook({
+    transport,
+    job: JOB,
+    quote: QUOTE,
+    wireOffers: [],
+  });
+  await a.render();
+  const deliveryA = a.renders.current.at(-1);
+
+  let deliverPromiseA;
+  await act(async () => {
+    deliverPromiseA = deliveryA.deliverNext("increment 1 artifact");
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  assert.equal(resolvers.length, 1, "the port should be armed for increment 1");
+
+  // Collapse the panel mid-payment (React state resets; the port stays armed).
+  await a.unmount();
+
+  // Reopen it — but this time the ordinary way: the relay read-back for the
+  // increment-1 offer HAS landed, so the fresh mount computes increment 2 as
+  // next. Increment 1's offer is still live and unpaid; arming increment 2 on
+  // the per-writer sequential port would overwrite its key all the same.
+  const b = mountDeliveryHook({
+    transport,
+    job: JOB,
+    quote: QUOTE,
+    wireOffers: [WIRE_OFFER_1],
+  });
+  await b.render();
+  const deliveryB = b.renders.current.at(-1);
+
+  await act(async () => {
+    await deliveryB.deliverNext("increment 2 artifact");
+  });
+
+  assert.equal(
+    log.filter((entry) => entry.step === "encrypt").length,
+    1,
+    "the remount must not start a delivery while increment 1's offer is outstanding",
+  );
+  assert.equal(
+    log.filter((entry) => entry.step === "publish").length,
+    1,
+    "the remount must not publish an increment-2 offer over the live increment-1 offer",
+  );
+  assert.equal(
+    resolvers.length,
+    1,
+    "the remount must not re-arm the port — the original offer's key must stay releasable",
+  );
+  assert.match(
+    b.renders.current.at(-1).error ?? "",
+    /still settling/,
+    "the refusal should surface as the hook's error, not a silent no-op",
+  );
+
+  // The outstanding payment resolves; the guard clears and delivery can resume.
   resolvers[0](true);
   await act(async () => {
     await deliverPromiseA;

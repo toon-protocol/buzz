@@ -59,11 +59,26 @@ type SessionOffer = {
  * `setPhase` commits); this map is the same guard extended to survive an
  * unmount entirely. Collapsing/reopening the panel resets `phase` and
  * `sessionOffers` to nothing, but the port's arm for the outstanding offer
- * does not reset — without this, a remount recomputes the same "next
- * increment" (the relay read-back that would normally advance past it can
- * lag) and re-delivering overwrites the still-live offer's armed key.
+ * does not reset.
+ *
+ * The guard keys on PRESENCE (`.has`), never on which increment a remount
+ * happens to recompute as next: the port is per-writer and sequential
+ * (deliverFactoryJobIncrement.ts), so while ANY delivery for the job is
+ * outstanding, arming it again — for the same increment (relay read-back
+ * lagging) or the next one (read-back landed and advanced the schedule) —
+ * overwrites the still-live offer's armed key and strands its release.
+ *
+ * Community-scoped (job event ids are relay events): cleared by
+ * {@link resetProviderDeliveryState} on community switch, per CLAUDE.md's
+ * module-level-state contract — the switch tears the session (and the port
+ * arm with it) down, so a surviving entry would refuse delivery forever.
  */
 const armedDeliveries = new Map<string, number>();
+
+/** Community-switch reset (see resetCommunityState in useCommunityInit). */
+export function resetProviderDeliveryState(): void {
+  armedDeliveries.clear();
+}
 
 export function useProviderDelivery({
   transport,
@@ -134,9 +149,12 @@ export function useProviderDelivery({
     // buzz#190: both halves of the in-flight guard, checked synchronously
     // before anything else runs. `inFlightRef` catches a second invocation
     // racing in this same tick (this mount); `armedDeliveries` catches one
-    // arriving after an unmount/remount, while the port is still armed for
-    // this same increment from a mount that no longer exists.
-    if (inFlightRef.current || armedDeliveries.get(job.eventId) === n) {
+    // arriving after an unmount/remount while the port is still armed from a
+    // mount that no longer exists — `.has`, not increment equality, because a
+    // remount whose relay read-back already landed computes the NEXT
+    // increment, and arming that one overwrites the live offer's key just
+    // the same.
+    if (inFlightRef.current || armedDeliveries.has(job.eventId)) {
       setError(
         "A delivery for this job is still settling from an earlier attempt — wait for it to resolve before delivering again.",
       );
