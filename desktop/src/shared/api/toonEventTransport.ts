@@ -31,17 +31,16 @@ import {
  * it does on the relay transport.
  *
  * What this transport deliberately does NOT do:
- * - **Ephemeral writes are dropped.** `publishEphemeral` carries typing
- *   indicators. Paying a per-packet fee for a keystroke is not a tradeoff
- *   worth making silently, and the seam already defines these events as
- *   loss-tolerant.
- * - **Presence heartbeats are dropped too.** kind:20001 arrives through
- *   `publish`, same as any other paid write, but there is no free ephemeral
- *   lane yet (toon-meta#393) and the TOON read side does not consume presence
- *   anyway — so `publish` special-cases it onto the same silent-drop path as
- *   `publishEphemeral` rather than spending real money on a heartbeat every
- *   60 seconds. Delete this branch once the lane lands and presence can pay
- *   the (zero) free-lane price like everything else on it.
+ * - **Ephemeral writes ride the free lane, not the paid one.**
+ *   `publishEphemeral` carries typing indicators and (via `publish`'s
+ *   kind:20001 special-case below) presence heartbeats to the zero-priced
+ *   route relay#129 terminates (toon-meta#393 epic E2/E3) — no channel, no
+ *   claim, no per-packet fee. Never rejects, per the seam's own contract for
+ *   droppable events: a refusal is swallowed rather than surfaced, same as
+ *   the relay transport's `publishEphemeralEvent`. A connector predating the
+ *   lane (no route for `ephemeralDestination`) degrades to the same silent
+ *   no-op these kinds got before the lane existed — see
+ *   `ToonPaidWriter.publishEphemeral`.
  * - **The Rust write path bridges in, rather than calling this class
  *   directly.** Threaded replies, media, and custom-emoji messages are built
  *   and signed in `src-tauri` (see `eventTransport.ts`). As of buzz#27, when
@@ -52,7 +51,6 @@ import {
 export class ToonEventTransport implements EventTransport {
   private readonly writer: ToonPaidWriter;
   private readonly reader: ToonRelayReader;
-  private presenceDropLogged = false;
 
   constructor(
     config: ToonTransportConfig,
@@ -89,10 +87,9 @@ export class ToonEventTransport implements EventTransport {
     event: RelayEvent,
     messages: PublishFailureMessages,
   ): Promise<RelayEvent> {
-    // toon-meta#393: no free ephemeral lane exists yet, so presence rides the
-    // same silent-drop path typing already does — see the class doc.
+    // toon-meta#393: presence rides the same free-ephemeral-lane path typing
+    // already does, rather than the paid path below — see the class doc.
     if (event.kind === KIND_PRESENCE) {
-      this.logPresenceDropOnce();
       await this.publishEphemeral(event);
       return event;
     }
@@ -120,20 +117,18 @@ export class ToonEventTransport implements EventTransport {
   }
 
   /**
-   * Say once per session that presence is not being paid for. Once per beat
-   * would be a line a minute, forever, for a decision that never changes.
+   * Publish onto the free ephemeral lane — see the class doc. Never rejects:
+   * a refusal (including "this connector predates the lane") is loss the
+   * caller has already accepted by using this method, same contract the
+   * relay transport's `publishEphemeralEvent` keeps (every call site already
+   * fire-and-forgets this with its own `.catch(() => {})`).
    */
-  private logPresenceDropOnce(): void {
-    if (this.presenceDropLogged) return;
-    this.presenceDropLogged = true;
-    console.info(
-      "[toon] presence heartbeats are dropped, not paid for, until the free ephemeral lane lands (toon-meta#393)",
-    );
-  }
-
-  /** Dropped by design — see the class doc. */
-  publishEphemeral(_event: RelayEvent): Promise<void> {
-    return Promise.resolve();
+  async publishEphemeral(event: RelayEvent): Promise<void> {
+    try {
+      await this.writer.publishEphemeral(event);
+    } catch (error) {
+      console.warn("[toon] ephemeral write dropped", error);
+    }
   }
 
   subscribeLive(
