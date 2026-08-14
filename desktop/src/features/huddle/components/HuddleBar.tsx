@@ -191,8 +191,16 @@ export function HuddleBar({
   // process pays for its own frames out of its own writer's channel — so the
   // pubkey argument, which only steers the other-agent read path, is inert
   // here beyond re-reading once the identity resolves.
+  // `liveBurn: false` is load-bearing: the warning reads only the channel
+  // position (netSpendableBaseUnits), never the burn rate, and the burn store
+  // is fed by onPaidWrite — i.e. every ~20 ms huddle audio frame. Subscribing
+  // the always-mounted HuddleBar to it would re-render at frame rate while
+  // someone speaks, on the renderer thread already carrying the audio IPC
+  // stream.
   const feeQuote = useHuddleFeeQuote();
-  const networkSpend = useNetworkSpend(identityQuery.data?.pubkey ?? "", true);
+  const networkSpend = useNetworkSpend(identityQuery.data?.pubkey ?? "", true, {
+    liveBurn: false,
+  });
   const remainingBaseUnits =
     networkSpend.state.kind === "quoted"
       ? netSpendableBaseUnits(networkSpend.state.read)

@@ -105,10 +105,28 @@ export function resetNetworkSpendLiveStore(): void {
   notify();
 }
 
-/** Live burn-rate snapshot for the currently active TOON identity's channel. */
-export function useNetworkSpendLive(): LiveSpendSnapshot {
+// Stable no-op pair for the `enabled: false` branch of useNetworkSpendLive —
+// fresh functions per render would make useSyncExternalStore resubscribe (and
+// re-read) every render, defeating the point of opting out.
+const noopSubscribe = () => () => {};
+const readEmptySnapshot = () => EMPTY_SNAPSHOT;
+
+/**
+ * Live burn-rate snapshot for the currently active TOON identity's channel.
+ *
+ * `enabled: false` returns {@link EMPTY_SNAPSHOT} without subscribing to the
+ * store at all. This matters for always-mounted components that only need the
+ * channel *position* (deposit/owed/credited), not the burn rate: the store is
+ * fed from `onPaidWrite`, and during a huddle every ~20 ms audio frame is a
+ * paid write — a subscription there means re-rendering at frame rate on the
+ * renderer thread that is already handling the audio IPC stream (buzz#68
+ * review finding on PR #196).
+ */
+export function useNetworkSpendLive(
+  enabled: boolean = true,
+): LiveSpendSnapshot {
   return React.useSyncExternalStore(
-    subscribeNetworkSpendLive,
-    getNetworkSpendLiveSnapshot,
+    enabled ? subscribeNetworkSpendLive : noopSubscribe,
+    enabled ? getNetworkSpendLiveSnapshot : readEmptySnapshot,
   );
 }
