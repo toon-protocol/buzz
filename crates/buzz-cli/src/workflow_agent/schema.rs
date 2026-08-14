@@ -118,11 +118,24 @@ struct ConditionFile {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ActionFile {
-    reply: String,
+    #[serde(default)]
+    reply: Option<String>,
+    /// Post a NIP-25 kind:7 reaction onto the triggering message instead of
+    /// replying (buzz#52). Mutually exclusive with `reply`.
+    #[serde(default)]
+    add_reaction: Option<AddReactionFile>,
     /// Cross-channel override / schedule destination (buzz#22) — see the
-    /// module doc's "buzz#22" section.
+    /// module doc's "buzz#22" section. Not valid alongside `add_reaction`:
+    /// a reaction always targets the triggering message's own event, which
+    /// is only ever addressable in the channel it was posted in.
     #[serde(default)]
     channel: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AddReactionFile {
+    emoji: String,
 }
 
 /// A trigger condition, validated and ready to evaluate.
@@ -165,6 +178,23 @@ impl PartialEq for Condition {
             _ => false,
         }
     }
+}
+
+/// The upper bound NIP-25 puts on a reaction's `content` — mirrors
+/// `buzz_sdk::builders::build_reaction`'s `EmojiTooLong` check, so a
+/// too-long emoji fails at workflow-load time rather than at publish time.
+const MAX_EMOJI_CHARS: usize = 64;
+
+/// What a fired workflow does (buzz#52 widens this from "always a reply" to
+/// "a reply, or a reaction on the triggering message").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActionKind {
+    /// Post `text` as a channel message — v1's (and still the default)
+    /// action.
+    Reply(String),
+    /// Post a NIP-25 kind:7 reaction (`emoji`) onto the triggering message —
+    /// see the module doc's "buzz#52" section.
+    AddReaction { emoji: String },
 }
 
 /// A compiled `trigger.schedule` — the cron expression plus its display
@@ -262,12 +292,16 @@ pub struct Workflow {
     /// triggering channel to scope to.
     pub channel: Option<String>,
     pub trigger: TriggerKind,
-    /// The reply text posted back into the triggering channel (message
-    /// trigger) or into `action_channel` (schedule trigger).
-    pub reply: String,
+    /// What firing does — a reply (posted into the triggering channel, or
+    /// `action_channel` for a schedule trigger) or a reaction on the
+    /// triggering message (buzz#52; never valid for a schedule trigger,
+    /// which has no triggering message — see [`parse_workflow`]).
+    pub action: ActionKind,
     /// `action.channel`: a cross-channel override for a message trigger's
     /// reply, or the required destination for a schedule trigger. See the
-    /// module doc's "buzz#22" section.
+    /// module doc's "buzz#22" section. Always `None` for an `add_reaction`
+    /// action (validated in [`parse_workflow`]) — a reaction targets the
+    /// triggering message's own channel, not an overridable one.
     pub action_channel: Option<String>,
 }
 
@@ -431,12 +465,59 @@ is required",
         )));
     }
 
-    if file.action.reply.trim().is_empty() {
-        return Err(CliError::Usage(format!(
-            "{}: action.reply must not be empty",
-            source.display()
-        )));
-    }
+    let action = match (file.action.reply, file.action.add_reaction) {
+        (Some(_), Some(_)) => {
+            return Err(CliError::Usage(format!(
+                "{}: action must set exactly one of 'reply' or 'add_reaction', not both",
+                source.display()
+            )))
+        }
+        (None, None) => {
+            return Err(CliError::Usage(format!(
+                "{}: action must set one of 'reply' or 'add_reaction'",
+                source.display()
+            )))
+        }
+        (Some(reply), None) => {
+            if reply.trim().is_empty() {
+                return Err(CliError::Usage(format!(
+                    "{}: action.reply must not be empty",
+                    source.display()
+                )));
+            }
+            ActionKind::Reply(reply)
+        }
+        (None, Some(AddReactionFile { emoji })) => {
+            if matches!(trigger, TriggerKind::Schedule(_)) {
+                return Err(CliError::Usage(format!(
+                    "{}: a schedule trigger has no triggering message — 'action.add_reaction' \
+needs one to react to",
+                    source.display()
+                )));
+            }
+            if action_channel.is_some() {
+                return Err(CliError::Usage(format!(
+                    "{}: 'action.add_reaction' cannot also set 'action.channel' — a reaction \
+always targets the triggering message's own channel",
+                    source.display()
+                )));
+            }
+            let emoji = emoji.trim().to_string();
+            if emoji.is_empty() {
+                return Err(CliError::Usage(format!(
+                    "{}: action.add_reaction.emoji must not be empty",
+                    source.display()
+                )));
+            }
+            if emoji.chars().count() > MAX_EMOJI_CHARS {
+                return Err(CliError::Usage(format!(
+                    "{}: action.add_reaction.emoji must be at most {MAX_EMOJI_CHARS} characters",
+                    source.display()
+                )));
+            }
+            ActionKind::AddReaction { emoji }
+        }
+    };
 
     let name = file
         .name
@@ -453,7 +534,7 @@ is required",
         source: source.to_path_buf(),
         channel,
         trigger,
-        reply: file.action.reply,
+        action,
         action_channel,
     })
 }
@@ -559,7 +640,7 @@ mod tests {
             wf.condition().cloned(),
             Some(Condition::Contains("hello".to_string()))
         );
-        assert_eq!(wf.reply, "hi there");
+        assert_eq!(wf.action, ActionKind::Reply("hi there".to_string()));
     }
 
     #[test]
@@ -943,5 +1024,81 @@ mod tests {
         let wf = parse_workflow(yaml, &path("standup.yaml")).unwrap();
         assert!(!wf.applies_to_channel("6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b"));
         assert!(!wf.applies_to_channel("anything"));
+    }
+
+    // ─── buzz#52: action.add_reaction ────────────────────────────────────────
+
+    #[test]
+    fn a_message_trigger_may_use_add_reaction_instead_of_reply() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  contains: todo\n",
+            "action:\n  add_reaction:\n    emoji: eyes\n",
+        );
+        let wf = parse_workflow(yaml, &path("triage.yaml")).unwrap();
+        assert_eq!(
+            wf.action,
+            ActionKind::AddReaction {
+                emoji: "eyes".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn add_reaction_and_reply_are_mutually_exclusive() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  contains: todo\n",
+            "action:\n  reply: hi\n  add_reaction:\n    emoji: eyes\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(msg) if msg.contains("exactly one")));
+    }
+
+    #[test]
+    fn an_action_with_neither_reply_nor_add_reaction_is_rejected() {
+        let yaml = "version: 1\ntrigger:\n  contains: todo\naction: {}\n";
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(_)));
+    }
+
+    #[test]
+    fn an_empty_add_reaction_emoji_is_rejected() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  contains: todo\n",
+            "action:\n  add_reaction:\n    emoji: '   '\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(msg) if msg.contains("emoji")));
+    }
+
+    #[test]
+    fn an_overlong_add_reaction_emoji_is_rejected() {
+        let long = "x".repeat(65);
+        let yaml = format!(
+            "version: 1\ntrigger:\n  contains: todo\naction:\n  add_reaction:\n    emoji: {long}\n"
+        );
+        let err = parse_workflow(&yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(msg) if msg.contains("64")));
+    }
+
+    #[test]
+    fn add_reaction_cannot_set_an_action_channel_override() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  contains: todo\n",
+            "action:\n  add_reaction:\n    emoji: eyes\n",
+            "  channel: 6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(_)));
+    }
+
+    #[test]
+    fn a_schedule_trigger_cannot_use_add_reaction() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  schedule: '0 9 * * 1-5'\n",
+            "action:\n  add_reaction:\n    emoji: eyes\n",
+            "  channel: 6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(msg) if msg.contains("add_reaction")));
     }
 }

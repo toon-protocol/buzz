@@ -197,10 +197,13 @@ pub enum TriggerOutcome {
     /// `workflow` names which one fired, for the cycle report and logs.
     Fire {
         workflow: String,
-        reply: String,
+        /// What to do — a reply or a reaction on the triggering message
+        /// (buzz#52).
+        action: schema::ActionKind,
         /// `action.channel`, when the workflow overrides the default
         /// "reply into the channel the trigger fired in" destination
-        /// (buzz#22).
+        /// (buzz#22). Always `None` for an `AddReaction` action (enforced at
+        /// parse time — see [`schema::parse_workflow`]).
         channel_override: Option<String>,
     },
 }
@@ -270,7 +273,7 @@ pub fn plan_trigger(
         if condition.evaluate(text) {
             return TriggerOutcome::Fire {
                 workflow: workflow.name.clone(),
-                reply: workflow.reply.clone(),
+                action: workflow.action.clone(),
                 channel_override: workflow.action_channel.clone(),
             };
         }
@@ -371,33 +374,59 @@ enum ActionResult {
     },
 }
 
+/// `kind:7` — a NIP-25 reaction. Matches `buzz_sdk::builders::build_reaction`
+/// (which this module does not call directly: that builder signs with a held
+/// secret key, and the agent's identity is custodied by the sidecar — see the
+/// module doc's "Who holds what" analogue in `commands::toon`). No `h` tag:
+/// NIP-25 reactions are channel-scoped only by their `e`-tag target, which is
+/// the whole gap `reaction_added`/`add_reaction` (buzz#52) work around.
+const KIND_REACTION: u16 = 7;
+
+/// What one fired action resolves to, once the triggering event is known.
+/// [`schema::ActionKind::Reply`] carries everything it needs already;
+/// [`schema::ActionKind::AddReaction`] additionally needs the id of the
+/// message to react to, which only the call site (not the schema) has.
+enum ActAttempt {
+    Reply(String),
+    AddReaction {
+        target_event_id: String,
+        emoji: String,
+    },
+}
+
 /// Full-jitter delay for attempt `attempt` (0-indexed).
 fn backoff_delay(attempt: u32) -> Duration {
     let ceiling = PUBLISH_BACKOFF_SECS[(attempt as usize).min(PUBLISH_BACKOFF_SECS.len() - 1)];
     Duration::from_secs_f64(ceiling * rand::random::<f64>())
 }
 
-/// Post one workflow's reply, sealed through the same [`send_message`] path
-/// `buzz toon send` uses, retrying a transient sidecar failure with backoff
-/// before giving up loudly.
+/// Publish one workflow's action — a reply sealed through the same
+/// [`send_message`] path `buzz toon send` uses, or a reaction on the
+/// triggering message (buzz#52) — retrying a transient sidecar failure with
+/// backoff before giving up loudly.
 ///
 /// `target_channel` is the *destination* — the channel the trigger fired in
 /// by default, or `action.channel`'s override / required schedule
-/// destination (buzz#22). Whichever it is, this identity must hold a key for
-/// it: [`send_message`]'s own `plan_send` would happily post plaintext into
-/// an unkeyed *public* channel with no key held at all, which is the right
-/// call for a human typing `buzz toon send`, but not for an unattended
-/// workflow action — a YAML file naming an arbitrary public channel must not
-/// be enough, by itself, to make this identity post there on a timer or on
-/// every matching message. Refusing (loud: logged, counted, never silently
-/// dropped) is strictly narrower than what `send_message` alone would allow,
-/// and that narrowing is deliberate.
+/// destination (buzz#22; never set for an `AddReaction` attempt — see
+/// [`schema::parse_workflow`]). Whichever it is, this identity must hold a
+/// key for it: [`send_message`]'s own `plan_send` would happily post
+/// plaintext into an unkeyed *public* channel with no key held at all, which
+/// is the right call for a human typing `buzz toon send`, but not for an
+/// unattended workflow action — a YAML file naming an arbitrary public
+/// channel must not be enough, by itself, to make this identity post there on
+/// a timer or on every matching message. Refusing (loud: logged, counted,
+/// never silently dropped) is strictly narrower than what `send_message`
+/// alone would allow, and that narrowing is deliberate. A reaction is
+/// unsealed either way (NIP-25 has no encryption story — see
+/// `commands::messages::add_reaction`'s desktop analogue), but the same
+/// membership guard still applies: this identity must hold a key for
+/// `target_channel` before it posts *anything*, sealed or not.
 async fn act(
     client: &SidecarClient,
     relay_url: &str,
     keystore: &AgentKeystore,
     target_channel: &str,
-    reply: String,
+    attempt: ActAttempt,
 ) -> ActionResult {
     if keystore.sending_key(target_channel).is_none() {
         return ActionResult::Refused {
@@ -409,29 +438,43 @@ then `buzz toon inbox` before this action can succeed"
         };
     }
 
-    let extra_tags = vec![vec!["client".to_string(), CLIENT_MARKER.to_string()]];
     let mut last_error = String::new();
 
-    for attempt in 0..PUBLISH_MAX_ATTEMPTS {
-        match send_message(
-            client,
-            relay_url,
-            keystore,
-            target_channel,
-            reply.clone(),
-            &extra_tags,
-        )
-        .await
-        {
-            Ok(outcome) => {
-                return ActionResult::Sent {
-                    event_id: outcome.receipt.event_id,
-                }
+    for attempt_n in 0..PUBLISH_MAX_ATTEMPTS {
+        let outcome = match &attempt {
+            ActAttempt::Reply(text) => {
+                let extra_tags = vec![vec!["client".to_string(), CLIENT_MARKER.to_string()]];
+                send_message(
+                    client,
+                    relay_url,
+                    keystore,
+                    target_channel,
+                    text.clone(),
+                    &extra_tags,
+                )
+                .await
+                .map(|outcome| outcome.receipt.event_id)
             }
+            ActAttempt::AddReaction {
+                target_event_id,
+                emoji,
+            } => {
+                let tags = vec![
+                    vec!["e".to_string(), target_event_id.clone()],
+                    vec!["client".to_string(), CLIENT_MARKER.to_string()],
+                ];
+                client
+                    .publish_unsigned(KIND_REACTION, emoji.clone(), tags)
+                    .await
+                    .map(|receipt| receipt.event_id)
+            }
+        };
+        match outcome {
+            Ok(event_id) => return ActionResult::Sent { event_id },
             Err(e) => {
                 let retryable = crate::error::is_retryable_error(&e);
                 last_error = e.to_string();
-                let attempts_left = attempt + 1 < PUBLISH_MAX_ATTEMPTS;
+                let attempts_left = attempt_n + 1 < PUBLISH_MAX_ATTEMPTS;
                 if !retryable || !attempts_left {
                     break;
                 }
@@ -440,12 +483,12 @@ then `buzz toon inbox` before this action can succeed"
                     json!({
                         "event": "workflow-action-retry",
                         "channel": target_channel,
-                        "attempt": attempt + 1,
+                        "attempt": attempt_n + 1,
                         "maxAttempts": PUBLISH_MAX_ATTEMPTS,
                         "error": last_error,
                     })
                 );
-                tokio::time::sleep(backoff_delay(attempt)).await;
+                tokio::time::sleep(backoff_delay(attempt_n)).await;
             }
         }
     }
@@ -644,6 +687,16 @@ async fn fire_schedules(
             .action_channel
             .as_deref()
             .expect("a schedule workflow always has action_channel — enforced at parse time");
+        // `schema::parse_workflow` also rejects `add_reaction` on a schedule
+        // trigger — there is no triggering message to react to.
+        let reply_text = match &workflow.action {
+            schema::ActionKind::Reply(text) => text.clone(),
+            schema::ActionKind::AddReaction { .. } => {
+                unreachable!(
+                    "a schedule workflow's action is always Reply — enforced at parse time"
+                )
+            }
+        };
 
         let report = reports.entry(target_channel.to_string()).or_default();
         report.fired += 1;
@@ -652,7 +705,7 @@ async fn fire_schedules(
             relay_url,
             keystore,
             target_channel,
-            workflow.reply.clone(),
+            ActAttempt::Reply(reply_text),
         )
         .await
         {
@@ -815,12 +868,19 @@ async fn walk_channel(
                 TriggerOutcome::Skip(reason) => report.skip(reason),
                 TriggerOutcome::Fire {
                     workflow,
-                    reply,
+                    action,
                     channel_override,
                 } => {
                     report.fired += 1;
                     let target_channel = channel_override.as_deref().unwrap_or(channel_id);
-                    match act(client, opts.relay_url, keystore, target_channel, reply).await {
+                    let attempt = match action {
+                        schema::ActionKind::Reply(text) => ActAttempt::Reply(text),
+                        schema::ActionKind::AddReaction { emoji } => ActAttempt::AddReaction {
+                            target_event_id: event_id.clone(),
+                            emoji,
+                        },
+                    };
+                    match act(client, opts.relay_url, keystore, target_channel, attempt).await {
                         ActionResult::Sent {
                             event_id: action_id,
                         } => {
@@ -969,7 +1029,7 @@ mod tests {
             outcome,
             TriggerOutcome::Fire {
                 workflow: "greeter".to_string(),
-                reply: "hi there".to_string(),
+                action: schema::ActionKind::Reply("hi there".to_string()),
                 channel_override: None,
             }
         );
@@ -1242,7 +1302,54 @@ this is exactly why is_own_event must run first, unconditionally"
             "ws://127.0.0.1:1",
             &keystore,
             "0c3b7e41-5d2f-4b18-9a06-2e7f5c4d3b1a",
-            "hi".to_string(),
+            ActAttempt::Reply("hi".to_string()),
+        )
+        .await;
+        assert!(matches!(result, ActionResult::Refused { .. }));
+    }
+
+    // ─── buzz#52: add_reaction action ────────────────────────────────────────
+
+    #[test]
+    fn a_matching_message_may_fire_an_add_reaction_action() {
+        let workflows = vec![workflow(
+            "version: 1\nname: triage\ntrigger:\n  contains: todo\n\
+action:\n  add_reaction:\n    emoji: eyes\n",
+        )];
+        let outcome = plan_trigger(
+            true,
+            &Opened::Plaintext("a todo for later".into()),
+            &workflows,
+            "eng",
+        );
+        assert_eq!(
+            outcome,
+            TriggerOutcome::Fire {
+                workflow: "triage".to_string(),
+                action: schema::ActionKind::AddReaction {
+                    emoji: "eyes".to_string()
+                },
+                channel_override: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn act_also_refuses_an_add_reaction_without_a_held_key() {
+        let client = SidecarClient::new("http://127.0.0.1:1".to_string()).unwrap();
+        let keystore = AgentKeystore::open(std::path::PathBuf::from(
+            "/nonexistent/agent-channel-keys.json",
+        ))
+        .unwrap();
+        let result = act(
+            &client,
+            "ws://127.0.0.1:1",
+            &keystore,
+            "0c3b7e41-5d2f-4b18-9a06-2e7f5c4d3b1a",
+            ActAttempt::AddReaction {
+                target_event_id: "ab".repeat(32),
+                emoji: "eyes".to_string(),
+            },
         )
         .await;
         assert!(matches!(result, ActionResult::Refused { .. }));

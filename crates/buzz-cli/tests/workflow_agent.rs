@@ -894,3 +894,55 @@ action:\n  reply: escalated\n  channel: {CONTROL}\n"
 
     agent.stop().await;
 }
+
+// ─── buzz#52: reaction_added trigger / add_reaction action ─────────────────
+
+const KIND_REACTION: u16 = 7;
+
+/// A matching message fires `action.add_reaction`: the published event is an
+/// unsealed kind:7 reaction whose `e` tag targets the triggering message.
+#[tokio::test]
+async fn a_matching_message_fires_an_add_reaction_action() {
+    let agent_keys = Keys::generate();
+    let (fixture, relay, admin) = fixture(&agent_keys).await;
+    let yaml = "version: 1\nname: triage\ntrigger:\n  contains: todo\n\
+action:\n  add_reaction:\n    emoji: eyes\n";
+    let workflow = fixture.write_workflow("triage.yaml", yaml);
+
+    let trigger = sealed_message(&admin, MEMBER, &EPOCH0, "a todo for later", 1_700_000_100);
+    let trigger_id = trigger.id.to_hex();
+    relay.publish(trigger);
+
+    let agent = fixture.start_agent(&workflow, 50, false).await;
+    agent.wait_for_sent(1).await;
+
+    let sent = &agent.sent_actions()[0];
+    assert_eq!(sent["workflow"], "triage");
+    assert_eq!(sent["channel"], MEMBER);
+
+    let action_id = sent["actionEvent"].as_str().unwrap();
+    let published = relay
+        .all()
+        .into_iter()
+        .find(|e| e.id.to_hex() == action_id)
+        .expect("the reaction event should have reached the relay");
+    assert_eq!(published.pubkey, agent_keys.public_key());
+    assert_eq!(published.kind.as_u16(), KIND_REACTION);
+    // Unsealed: NIP-25 reactions have no encryption story.
+    assert_eq!(published.content, "eyes");
+
+    let e_target = published.tags.iter().find_map(|t| {
+        let row = t.clone().to_vec();
+        (row.first().map(String::as_str) == Some("e")).then(|| row.get(1).cloned())
+    });
+    assert_eq!(e_target.flatten().as_deref(), Some(trigger_id.as_str()));
+
+    let has_marker = published.tags.iter().any(|t| {
+        let row = t.clone().to_vec();
+        row.first().map(String::as_str) == Some("client")
+            && row.get(1).map(String::as_str) == Some("buzz-workflow")
+    });
+    assert!(has_marker, "action event must carry the client marker tag");
+
+    agent.stop().await;
+}
