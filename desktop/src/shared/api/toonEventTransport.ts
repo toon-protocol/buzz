@@ -14,7 +14,10 @@ import {
 } from "@/shared/api/toonRelayReader";
 import type { ToonTransportConfig } from "@/shared/api/toonTransportConfig";
 import type { RelayEvent } from "@/shared/api/types";
-import { KIND_HUDDLE_AUDIO_FRAME } from "@/shared/constants/kinds";
+import {
+  KIND_HUDDLE_AUDIO_FRAME,
+  KIND_PRESENCE,
+} from "@/shared/constants/kinds";
 
 /**
  * The transport seam's TOON implementation: paid writes out through a
@@ -32,6 +35,13 @@ import { KIND_HUDDLE_AUDIO_FRAME } from "@/shared/constants/kinds";
  *   indicators. Paying a per-packet fee for a keystroke is not a tradeoff
  *   worth making silently, and the seam already defines these events as
  *   loss-tolerant.
+ * - **Presence heartbeats are dropped too.** kind:20001 arrives through
+ *   `publish`, same as any other paid write, but there is no free ephemeral
+ *   lane yet (toon-meta#393) and the TOON read side does not consume presence
+ *   anyway — so `publish` special-cases it onto the same silent-drop path as
+ *   `publishEphemeral` rather than spending real money on a heartbeat every
+ *   60 seconds. Delete this branch once the lane lands and presence can pay
+ *   the (zero) free-lane price like everything else on it.
  * - **The Rust write path bridges in, rather than calling this class
  *   directly.** Threaded replies, media, and custom-emoji messages are built
  *   and signed in `src-tauri` (see `eventTransport.ts`). As of buzz#27, when
@@ -42,6 +52,7 @@ import { KIND_HUDDLE_AUDIO_FRAME } from "@/shared/constants/kinds";
 export class ToonEventTransport implements EventTransport {
   private readonly writer: ToonPaidWriter;
   private readonly reader: ToonRelayReader;
+  private presenceDropLogged = false;
 
   constructor(
     config: ToonTransportConfig,
@@ -78,6 +89,14 @@ export class ToonEventTransport implements EventTransport {
     event: RelayEvent,
     messages: PublishFailureMessages,
   ): Promise<RelayEvent> {
+    // toon-meta#393: no free ephemeral lane exists yet, so presence rides the
+    // same silent-drop path typing already does — see the class doc.
+    if (event.kind === KIND_PRESENCE) {
+      this.logPresenceDropOnce();
+      await this.publishEphemeral(event);
+      return event;
+    }
+
     try {
       const receipt = await this.writer.publish(event);
       // The fee is not incidental detail: on a paid network the user is owed
@@ -98,6 +117,18 @@ export class ToonEventTransport implements EventTransport {
         { cause: error },
       );
     }
+  }
+
+  /**
+   * Say once per session that presence is not being paid for. Once per beat
+   * would be a line a minute, forever, for a decision that never changes.
+   */
+  private logPresenceDropOnce(): void {
+    if (this.presenceDropLogged) return;
+    this.presenceDropLogged = true;
+    console.info(
+      "[toon] presence heartbeats are dropped, not paid for, until the free ephemeral lane lands (toon-meta#393)",
+    );
   }
 
   /** Dropped by design — see the class doc. */

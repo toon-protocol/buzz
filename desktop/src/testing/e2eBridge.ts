@@ -191,9 +191,8 @@ type E2eConfig = {
      * client's `getLastConnectorRouteTerms` (buzz#134 AC3) — see
      * `e2eBridgeToon.ts`'s `createE2eToonPaidClient` doc. Read live at call
      * time: specs typically leave it unset at install (so availability reads
-     * `pending` despite the boot presence heartbeat's paid write) and mutate
-     * it mid-test; the next successful paid write then captures the lease.
-     * Omitted throughout means no lease is ever observed.
+     * `pending`) and mutate it mid-test; the next successful paid write then
+     * captures the lease. Omitted throughout means no lease is ever observed.
      */
     toonSessionLeaseTtlMs?: number;
     /**
