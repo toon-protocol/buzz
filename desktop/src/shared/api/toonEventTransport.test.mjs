@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test, { beforeEach, mock } from "node:test";
+import test, { beforeEach } from "node:test";
 
 import { setToonChannelStorage } from "./toonChannelResumeStore.ts";
 import { ToonEventTransport } from "./toonEventTransport.ts";
@@ -189,13 +189,13 @@ test("ephemeral writes are dropped rather than paid for", async () => {
   assert.deepEqual(client.published, []);
 });
 
-test("presence heartbeats never reach the paid path on TOON", async () => {
+test("presence heartbeats never reach the paid path on TOON", async (t) => {
   const client = scriptedClient();
   const transport = new ToonEventTransport(CONFIG, {
     writer: writerOver(client),
     reader: stubReader(),
   });
-  const info = mock.method(console, "info", () => {});
+  t.mock.method(console, "info", () => {});
 
   const published = await transport.publish(
     { ...EVENT, kind: 20001 },
@@ -206,23 +206,21 @@ test("presence heartbeats never reach the paid path on TOON", async () => {
   // Still resolves with the event, same as a real (paid) publish would, so
   // callers that await the presence write see success either way.
   assert.deepEqual(published, { ...EVENT, kind: 20001 });
-  info.mock.restore();
 });
 
-test("the presence drop is logged once per session, not once per heartbeat", async () => {
+test("the presence drop is logged once per session, not once per heartbeat", async (t) => {
   const client = scriptedClient();
   const transport = new ToonEventTransport(CONFIG, {
     writer: writerOver(client),
     reader: stubReader(),
   });
-  const info = mock.method(console, "info", () => {});
+  const info = t.mock.method(console, "info", () => {});
 
   await transport.publish({ ...EVENT, kind: 20001 }, MESSAGES);
   await transport.publish({ ...EVENT, kind: 20001 }, MESSAGES);
   await transport.publish({ ...EVENT, kind: 20001 }, MESSAGES);
 
   assert.equal(info.mock.callCount(), 1);
-  info.mock.restore();
 });
 
 test("a transport that has not started cannot write", async () => {

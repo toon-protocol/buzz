@@ -89,15 +89,10 @@ export class ToonEventTransport implements EventTransport {
     event: RelayEvent,
     messages: PublishFailureMessages,
   ): Promise<RelayEvent> {
+    // toon-meta#393: no free ephemeral lane exists yet, so presence rides the
+    // same silent-drop path typing already does — see the class doc.
     if (event.kind === KIND_PRESENCE) {
-      // toon-meta#393: no free ephemeral lane exists yet, so presence rides
-      // the same silent-drop path typing already does — see the class doc.
-      if (!this.presenceDropLogged) {
-        this.presenceDropLogged = true;
-        console.info(
-          "[toon] presence heartbeats are dropped, not paid for, until the free ephemeral lane lands (toon-meta#393)",
-        );
-      }
+      this.logPresenceDropOnce();
       await this.publishEphemeral(event);
       return event;
     }
@@ -122,6 +117,18 @@ export class ToonEventTransport implements EventTransport {
         { cause: error },
       );
     }
+  }
+
+  /**
+   * Say once per session that presence is not being paid for. Once per beat
+   * would be a line a minute, forever, for a decision that never changes.
+   */
+  private logPresenceDropOnce(): void {
+    if (this.presenceDropLogged) return;
+    this.presenceDropLogged = true;
+    console.info(
+      "[toon] presence heartbeats are dropped, not paid for, until the free ephemeral lane lands (toon-meta#393)",
+    );
   }
 
   /** Dropped by design — see the class doc. */

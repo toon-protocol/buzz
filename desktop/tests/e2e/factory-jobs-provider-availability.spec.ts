@@ -9,13 +9,13 @@ import { installMockBridge } from "../helpers/bridge";
  * (`providerAvailability.ts`, "the socket is the lease"), all three states
  * `useProviderAvailability` can report once advertising is on:
  *
- * - `pending` — no lease TTL has been advertised by the connector. As of
- *   buzz#212 the kind:20001 presence heartbeat no longer reaches
- *   `ToonPaidWriter` at all (it is dropped, not paid for — see
- *   `ToonEventTransport.publish`), so with no other paid write triggered yet
- *   `getLastConnectorRouteTerms` answers `undefined` and
- *   `captureSessionLease` never runs — same as a real connector predating
- *   toon-client#509.
+ * - `pending` — no lease TTL has been advertised by the connector. NOT "no
+ *   paid write has landed": with no `toonSessionLeaseTtlMs` fixture the fake
+ *   client's `getLastConnectorRouteTerms` answers `undefined`, so however many
+ *   writes land none of them can capture a lease — same as a real connector
+ *   predating toon-client#509. (As of buzz#212 the kind:20001 presence
+ *   heartbeat is not one of those writes any more: it is dropped, not paid
+ *   for — see `ToonEventTransport.publish`.)
  * - `available` — a TTL is advertised and a paid write has captured it while
  *   it has not yet elapsed. The bridge reads the TTL fixture at CALL time
  *   (`createE2eToonPaidClient`), so the spec sets it live mid-test — AFTER
@@ -23,10 +23,10 @@ import { installMockBridge } from "../helpers/bridge";
  *   `ToonPaidWriter` (the quote this spec sends) captures the lease.
  * - `stale` — a captured lease has elapsed with no fresh write in between:
  *   reach `available` on a short nonzero TTL, then let the hook's 5s tick
- *   re-derive `nowMs >= expiresAtMs`. No other paid write happens in the
- *   window the spec waits in (the presence heartbeat that used to be one no
- *   longer pays, or refreshes the lease, at all), so nothing refreshes the
- *   lease under the assertion.
+ *   re-derive `nowMs >= expiresAtMs`. Nothing pays in the window the spec
+ *   waits in — the 60s presence heartbeat that used to be the one candidate
+ *   no longer pays at all (buzz#212) — so no write refreshes the lease under
+ *   the assertion.
  */
 
 const BUYER_PUBKEY = "b0b0b0b0".repeat(8);
@@ -82,7 +82,7 @@ async function advertiseSessionLeaseTtl(page: Page, ttlMs: number) {
  * Send a quote for the one seeded inbound job — a real paid write through the
  * shared `ToonPaidWriter` (`postFactoryJobQuote` → `transport.publish`) the
  * spec can trigger on demand, so once a TTL is advertised the lease capture
- * happens on the spec's schedule rather than the 60s heartbeat's.
+ * happens on the spec's schedule.
  */
 async function sendQuoteForSeededJob(page: Page) {
   await page.getByRole("button", { name: "Quote" }).click();
