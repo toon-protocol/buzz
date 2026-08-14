@@ -372,7 +372,10 @@ test("deliverNext double-invocation in the same tick starts only one delivery (b
   );
   assert.equal(resolvers.length, 1, "only one waitForPayment should be armed");
 
-  resolvers[0](true);
+  // Resolve every armed payment, not just the first: under the bug there is a
+  // second one, and leaving it parked would hang the suite instead of letting
+  // the assertions above report the regression.
+  for (const resolve of resolvers) resolve(true);
   await act(async () => {
     await Promise.all([p1, p2]);
   });
@@ -424,8 +427,15 @@ test("a remount mid-awaiting-payment does not re-arm the port over the live offe
   await b.render();
   const deliveryB = b.renders.current.at(-1);
 
+  // Started, not awaited to completion: the guard must refuse synchronously,
+  // and under the bug this call parks on a second `waitForPayment` that
+  // nothing resolves — awaiting it would hang rather than fail the assertions.
+  let deliverPromiseB;
   await act(async () => {
-    await deliveryB.deliverNext("increment 1 artifact, again");
+    deliverPromiseB = deliveryB.deliverNext("increment 1 artifact, again");
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
   });
 
   assert.equal(
@@ -446,9 +456,9 @@ test("a remount mid-awaiting-payment does not re-arm the port over the live offe
 
   // The original, still-outstanding payment now resolves — the system must
   // settle cleanly even though the mount that started it is long gone.
-  resolvers[0](true);
+  for (const resolve of resolvers) resolve(true);
   await act(async () => {
-    await deliverPromiseA;
+    await Promise.all([deliverPromiseA, deliverPromiseB]);
   });
 
   await b.unmount();
@@ -492,8 +502,13 @@ test("a remount after the offer's relay echo landed does not arm the NEXT increm
   await b.render();
   const deliveryB = b.renders.current.at(-1);
 
+  // Started, not awaited to completion — same reason as the test above.
+  let deliverPromiseB;
   await act(async () => {
-    await deliveryB.deliverNext("increment 2 artifact");
+    deliverPromiseB = deliveryB.deliverNext("increment 2 artifact");
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
   });
 
   assert.equal(
@@ -518,9 +533,9 @@ test("a remount after the offer's relay echo landed does not arm the NEXT increm
   );
 
   // The outstanding payment resolves; the guard clears and delivery can resume.
-  resolvers[0](true);
+  for (const resolve of resolvers) resolve(true);
   await act(async () => {
-    await deliverPromiseA;
+    await Promise.all([deliverPromiseA, deliverPromiseB]);
   });
 
   await b.unmount();

@@ -150,10 +150,8 @@ export function useProviderDelivery({
     // before anything else runs. `inFlightRef` catches a second invocation
     // racing in this same tick (this mount); `armedDeliveries` catches one
     // arriving after an unmount/remount while the port is still armed from a
-    // mount that no longer exists — `.has`, not increment equality, because a
-    // remount whose relay read-back already landed computes the NEXT
-    // increment, and arming that one overwrites the live offer's key just
-    // the same.
+    // mount that no longer exists (see its doc for why that half keys on
+    // presence rather than on which increment the remount recomputed).
     if (inFlightRef.current || armedDeliveries.has(job.eventId)) {
       setError(
         "A delivery for this job is still settling from an earlier attempt — wait for it to resolve before delivering again.",
