@@ -190,13 +190,10 @@ export function HuddleBar({
   // balance while speaking is ongoing. The read is always `isSelf` — this
   // process pays for its own frames out of its own writer's channel — so the
   // pubkey argument, which only steers the other-agent read path, is inert
-  // here beyond re-reading once the identity resolves.
-  // `liveBurn: false` is load-bearing: the warning reads only the channel
-  // position (netSpendableBaseUnits), never the burn rate, and the burn store
-  // is fed by onPaidWrite — i.e. every ~20 ms huddle audio frame. Subscribing
-  // the always-mounted HuddleBar to it would re-render at frame rate while
-  // someone speaks, on the renderer thread already carrying the audio IPC
-  // stream.
+  // here beyond re-reading once the identity resolves. Only the channel
+  // position is wanted, never the burn rate, so `liveBurn: false` keeps this
+  // always-mounted bar off the frame-rate burn store (the rationale lives on
+  // `useNetworkSpendLive`).
   const feeQuote = useHuddleFeeQuote();
   const networkSpend = useNetworkSpend(identityQuery.data?.pubkey ?? "", true, {
     liveBurn: false,
@@ -621,6 +618,9 @@ export function HuddleBar({
         {collateralCaption && (
           <output
             role="alert"
+            // The bar's column truncates the caption well before its "Add
+            // funds" half, so carry the full text as a tooltip too.
+            title={collateralCaption}
             className="max-w-[280px] truncate rounded bg-destructive/10 px-2 py-1 text-xs text-destructive"
           >
             {collateralCaption}
