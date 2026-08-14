@@ -61,6 +61,33 @@
 //!   that a workflow naming a channel this identity was never admitted to
 //!   must be refused loudly per firing, not silently downgraded to plaintext
 //!   or silently skipped.
+//!
+//! ## buzz#52: reactions and admin adds
+//!
+//! Still version `1`, still deny-unknown, widened once more — two triggers
+//! and one action, closing the rows `docs/workflow-agent-parity.md` had
+//! deferred. See [`crate::workflow_agent`]'s own "buzz#52" section for the
+//! passes that drive them:
+//!
+//! - **`trigger.reaction_added: true`**, optionally narrowed by
+//!   **`trigger.emoji`** to one reaction content string, compared exactly —
+//!   the same comparison upstream's `should_fire_workflow` makes. Mutually
+//!   exclusive with `contains` / `matches` / `all` / `any` / `schedule` /
+//!   `admin_added`: what is being matched is a reaction, not a message.
+//!   `trigger.channel` still scopes it to a single channel, and `emoji`
+//!   without `reaction_added` is a load error rather than a silently
+//!   ignored field.
+//! - **`trigger.admin_added: true`** — fires once per admin a channel's
+//!   kind:39100 fold gained since the previous cycle. Named for what
+//!   kind:39100 actually holds (admins), not the "member joined" the ticket
+//!   asked for. Same mutual exclusions, same optional `trigger.channel`.
+//! - **`action.add_reaction: { emoji }`** — mutually exclusive with
+//!   `action.reply`, and rejected for a `schedule` or `admin_added` trigger
+//!   (neither has a triggering message to react to) or alongside
+//!   `action.channel` (a reaction is only addressable in the channel its
+//!   target was posted in). `emoji` is bounded by [`MAX_EMOJI_CHARS`], the
+//!   limit `buzz_sdk::builders::build_reaction` enforces, so an over-long
+//!   one fails at load time instead of at publish time.
 
 use std::path::{Path, PathBuf};
 
@@ -300,9 +327,12 @@ fn parse_condition(
     }
 }
 
-/// One loaded, validated workflow: one trigger, one action — widened by
-/// buzz#22 from "trigger is always a message condition" to "trigger is a
-/// message condition or a schedule" (see [`TriggerKind`]).
+/// One loaded, validated workflow: still one trigger and one action, but
+/// neither is a single shape any more — buzz#22 widened the trigger from
+/// "always a message condition" to "a message condition or a schedule", and
+/// buzz#52 to "…or a reaction, or an admin add" (see [`TriggerKind`]) and the
+/// action from "always a reply" to "a reply or a reaction" (see
+/// [`ActionKind`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Workflow {
     /// Display name — the `name:` field, or the file's stem when omitted.
@@ -336,11 +366,20 @@ impl Workflow {
     /// walk (see `crate::workflow_agent::plan_trigger`), only by the
     /// scheduler pass.
     pub fn applies_to_channel(&self, channel_id: &str) -> bool {
-        matches!(self.trigger, TriggerKind::Message(_))
-            && self
-                .channel
-                .as_deref()
-                .is_none_or(|only| only == channel_id)
+        matches!(self.trigger, TriggerKind::Message(_)) && self.scoped_to(channel_id)
+    }
+
+    /// Whether `trigger.channel` — set or omitted — admits `channel_id`.
+    /// Trigger-kind-agnostic on purpose: the `reaction_added` and
+    /// `admin_added` passes ask the same scoping question
+    /// [`Self::applies_to_channel`] asks for the message walk, about a
+    /// channel they reached without walking a message
+    /// (`crate::workflow_agent::plan_reaction_trigger` /
+    /// `plan_admin_added_trigger`).
+    pub fn scoped_to(&self, channel_id: &str) -> bool {
+        self.channel
+            .as_deref()
+            .is_none_or(|only| only == channel_id)
     }
 
     /// The condition to evaluate, for a message-triggered workflow.
