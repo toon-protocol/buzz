@@ -29,6 +29,7 @@ import { resetAgentObserverStore } from "@/features/agents/observerRelayStore";
 import { resetAvatarPresentations } from "@/features/profile/avatarPresentationStore";
 import { resetAvatarProfileSync } from "@/features/profile/avatarProfileSync";
 import { resetNetworkSpendLiveStore } from "@/features/profile/lib/networkSpendLiveStore";
+import { resetProviderDeliveryState } from "@/features/providers/lib/useProviderDelivery";
 import { resetSidebarRelayConnectionCardState } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
 import { clearMarkdownNodeCache } from "@/shared/ui/markdown/nodeCache";
 import { resetVideoPlayerState } from "@/shared/ui/videoPlayerState";
@@ -71,6 +72,7 @@ function resetCommunityState({
   clearSearchHitEventCache();
   clearMarkdownNodeCache();
   resetNetworkSpendLiveStore();
+  resetProviderDeliveryState();
 }
 
 type CommunityInitResult =
