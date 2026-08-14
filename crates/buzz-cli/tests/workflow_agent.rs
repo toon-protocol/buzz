@@ -1047,3 +1047,52 @@ action:\n  add_reaction:\n    emoji: eyes\n";
 
     agent.stop().await;
 }
+
+// ─── buzz#52: admin_added trigger ───────────────────────────────────────────
+
+/// A channel gaining an admin fires `admin_added` — but only on the diff
+/// after the first cycle has already seeded a snapshot; the pre-existing
+/// creator admin from `fixture`'s own genesis list must not itself be
+/// reported as "just joined".
+#[tokio::test]
+async fn a_newly_added_admin_fires_an_admin_added_workflow() {
+    let agent_keys = Keys::generate();
+    let (fixture, relay, admin) = fixture(&agent_keys).await;
+    let yaml =
+        "version: 1\nname: welcome\ntrigger:\n  admin_added: true\naction:\n  reply: welcome aboard\n";
+    let workflow = fixture.write_workflow("welcome.yaml", yaml);
+
+    let agent = fixture.start_agent(&workflow, 50, false).await;
+    // Let the first cycle seed the snapshot from `fixture`'s own genesis
+    // admin list before a real promotion happens.
+    agent.wait_for_cycles(1).await;
+    assert!(
+        agent.sent_actions().is_empty(),
+        "the pre-existing creator admin must not itself fire admin_added: {:?}",
+        agent.log.lock().unwrap()
+    );
+
+    let new_admin = Keys::generate();
+    let creator = admin.public_key().to_hex();
+    let promotion = EventBuilder::new(Kind::Custom(KIND_ADMIN_LIST), "")
+        .tags(vec![
+            Tag::parse(["d", MEMBER]).unwrap(),
+            Tag::parse(["creator", &creator]).unwrap(),
+            Tag::parse(["p", &creator, "admin"]).unwrap(),
+            Tag::parse(["p", &new_admin.public_key().to_hex(), "admin"]).unwrap(),
+            Tag::parse(["key", &channel_key_id(&EPOCH0), "0"]).unwrap(),
+        ])
+        .allow_self_tagging()
+        .custom_created_at(Timestamp::from_secs(1_700_000_500))
+        .sign_with_keys(&admin)
+        .unwrap();
+    relay.publish(promotion);
+
+    agent.wait_for_sent(1).await;
+
+    let sent = &agent.sent_actions()[0];
+    assert_eq!(sent["workflow"], "welcome");
+    assert_eq!(sent["channel"], MEMBER);
+
+    agent.stop().await;
+}

@@ -67,6 +67,15 @@ struct StateFile {
     /// reaction fetch cannot simply scope by channel.
     #[serde(default)]
     reaction_targets: BTreeMap<String, Vec<String>>,
+    /// The `admin_added` trigger's previous-cycle admin-list fold per
+    /// channel (buzz#52) — an entry's *absence* means "never observed",
+    /// which the admin-diff pass treats differently from "observed with no
+    /// admins": the first observation of a channel seeds this without
+    /// firing (there is no genuine "just joined" to report for admins that
+    /// were already there), matching a schedule trigger's "no retroactive
+    /// fire" (buzz#22).
+    #[serde(default)]
+    admin_snapshots: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// The agent's resume state: one file, one identity, written atomically.
@@ -79,6 +88,7 @@ pub struct WorkflowState {
     scheduled: BTreeMap<String, u64>,
     reaction_cursors: BTreeMap<String, ChannelCursor>,
     reaction_targets: BTreeMap<String, Vec<String>>,
+    admin_snapshots: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl WorkflowState {
@@ -122,6 +132,7 @@ pass --state or set BUZZ_WORKFLOW_STATE"
                 scheduled: file.scheduled,
                 reaction_cursors: file.reaction_cursors,
                 reaction_targets: file.reaction_targets,
+                admin_snapshots: file.admin_snapshots,
             },
             None => Self {
                 path,
@@ -131,6 +142,7 @@ pass --state or set BUZZ_WORKFLOW_STATE"
                 scheduled: BTreeMap::new(),
                 reaction_cursors: BTreeMap::new(),
                 reaction_targets: BTreeMap::new(),
+                admin_snapshots: BTreeMap::new(),
             },
         }
     }
@@ -229,6 +241,21 @@ is {pubkey} — point --state / BUZZ_WORKFLOW_STATE at this agent's own file",
         ids.truncate(cap.max(1));
     }
 
+    /// `channel_id`'s admin set as of the last `admin_added` pass, or `None`
+    /// if this channel has never been observed by one (buzz#52) — see the
+    /// field's doc on [`StateFile::admin_snapshots`] for why that distinction
+    /// matters.
+    pub fn admin_snapshot(&self, channel_id: &str) -> Option<&BTreeSet<String>> {
+        self.admin_snapshots.get(channel_id)
+    }
+
+    /// Replace `channel_id`'s admin snapshot — recorded every cycle the
+    /// admin-diff pass runs, whether or not it fired, mirroring
+    /// [`Self::mark_evaluated`]'s "not queued for a later cycle" rule.
+    pub fn set_admin_snapshot(&mut self, channel_id: &str, admins: BTreeSet<String>) {
+        self.admin_snapshots.insert(channel_id.to_string(), admins);
+    }
+
     /// Write cursors and the evaluated set to disk in one atomic replacement.
     /// Temp file in the same directory, owner-only, `fsync`, then `rename` —
     /// identical shape to [`crate::search_index::SearchIndex::save`], for the
@@ -248,6 +275,7 @@ is {pubkey} — point --state / BUZZ_WORKFLOW_STATE at this agent's own file",
             scheduled: self.scheduled.clone(),
             reaction_cursors: self.reaction_cursors.clone(),
             reaction_targets: self.reaction_targets.clone(),
+            admin_snapshots: self.admin_snapshots.clone(),
         };
         let json = serde_json::to_string(&file).map_err(|e| {
             CliError::Other(format!("failed to serialize the workflow agent state: {e}"))
@@ -437,5 +465,38 @@ mod tests {
         let reopened = WorkflowState::open(path);
         assert_eq!(reopened.reaction_cursor("eng"), cursor);
         assert_eq!(reopened.reaction_targets("eng"), ["m1"]);
+    }
+
+    // ─── buzz#52: admin_added snapshot ───────────────────────────────────────
+
+    #[test]
+    fn a_channel_never_observed_by_the_admin_pass_has_no_snapshot() {
+        let (_dir, path) = scratch();
+        let state = WorkflowState::open(path);
+        assert_eq!(state.admin_snapshot("eng"), None);
+    }
+
+    #[test]
+    fn admin_snapshot_round_trips_and_distinguishes_empty_from_absent() {
+        let (_dir, path) = scratch();
+        let mut state = WorkflowState::open(path.clone());
+        state.set_admin_snapshot("eng", BTreeSet::new());
+        state.save().unwrap();
+
+        let reopened = WorkflowState::open(path);
+        assert_eq!(reopened.admin_snapshot("eng"), Some(&BTreeSet::new()));
+        assert_eq!(reopened.admin_snapshot("never-seen"), None);
+    }
+
+    #[test]
+    fn setting_an_admin_snapshot_replaces_the_previous_one() {
+        let (_dir, path) = scratch();
+        let mut state = WorkflowState::open(path);
+        state.set_admin_snapshot("eng", BTreeSet::from(["a".to_string()]));
+        state.set_admin_snapshot("eng", BTreeSet::from(["a".to_string(), "b".to_string()]));
+        assert_eq!(
+            state.admin_snapshot("eng"),
+            Some(&BTreeSet::from(["a".to_string(), "b".to_string()]))
+        );
     }
 }

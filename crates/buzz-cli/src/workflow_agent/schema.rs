@@ -110,6 +110,13 @@ struct TriggerFile {
     /// alongside `reaction_added: true`.
     #[serde(default)]
     emoji: Option<String>,
+    /// Fire when a kind:39100 admin-list fold gains an admin it did not
+    /// have last cycle (buzz#52) — see the module doc's "buzz#52" section.
+    /// Named `admin_added`, not `member_joined`: kind:39100's roster is
+    /// admins, not a general member list. Mutually exclusive with
+    /// everything else above.
+    #[serde(default)]
+    admin_added: Option<bool>,
 }
 
 /// One entry of a `trigger.all` / `trigger.any` list — the same two
@@ -238,6 +245,9 @@ pub enum TriggerKind {
     /// optionally filtered to one emoji — see the module doc's "buzz#52"
     /// section.
     ReactionAdded { emoji: Option<String> },
+    /// A kind:39100 admin-list fold for a held channel gaining an admin it
+    /// did not have last cycle — see the module doc's "buzz#52" section.
+    AdminAdded,
 }
 
 /// Normalize a cron expression to the 7-field (`sec min hour dom month dow
@@ -337,7 +347,9 @@ impl Workflow {
     pub fn condition(&self) -> Option<&Condition> {
         match &self.trigger {
             TriggerKind::Message(condition) => Some(condition),
-            TriggerKind::Schedule(_) | TriggerKind::ReactionAdded { .. } => None,
+            TriggerKind::Schedule(_)
+            | TriggerKind::ReactionAdded { .. }
+            | TriggerKind::AdminAdded => None,
         }
     }
 
@@ -345,7 +357,9 @@ impl Workflow {
     pub fn schedule(&self) -> Option<&Schedule> {
         match &self.trigger {
             TriggerKind::Schedule(schedule) => Some(schedule),
-            TriggerKind::Message(_) | TriggerKind::ReactionAdded { .. } => None,
+            TriggerKind::Message(_)
+            | TriggerKind::ReactionAdded { .. }
+            | TriggerKind::AdminAdded => None,
         }
     }
 
@@ -356,8 +370,13 @@ impl Workflow {
     pub fn reaction_added(&self) -> Option<Option<&str>> {
         match &self.trigger {
             TriggerKind::ReactionAdded { emoji } => Some(emoji.as_deref()),
-            TriggerKind::Message(_) | TriggerKind::Schedule(_) => None,
+            TriggerKind::Message(_) | TriggerKind::Schedule(_) | TriggerKind::AdminAdded => None,
         }
+    }
+
+    /// Whether this workflow is `admin_added`-triggered (buzz#52).
+    pub fn is_admin_added(&self) -> bool {
+        matches!(self.trigger, TriggerKind::AdminAdded)
     }
 }
 
@@ -391,11 +410,19 @@ pub fn parse_workflow(yaml: &str, source: &Path) -> Result<Workflow, CliError> {
         || file.trigger.all.is_some()
         || file.trigger.any.is_some();
     let reaction_added = file.trigger.reaction_added.unwrap_or(false);
+    let admin_added = file.trigger.admin_added.unwrap_or(false);
 
-    if reaction_added && (has_message_fields || file.trigger.schedule.is_some()) {
+    if reaction_added && (has_message_fields || file.trigger.schedule.is_some() || admin_added) {
         return Err(CliError::Usage(format!(
             "{}: a reaction_added trigger cannot also set 'contains', 'matches', 'all', 'any', \
-or 'schedule'",
+'schedule', or 'admin_added'",
+            source.display()
+        )));
+    }
+    if admin_added && (has_message_fields || file.trigger.schedule.is_some()) {
+        return Err(CliError::Usage(format!(
+            "{}: an admin_added trigger cannot also set 'contains', 'matches', 'all', 'any', or \
+'schedule'",
             source.display()
         )));
     }
@@ -455,6 +482,7 @@ or 'schedule'",
             };
             TriggerKind::ReactionAdded { emoji }
         }
+        None if admin_added => TriggerKind::AdminAdded,
         None => {
             let condition = match (
                 file.trigger.contains,
@@ -492,7 +520,7 @@ or 'schedule'",
                 (None, None, None, None) => {
                     return Err(CliError::Usage(format!(
                         "{}: trigger must set one of 'contains', 'matches', 'all', 'any', \
-'schedule', or 'reaction_added'",
+'schedule', 'reaction_added', or 'admin_added'",
                         source.display()
                     )))
                 }
@@ -550,10 +578,10 @@ is required",
             ActionKind::Reply(reply)
         }
         (None, Some(AddReactionFile { emoji })) => {
-            if matches!(trigger, TriggerKind::Schedule(_)) {
+            if matches!(trigger, TriggerKind::Schedule(_) | TriggerKind::AdminAdded) {
                 return Err(CliError::Usage(format!(
-                    "{}: a schedule trigger has no triggering message — 'action.add_reaction' \
-needs one to react to",
+                    "{}: this trigger has no triggering message — 'action.add_reaction' needs \
+one to react to",
                     source.display()
                 )));
             }
@@ -1256,6 +1284,92 @@ mod tests {
     fn a_reaction_added_workflow_never_applies_to_any_walked_channel() {
         let yaml = "version: 1\ntrigger:\n  reaction_added: true\naction:\n  reply: yo\n";
         let wf = parse_workflow(yaml, &path("triage.yaml")).unwrap();
+        assert!(!wf.applies_to_channel("engineering"));
+    }
+
+    // ─── buzz#52: trigger.admin_added ────────────────────────────────────────
+
+    #[test]
+    fn an_admin_added_trigger_parses() {
+        let yaml = concat!(
+            "version: 1\nname: welcome\ntrigger:\n  admin_added: true\n",
+            "action:\n  reply: welcome aboard\n",
+        );
+        let wf = parse_workflow(yaml, &path("welcome.yaml")).unwrap();
+        assert!(wf.is_admin_added());
+        assert!(wf.condition().is_none());
+        assert!(wf.schedule().is_none());
+        assert_eq!(wf.reaction_added(), None);
+    }
+
+    #[test]
+    fn a_non_admin_added_workflow_reports_false() {
+        let yaml = "version: 1\ntrigger:\n  contains: hi\naction:\n  reply: yo\n";
+        let wf = parse_workflow(yaml, &path("greeter.yaml")).unwrap();
+        assert!(!wf.is_admin_added());
+    }
+
+    #[test]
+    fn admin_added_is_mutually_exclusive_with_contains() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  admin_added: true\n  contains: hi\n",
+            "action:\n  reply: yo\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(_)));
+    }
+
+    #[test]
+    fn admin_added_is_mutually_exclusive_with_schedule() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  admin_added: true\n  schedule: '* * * * *'\n",
+            "action:\n  reply: yo\n  channel: 6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(_)));
+    }
+
+    #[test]
+    fn admin_added_is_mutually_exclusive_with_reaction_added() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  admin_added: true\n  reaction_added: true\n",
+            "action:\n  reply: yo\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(_)));
+    }
+
+    #[test]
+    fn admin_added_cannot_use_add_reaction() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  admin_added: true\n",
+            "action:\n  add_reaction:\n    emoji: eyes\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(msg) if msg.contains("add_reaction")));
+    }
+
+    #[test]
+    fn admin_added_may_be_scoped_to_one_channel() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  admin_added: true\n",
+            "  channel: 6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b\n",
+            "action:\n  reply: welcome\n",
+        );
+        let wf = parse_workflow(yaml, &path("welcome.yaml")).unwrap();
+        assert_eq!(
+            wf.channel.as_deref(),
+            Some("6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b")
+        );
+    }
+
+    /// An `admin_added` workflow is never reached by the message tail walk —
+    /// it has its own pass (buzz#52), the same way `schedule` (buzz#22) and
+    /// `reaction_added` (buzz#52) do.
+    #[test]
+    fn an_admin_added_workflow_never_applies_to_any_walked_channel() {
+        let yaml = "version: 1\ntrigger:\n  admin_added: true\naction:\n  reply: welcome\n";
+        let wf = parse_workflow(yaml, &path("welcome.yaml")).unwrap();
         assert!(!wf.applies_to_channel("engineering"));
     }
 }

@@ -97,7 +97,7 @@
 mod schema;
 mod store;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -133,6 +133,11 @@ const PUBLISH_MAX_ATTEMPTS: u32 = 3;
 /// Full-jitter backoff ceilings for attempts 1 and 2 (attempt 3 is never
 /// retried further). Mirrors `client.rs`'s `RETRY_BASE_SECS` shape.
 const PUBLISH_BACKOFF_SECS: [f64; 2] = [0.5, 2.0];
+
+/// How many admin-list events one `admin_added` pass reads. Matches
+/// `commands::toon`'s private `ADMIN_LIST_LIMIT`; the filter is not scoped by
+/// channel, so one fetch answers for every held channel's diff (buzz#52).
+const ADMIN_LIST_LIMIT: u32 = 500;
 
 /// Where the workflow agent's collaborators live.
 pub struct WorkflowAgentOptions<'a> {
@@ -329,6 +334,32 @@ pub fn plan_reaction_trigger(
             continue;
         }
         if filter.is_some_and(|wanted| wanted != emoji) {
+            continue;
+        }
+        return TriggerOutcome::Fire {
+            workflow: workflow.name.clone(),
+            action: workflow.action.clone(),
+            channel_override: workflow.action_channel.clone(),
+        };
+    }
+    TriggerOutcome::Skip(SkipReason::NoMatch)
+}
+
+/// Decide whether one newly-gained admin fires an `admin_added` workflow
+/// scoped to `channel_id` (buzz#52). Pure, mirroring [`plan_reaction_trigger`]'s
+/// shape — called once per newly-added admin by [`admin_added_pass`], which
+/// owns the diff itself (there is no per-event "opened" step here: a
+/// kind:39100 fold, not a single message or reaction, is what changed).
+pub fn plan_admin_added_trigger(workflows: &[Workflow], channel_id: &str) -> TriggerOutcome {
+    for workflow in workflows {
+        if !workflow.is_admin_added() {
+            continue;
+        }
+        if workflow
+            .channel
+            .as_deref()
+            .is_some_and(|only| only != channel_id)
+        {
             continue;
         }
         return TriggerOutcome::Fire {
@@ -669,7 +700,7 @@ async fn cycle(
     //    the message ids the walk above just observed (see `reaction_pass`'s
     //    doc), folded into the same per-channel report.
     let channels: Vec<String> = keystore.channels().cloned().collect();
-    for channel_id in channels {
+    for channel_id in channels.iter().cloned() {
         let ring = keystore.ring(&channel_id).to_vec();
         let mut channel_report = match walk_channel(
             opts,
@@ -730,9 +761,32 @@ async fn cycle(
         entry.refused += sched_report.refused;
     }
 
-    // 4. One atomic commit for the whole cycle: the evaluated set, every
-    //    cursor, and every schedule's last-fired time land together or not
-    //    at all.
+    // 4. Diff each held channel's admin-list fold against last cycle's
+    //    snapshot and fire any `admin_added` workflow for a newly-gained
+    //    admin (buzz#52) — a third pass, like the schedule pass not driven
+    //    by the channel walk (there is no triggering message or reaction,
+    //    only a list event); see `admin_added_pass`'s doc for why it is one
+    //    fetch for the whole cycle rather than one per channel.
+    for (channel_id, admin_report) in admin_added_pass(
+        client,
+        opts.relay_url,
+        keystore,
+        &channels,
+        workflows,
+        state,
+    )
+    .await
+    {
+        report
+            .channels
+            .entry(channel_id)
+            .or_default()
+            .merge(admin_report);
+    }
+
+    // 5. One atomic commit for the whole cycle: the evaluated set, every
+    //    cursor, and every schedule's/admin-list's last-observed state land
+    //    together or not at all.
     state.save()?;
     Ok(report)
 }
@@ -1220,6 +1274,150 @@ async fn reaction_pass(
     state.set_reaction_cursor(channel_id, cursor);
 
     Ok(report)
+}
+
+/// The `admin_added` trigger's own pass, for every held channel in one cycle
+/// (buzz#52): fold each channel's kind:39100 admin list, diff it against the
+/// previous cycle's snapshot, and fire for each admin the fold gained.
+///
+/// One relay fetch for the whole cycle, not one per channel:
+/// `channel_admins::channel_admin_list_filter` already reads every admin-list
+/// event on the relay regardless of channel (the same shape
+/// `commands::toon::fetch_admin_events` uses, for the same reason — an agent
+/// must be able to validate a key, or here a diff, without a second
+/// channel-scoped round trip), so every held channel's diff reads from the
+/// one page fetched here.
+///
+/// Skips the fetch entirely when no loaded workflow is `admin_added`-scoped
+/// — the same "no surface not in active use" restraint `schema`'s module doc
+/// states for the agent-member idiom generally.
+///
+/// A channel observed for the first time seeds its snapshot without firing:
+/// there is no genuine "just joined" to report for admins that were already
+/// there when this agent started watching (see [`WorkflowState::admin_snapshot`]'s
+/// doc). A transport failure on the fetch is not fatal to the cycle — the
+/// diff is simply skipped and retried next cycle, the same tolerance
+/// `reaction_pass`'s and `walk_channel`'s own relay reads do not have (they
+/// propagate `?`) because unlike them this pass has no single channel's error
+/// to attribute a failure to.
+async fn admin_added_pass(
+    client: &SidecarClient,
+    relay_url: &str,
+    keystore: &AgentKeystore,
+    channels: &[String],
+    workflows: &[Workflow],
+    state: &mut WorkflowState,
+) -> BTreeMap<String, ChannelReport> {
+    let mut reports: BTreeMap<String, ChannelReport> = BTreeMap::new();
+    if !workflows.iter().any(Workflow::is_admin_added) {
+        return reports;
+    }
+
+    let events = match crate::toon_relay::fetch(
+        relay_url,
+        crate::channel_admins::channel_admin_list_filter(ADMIN_LIST_LIMIT),
+    )
+    .await
+    {
+        Ok(events) => events,
+        Err(_) => return reports,
+    };
+
+    for channel_id in channels {
+        let resolved = crate::channel_admins::resolve_channel_admin_list(
+            &events,
+            channel_id,
+            keystore.pinned_creator(channel_id),
+        );
+        let current: BTreeSet<String> = resolved
+            .map(|list| list.admins.into_iter().collect())
+            .unwrap_or_default();
+
+        let newly_added: Vec<String> = match state.admin_snapshot(channel_id) {
+            None => {
+                state.set_admin_snapshot(channel_id, current);
+                continue;
+            }
+            Some(previous) => current.difference(previous).cloned().collect(),
+        };
+        if newly_added.is_empty() {
+            state.set_admin_snapshot(channel_id, current);
+            continue;
+        }
+
+        let mut report = ChannelReport::default();
+        for admin in &newly_added {
+            match plan_admin_added_trigger(workflows, channel_id) {
+                TriggerOutcome::Skip(reason) => report.skip(reason),
+                TriggerOutcome::Fire {
+                    workflow,
+                    action,
+                    channel_override,
+                } => {
+                    report.fired += 1;
+                    let target_channel = channel_override.as_deref().unwrap_or(channel_id);
+                    let attempt = match action {
+                        schema::ActionKind::Reply(text) => ActAttempt::Reply(text),
+                        schema::ActionKind::AddReaction { .. } => unreachable!(
+                            "admin_added cannot use add_reaction — enforced at parse time"
+                        ),
+                    };
+                    match act(client, relay_url, keystore, target_channel, attempt).await {
+                        ActionResult::Sent {
+                            event_id: action_id,
+                        } => {
+                            report.sent += 1;
+                            println!(
+                                "{}",
+                                json!({
+                                    "event": "workflow-action-sent",
+                                    "workflow": workflow,
+                                    "trigger": "admin_added",
+                                    "channel": channel_id,
+                                    "targetChannel": target_channel,
+                                    "newAdmin": admin,
+                                    "actionEvent": action_id,
+                                })
+                            );
+                        }
+                        ActionResult::Dropped { reason } => {
+                            report.dropped += 1;
+                            eprintln!(
+                                "{}",
+                                json!({
+                                    "event": "workflow-action-dropped",
+                                    "workflow": workflow,
+                                    "trigger": "admin_added",
+                                    "channel": channel_id,
+                                    "targetChannel": target_channel,
+                                    "newAdmin": admin,
+                                    "reason": reason,
+                                })
+                            );
+                        }
+                        ActionResult::Refused { reason } => {
+                            report.refused += 1;
+                            eprintln!(
+                                "{}",
+                                json!({
+                                    "event": "workflow-action-refused",
+                                    "workflow": workflow,
+                                    "trigger": "admin_added",
+                                    "channel": channel_id,
+                                    "targetChannel": target_channel,
+                                    "newAdmin": admin,
+                                    "reason": reason,
+                                })
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        state.set_admin_snapshot(channel_id, current);
+        reports.insert(channel_id.clone(), report);
+    }
+    reports
 }
 
 #[cfg(test)]
@@ -1730,5 +1928,44 @@ action:\n  reply: noted\n",
         assert_eq!(a.refused, 1);
         assert_eq!(a.skipped.get(SkipReason::NoMatch.code()), Some(&2));
         assert_eq!(a.skipped.get(SkipReason::NoTarget.code()), Some(&1));
+    }
+
+    // ─── buzz#52: admin_added trigger ────────────────────────────────────────
+
+    #[test]
+    fn an_admin_added_workflow_fires_for_its_channel() {
+        let workflows = vec![workflow(
+            "version: 1\nname: welcome\ntrigger:\n  admin_added: true\n\
+action:\n  reply: welcome aboard\n",
+        )];
+        let outcome = plan_admin_added_trigger(&workflows, "eng");
+        assert_eq!(
+            outcome,
+            TriggerOutcome::Fire {
+                workflow: "welcome".to_string(),
+                action: schema::ActionKind::Reply("welcome aboard".to_string()),
+                channel_override: None,
+            }
+        );
+    }
+
+    #[test]
+    fn an_admin_added_workflow_scoped_to_another_channel_is_not_consulted() {
+        let workflows = vec![workflow(concat!(
+            "version: 1\n",
+            "trigger:\n  channel: 6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b\n  admin_added: true\n",
+            "action:\n  reply: welcome\n",
+        ))];
+        let outcome = plan_admin_added_trigger(&workflows, "0c3b7e41-5d2f-4b18-9a06-2e7f5c4d3b1a");
+        assert_eq!(outcome, TriggerOutcome::Skip(SkipReason::NoMatch));
+    }
+
+    #[test]
+    fn a_message_triggered_workflow_is_never_consulted_by_the_admin_added_pass() {
+        let workflows = vec![workflow(
+            "version: 1\ntrigger:\n  contains: hi\naction:\n  reply: yo\n",
+        )];
+        let outcome = plan_admin_added_trigger(&workflows, "eng");
+        assert_eq!(outcome, TriggerOutcome::Skip(SkipReason::NoMatch));
     }
 }
