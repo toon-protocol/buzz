@@ -51,6 +51,35 @@ type SessionOffer = {
   eventId: string;
 };
 
+/**
+ * job.eventId -> the increment currently armed on the delivery port, across
+ * remounts of this hook (buzz#190). `deliverNext`'s in-flight guard lives in
+ * a ref because the `phase` state read is for rendering and goes stale
+ * within a single synchronous tick (two invocations racing before the first
+ * `setPhase` commits); this map is the same guard extended to survive an
+ * unmount entirely. Collapsing/reopening the panel resets `phase` and
+ * `sessionOffers` to nothing, but the port's arm for the outstanding offer
+ * does not reset.
+ *
+ * The guard keys on PRESENCE (`.has`), never on which increment a remount
+ * happens to recompute as next: the port is per-writer and sequential
+ * (deliverFactoryJobIncrement.ts), so while ANY delivery for the job is
+ * outstanding, arming it again — for the same increment (relay read-back
+ * lagging) or the next one (read-back landed and advanced the schedule) —
+ * overwrites the still-live offer's armed key and strands its release.
+ *
+ * Community-scoped (job event ids are relay events): cleared by
+ * {@link resetProviderDeliveryState} on community switch, per CLAUDE.md's
+ * module-level-state contract — the switch tears the session (and the port
+ * arm with it) down, so a surviving entry would refuse delivery forever.
+ */
+const armedDeliveries = new Map<string, number>();
+
+/** Community-switch reset (see resetCommunityState in useCommunityInit). */
+export function resetProviderDeliveryState(): void {
+  armedDeliveries.clear();
+}
+
 export function useProviderDelivery({
   transport,
   job,
@@ -73,6 +102,15 @@ export function useProviderDelivery({
   const [localNarration, setLocalNarration] = React.useState<LocalNarration[]>(
     [],
   );
+  /**
+   * Same-mount half of the buzz#190 in-flight guard. `phase` state is for
+   * rendering — reading it back to decide whether a delivery is already
+   * running is stale within a single synchronous tick, since `setPhase`
+   * doesn't commit until after `deliverNext`'s caller returns. A ref reads
+   * and writes synchronously, so a second invocation in the same tick sees
+   * the first one's write.
+   */
+  const inFlightRef = React.useRef(false);
 
   const patchLocalNarration = (
     localKey: string,
@@ -106,9 +144,23 @@ export function useProviderDelivery({
 
   const deliverNext = async (artifactText: string) => {
     if (!quote || !nextIncrement || parentEventId === null) return;
-    if (phase.kind !== "idle") return;
 
     const n = nextIncrement.n;
+    // buzz#190: both halves of the in-flight guard, checked synchronously
+    // before anything else runs. `inFlightRef` catches a second invocation
+    // racing in this same tick (this mount); `armedDeliveries` catches one
+    // arriving after an unmount/remount while the port is still armed from a
+    // mount that no longer exists (see its doc for why that half keys on
+    // presence rather than on which increment the remount recomputed).
+    if (inFlightRef.current || armedDeliveries.has(job.eventId)) {
+      setError(
+        "A delivery for this job is still settling from an earlier attempt — wait for it to resolve before delivering again.",
+      );
+      return;
+    }
+    inFlightRef.current = true;
+    armedDeliveries.set(job.eventId, n);
+
     setError(null);
     setPhase({ kind: "delivering", n });
     try {
@@ -178,7 +230,19 @@ export function useProviderDelivery({
           ? deliveryError.message
           : "Failed to deliver this increment.",
       );
+      // buzz#190 item 3: a failed abandoned-buyer result publish also lands
+      // here and resets to idle, which — since `sessionOffers` already has
+      // increment `n` — leaves `nextIncrement` pointing at n+1, not n. That
+      // intentionally allows the provider to keep delivering after a
+      // publish failure rather than being stuck unable to signal any
+      // outcome; the buyer already walked, so there is no live offer left
+      // to strand. Retrying the result publish itself is not offered here.
       setPhase({ kind: "idle" });
+    } finally {
+      inFlightRef.current = false;
+      if (armedDeliveries.get(job.eventId) === n) {
+        armedDeliveries.delete(job.eventId);
+      }
     }
   };
 
