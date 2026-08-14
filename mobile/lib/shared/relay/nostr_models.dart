@@ -2,6 +2,20 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
+/// Per-community relay session semantics.
+///
+/// `legacy` speaks the private-relay dialect: a NIP-42 AUTH challenge is
+/// required before [SocketState.connected]/[SessionStatus.connected] is
+/// reached, and every event the relay forwards has already been
+/// signature-checked server-side.
+///
+/// `toon` speaks plain NIP-01 against the TOON relay: there is no AUTH
+/// challenge to answer — the relay never sends one, so awaiting it produces
+/// an 8s timeout and an infinite reconnect loop — and the relay's own trust
+/// model is "clients verify themselves" (it skips schnorr checks for paid
+/// ephemeral kinds), so inbound events are verified client-side instead.
+enum SessionMode { legacy, toon }
+
 /// Nostr event kind constants.
 ///
 /// Keep in sync with `desktop/src/shared/constants/kinds.ts`.

@@ -614,6 +614,7 @@ class PairingNotifier extends Notifier<PairingState> {
       onMessage: (_) {},
       onConnected: () {},
       onDisconnected: (_) {},
+      sessionMode: SessionMode.legacy,
     );
     try {
       await socket.connect().timeout(const Duration(seconds: 8));

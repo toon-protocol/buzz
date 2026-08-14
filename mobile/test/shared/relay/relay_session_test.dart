@@ -202,6 +202,7 @@ void main() {
             required onMessage,
             required onConnected,
             required onDisconnected,
+            required sessionMode,
           }) {
             final socket = _ControlledRelaySocket(
               wsUrl: wsUrl,
@@ -209,6 +210,7 @@ void main() {
               onMessage: onMessage,
               onConnected: onConnected,
               onDisconnected: onDisconnected,
+              sessionMode: sessionMode,
             );
             sockets.add(socket);
             return socket;
@@ -378,6 +380,160 @@ void main() {
       unsubscribe();
     },
   );
+
+  test(
+    'legacy mode delivers events without verifying their signature',
+    () async {
+      final session = RelaySessionNotifier();
+      final received = <NostrEvent>[];
+      const filter = NostrFilter(kinds: [EventKind.streamMessage], limit: 0);
+
+      final subscribe = session.subscribe(filter, received.add);
+      session.debugHandleMessage(['EOSE', 'l-1']);
+      final unsubscribe = await subscribe;
+
+      final unsigned = _eventWithSig('not-a-real-signature');
+      session.debugHandleMessage(['EVENT', 'l-1', unsigned.toJson()]);
+      session.debugFlushEventBuffer();
+
+      expect(received.map((event) => event.id), [unsigned.id]);
+      expect(session.invalidSignatureDropCount, 0);
+      unsubscribe();
+    },
+  );
+
+  test(
+    'toon mode drops an event with an invalid signature and counts it',
+    () async {
+      final session = RelaySessionNotifier();
+      session.debugSetSessionModeForTest(SessionMode.toon);
+      final received = <NostrEvent>[];
+      const filter = NostrFilter(kinds: [EventKind.streamMessage], limit: 0);
+
+      final subscribe = session.subscribe(filter, received.add);
+      session.debugHandleMessage(['EOSE', 'l-1']);
+      final unsubscribe = await subscribe;
+
+      final forged = _eventWithSig('not-a-real-signature');
+      session.debugHandleMessage(['EVENT', 'l-1', forged.toJson()]);
+      session.debugFlushEventBuffer();
+
+      expect(received, isEmpty);
+      expect(session.invalidSignatureDropCount, 1);
+      unsubscribe();
+    },
+  );
+
+  test(
+    'toon mode delivers an event with a genuinely valid signature',
+    () async {
+      final session = RelaySessionNotifier();
+      session.debugSetSessionModeForTest(SessionMode.toon);
+      final received = <NostrEvent>[];
+      const filter = NostrFilter(kinds: [EventKind.streamMessage], limit: 0);
+
+      final subscribe = session.subscribe(filter, received.add);
+      session.debugHandleMessage(['EOSE', 'l-1']);
+      final unsubscribe = await subscribe;
+
+      final signed = nostr.Event.from(
+        kind: EventKind.streamMessage,
+        content: 'hello',
+        secretKey: nostr.Keys.generate().secret,
+      );
+      final event = NostrEvent.fromJson(signed.toMap());
+      session.debugHandleMessage(['EVENT', 'l-1', event.toJson()]);
+      session.debugFlushEventBuffer();
+
+      expect(received.map((e) => e.id), [event.id]);
+      expect(session.invalidSignatureDropCount, 0);
+      unsubscribe();
+    },
+  );
+
+  test(
+    'replays REQ subscriptions after a reconnect, with backoff observed',
+    () async {
+      final sockets = <_RecordingSocket>[];
+      final session = RelaySessionNotifier(
+        socketFactory:
+            ({
+              required wsUrl,
+              required nsec,
+              required onMessage,
+              required onConnected,
+              required onDisconnected,
+              required sessionMode,
+            }) {
+              final socket = _RecordingSocket(
+                wsUrl: wsUrl,
+                nsec: nsec,
+                onMessage: onMessage,
+                onConnected: onConnected,
+                onDisconnected: onDisconnected,
+                sessionMode: sessionMode,
+              );
+              sockets.add(socket);
+              return socket;
+            },
+      );
+      final config = _FakeRelayConfigNotifier(
+        baseUrl: 'https://toon.example',
+        // Auto-connect still gates on a signing key being present (buzz#208
+        // scopes key handling out) — it just goes unused by toon-mode AUTH.
+        nsec: nostr.Keys.generate().nsec,
+        sessionMode: SessionMode.toon,
+      );
+      final container = ProviderContainer(
+        overrides: [
+          relaySessionProvider.overrideWith(() => session),
+          relayConfigProvider.overrideWith(() => config),
+          authProvider.overrideWith(() => _AuthenticatedAuthNotifier()),
+        ],
+      );
+      addTearDown(container.dispose);
+      await container.read(authProvider.future);
+      final subscription = container.listen(relaySessionProvider, (_, _) {});
+      addTearDown(subscription.close);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(sockets, hasLength(1));
+      sockets.first.connectSuccessfully();
+      expect(session.state.status, SessionStatus.connected);
+
+      const filter = NostrFilter(kinds: [EventKind.streamMessage], limit: 0);
+      final subscribe = session.subscribe(filter, (_) {});
+      session.debugHandleMessage(['EOSE', 'l-1']);
+      final unsubscribe = await subscribe;
+      sockets.first.sent.clear();
+
+      sockets.first.disconnectWith(Exception('connection dropped'));
+      expect(session.state.status, SessionStatus.reconnecting);
+      expect(session.state.reconnectAttempt, 1);
+
+      // The real reconnect Timer applies 1s->30s backoff before calling
+      // _connect() again; drive the replay directly the way the rest of this
+      // suite drives reconnection, rather than waiting out the delay.
+      session.debugHandleConnected();
+
+      expect(sockets.first.sent, contains(['REQ', 'l-1', filter.toJson()]));
+      unsubscribe();
+    },
+  );
+}
+
+NostrEvent _eventWithSig(String sig) {
+  return NostrEvent(
+    id: 'deadbeef' * 8,
+    pubkey: 'ab' * 32,
+    createdAt: 1700000000,
+    kind: EventKind.streamMessage,
+    tags: const [
+      ['h', _channelId],
+    ],
+    content: 'hello',
+    sig: sig,
+  );
 }
 
 class _FakeAuthNotifier extends AuthNotifier {
@@ -409,6 +565,7 @@ class _ControlledRelaySocket extends RelaySocket {
     required super.onMessage,
     required super.onConnected,
     required super.onDisconnected,
+    required super.sessionMode,
   }) : _connected = onConnected,
        _disconnected = onDisconnected;
 
@@ -423,18 +580,58 @@ class _ControlledRelaySocket extends RelaySocket {
   void disconnectWith(Object? error) => _disconnected(error);
 }
 
+/// Like [_ControlledRelaySocket], but also records every outbound frame so
+/// reconnect-replay behavior (REQ resent after a drop) is assertable.
+class _RecordingSocket extends RelaySocket {
+  final List<List<dynamic>> sent = [];
+  final void Function() _connected;
+  final void Function(Object? error) _disconnected;
+
+  _RecordingSocket({
+    required super.wsUrl,
+    required super.nsec,
+    required super.onMessage,
+    required super.onConnected,
+    required super.onDisconnected,
+    required super.sessionMode,
+  }) : _connected = onConnected,
+       _disconnected = onDisconnected;
+
+  @override
+  Future<void> connect() async {}
+
+  @override
+  void send(List<dynamic> payload) => sent.add(payload);
+
+  @override
+  Future<void> disconnect() async {}
+
+  @override
+  void dispose() {}
+
+  void connectSuccessfully() => _connected();
+
+  void disconnectWith(Object? error) => _disconnected(error);
+}
+
 const _channelId = '11111111-1111-4111-8111-111111111111';
 
 class _FakeRelayConfigNotifier extends RelayConfigNotifier {
   final String _baseUrl;
   final String? _nsec;
+  final SessionMode _sessionMode;
 
-  _FakeRelayConfigNotifier({required String baseUrl, required String? nsec})
-    : _baseUrl = baseUrl,
-      _nsec = nsec;
+  _FakeRelayConfigNotifier({
+    required String baseUrl,
+    required String? nsec,
+    SessionMode sessionMode = SessionMode.legacy,
+  }) : _baseUrl = baseUrl,
+       _nsec = nsec,
+       _sessionMode = sessionMode;
 
   @override
-  RelayConfig build() => RelayConfig(baseUrl: _baseUrl, nsec: _nsec);
+  RelayConfig build() =>
+      RelayConfig(baseUrl: _baseUrl, nsec: _nsec, sessionMode: _sessionMode);
 }
 
 NostrEvent _event() {

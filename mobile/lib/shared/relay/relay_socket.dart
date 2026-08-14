@@ -6,11 +6,13 @@ import 'package:nostr/nostr.dart' as nostr;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'nostr_models.dart';
+import 'toon_relay_frames.dart';
 
-/// Low-level websocket connection with NIP-42 authentication.
+/// Low-level websocket connection, optionally with NIP-42 authentication.
 ///
 /// Handles the raw websocket lifecycle: connect, authenticate via NIP-42
-/// challenge/response, send/receive JSON frames, and disconnect.
+/// challenge/response (skipped entirely in [SessionMode.toon] — see
+/// [connect]), send/receive JSON frames, and disconnect.
 ///
 /// Does NOT handle reconnection — that is [RelaySessionNotifier]'s job.
 enum SocketState { disconnected, connecting, authenticating, connected }
@@ -32,9 +34,11 @@ Exception classifyRelayAuthFailure(String message) {
 class RelaySocket {
   final String _wsUrl;
   final String? _nsec;
+  final SessionMode _sessionMode;
   final void Function(List<dynamic> message) _onMessage;
   final void Function() _onConnected;
   final void Function(Object? error) _onDisconnected;
+  final WebSocketChannel Function(Uri uri) _channelFactory;
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _subscription;
@@ -51,19 +55,30 @@ class RelaySocket {
     required void Function(List<dynamic> message) onMessage,
     required void Function() onConnected,
     required void Function(Object? error) onDisconnected,
+    required SessionMode sessionMode,
+    WebSocketChannel Function(Uri uri) channelFactory =
+        WebSocketChannel.connect,
   }) : _wsUrl = wsUrl,
        _nsec = nsec,
+       _sessionMode = sessionMode,
        _onMessage = onMessage,
        _onConnected = onConnected,
-       _onDisconnected = onDisconnected;
+       _onDisconnected = onDisconnected,
+       _channelFactory = channelFactory;
 
-  /// Connect to the relay and complete NIP-42 authentication.
+  /// Connect to the relay.
+  ///
+  /// In [SessionMode.legacy], completes NIP-42 authentication before
+  /// resolving. In [SessionMode.toon], the relay speaks plain NIP-01 and
+  /// never sends an AUTH challenge — waiting for one produced an 8s timeout
+  /// followed by an infinite reconnect loop, so [SocketState.connected] is
+  /// reached as soon as the websocket itself is open.
   Future<void> connect() async {
     if (_state != SocketState.disconnected) return;
     _state = SocketState.connecting;
 
     try {
-      _channel = WebSocketChannel.connect(Uri.parse(_wsUrl));
+      _channel = _channelFactory(Uri.parse(_wsUrl));
       await _channel!.ready;
     } catch (e) {
       _state = SocketState.disconnected;
@@ -78,9 +93,6 @@ class RelaySocket {
       return;
     }
 
-    _state = SocketState.authenticating;
-    _authCompleter = Completer<void>();
-
     _subscription = _channel!.stream.listen(
       _handleRawMessage,
       onError: (Object error) {
@@ -94,6 +106,15 @@ class RelaySocket {
         _onDisconnected(null);
       },
     );
+
+    if (_sessionMode == SessionMode.toon) {
+      _state = SocketState.connected;
+      _onConnected();
+      return;
+    }
+
+    _state = SocketState.authenticating;
+    _authCompleter = Completer<void>();
 
     // Wait for auth to complete (or timeout).
     _authTimeout = Timer(const Duration(seconds: 8), () {
@@ -160,14 +181,9 @@ class RelaySocket {
       return; // Binary frames are not part of the Nostr protocol.
     }
 
-    final List<dynamic> data;
-    try {
-      data = jsonDecode(text) as List<dynamic>;
-    } catch (_) {
-      return; // Malformed JSON.
-    }
+    final data = decodeToonRelayFrame(text);
+    if (data == null) return; // Malformed or unrecognised frame.
 
-    if (data.isEmpty) return;
     final type = data[0] as String;
 
     switch (type) {

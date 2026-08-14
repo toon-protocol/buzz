@@ -328,6 +328,7 @@ class _RecordingRelaySocket extends RelaySocket {
         onMessage: handleMessage,
         onConnected: () {},
         onDisconnected: (_) {},
+        sessionMode: SessionMode.legacy,
       );
 
   @override

@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../auth/auth.dart';
+import 'nostr_event_verification.dart';
 import 'nostr_models.dart';
 import 'relay_client.dart';
 import 'relay_provider.dart';
@@ -72,6 +73,7 @@ typedef RelaySocketFactory =
       required void Function(List<dynamic> message) onMessage,
       required void Function() onConnected,
       required void Function(Object? error) onDisconnected,
+      required SessionMode sessionMode,
     });
 
 class RelaySessionNotifier extends Notifier<SessionState> {
@@ -96,6 +98,8 @@ class RelaySessionNotifier extends Notifier<SessionState> {
   final Map<String, _PendingEvent> _pendingEvents = {};
   final List<_BufferedEvent> _eventBuffer = [];
   final Set<String> _recentDeliveryKeys = {};
+  SessionMode _sessionMode = SessionMode.legacy;
+  int _invalidSignatureDropCount = 0;
   Timer? _reconnectTimer;
   Timer? _flushTimer;
   Timer? _backgroundGraceTimer;
@@ -105,6 +109,10 @@ class RelaySessionNotifier extends Notifier<SessionState> {
   bool _paused = false;
   bool _hasConnectedOnce = false;
   int _connectionGeneration = 0;
+
+  /// Count of inbound events dropped for failing client-side signature
+  /// verification (toon mode only — see [SessionMode.toon]).
+  int get invalidSignatureDropCount => _invalidSignatureDropCount;
 
   @override
   SessionState build() {
@@ -295,6 +303,9 @@ class RelaySessionNotifier extends Notifier<SessionState> {
   void debugPauseNow() => _pauseNow();
 
   @visibleForTesting
+  void debugSetSessionModeForTest(SessionMode mode) => _sessionMode = mode;
+
+  @visibleForTesting
   void debugHandleSocketMessageForTest(List<dynamic> data) =>
       _handleMessage(data);
 
@@ -349,6 +360,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
   Future<void> _connect(RelayConfig config) async {
     if (_disposed) return;
 
+    _sessionMode = config.sessionMode;
     final generation = ++_connectionGeneration;
     state = SessionState(
       status: _hasConnectedOnce
@@ -361,6 +373,7 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     final socket = _socketFactory(
       wsUrl: config.wsUrl,
       nsec: config.nsec,
+      sessionMode: config.sessionMode,
       onMessage: (message) {
         if (generation == _connectionGeneration) _handleMessage(message);
       },
@@ -447,6 +460,20 @@ class RelaySessionNotifier extends Notifier<SessionState> {
     final subId = data[1] as String;
     final eventJson = data[2] as Map<String, dynamic>;
     final event = NostrEvent.fromJson(eventJson);
+
+    // The TOON relay skips signature verification for paid ephemeral kinds
+    // (relay `write-handler.ts:162-170`) — its trust model is clients verify
+    // themselves. Legacy relays already reject unsigned/forged events before
+    // forwarding them, so this only runs in toon mode.
+    if (_sessionMode == SessionMode.toon &&
+        !isNostrEventSignatureValid(event)) {
+      _invalidSignatureDropCount++;
+      debugPrint(
+        '[RelaySessionNotifier] dropped event ${event.id} '
+        '(kind ${event.kind}): invalid signature or id',
+      );
+      return;
+    }
 
     // History subscriptions accumulate immediately.
     final historySub = _historySubscriptions[subId];

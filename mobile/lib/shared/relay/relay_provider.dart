@@ -2,6 +2,7 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:nostr/nostr.dart' as nostr;
 
 import '../community/community_provider.dart';
+import 'nostr_models.dart' show SessionMode;
 import 'relay_client.dart';
 
 /// Relay connection configuration.
@@ -10,13 +11,20 @@ import 'relay_client.dart';
 ///   - `baseUrl` — where the relay lives (used for WS + media upload)
 ///   - `nsec`    — the user's signing key (drives NIP-42 AUTH and event sigs)
 class RelayConfig {
-  const RelayConfig({required String baseUrl, this.nsec}) : _baseUrl = baseUrl;
+  const RelayConfig({
+    required String baseUrl,
+    this.nsec,
+    this.sessionMode = SessionMode.legacy,
+  }) : _baseUrl = baseUrl;
 
   /// Relay origin exactly as the active community stored it.
   final String _baseUrl;
 
   /// Nostr secret key (bech32 nsec) for signing events and NIP-42 AUTH.
   final String? nsec;
+
+  /// Which relay dialect [baseUrl]/[wsUrl] speaks — see [SessionMode].
+  final SessionMode sessionMode;
 
   /// The origin as persisted, before scheme canonicalization.
   ///
@@ -80,7 +88,11 @@ class RelayConfigNotifier extends Notifier<RelayConfig> {
     final activeAsync = ref.watch(activeCommunityProvider);
     final active = activeAsync.value;
     if (active != null) {
-      return RelayConfig(baseUrl: active.relayUrl, nsec: active.nsec);
+      return RelayConfig(
+        baseUrl: active.relayUrl,
+        nsec: active.nsec,
+        sessionMode: active.sessionMode,
+      );
     }
 
     // Fallback to compile-time env config (dev mode).

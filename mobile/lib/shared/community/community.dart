@@ -1,5 +1,7 @@
 import 'package:uuid/uuid.dart';
 
+import '../relay/nostr_models.dart' show SessionMode;
+
 const _uuid = Uuid();
 const _sentinel = Object();
 
@@ -10,6 +12,7 @@ class Community {
   final String? pubkey;
   final String? nsec;
   final DateTime addedAt;
+  final SessionMode sessionMode;
 
   const Community({
     required this.id,
@@ -18,6 +21,7 @@ class Community {
     this.pubkey,
     this.nsec,
     required this.addedAt,
+    this.sessionMode = SessionMode.legacy,
   });
 
   factory Community.create({
@@ -25,6 +29,7 @@ class Community {
     required String relayUrl,
     String? pubkey,
     String? nsec,
+    SessionMode sessionMode = SessionMode.legacy,
   }) {
     return Community(
       id: _uuid.v4(),
@@ -33,6 +38,7 @@ class Community {
       pubkey: pubkey,
       nsec: nsec,
       addedAt: DateTime.now(),
+      sessionMode: sessionMode,
     );
   }
 
@@ -41,6 +47,7 @@ class Community {
     String? relayUrl,
     Object? pubkey = _sentinel,
     Object? nsec = _sentinel,
+    SessionMode? sessionMode,
   }) {
     return Community(
       id: id,
@@ -49,6 +56,7 @@ class Community {
       pubkey: pubkey == _sentinel ? this.pubkey : pubkey as String?,
       nsec: nsec == _sentinel ? this.nsec : nsec as String?,
       addedAt: addedAt,
+      sessionMode: sessionMode ?? this.sessionMode,
     );
   }
 
@@ -59,6 +67,7 @@ class Community {
     if (pubkey != null) 'pubkey': pubkey,
     if (nsec != null) 'nsec': nsec,
     'addedAt': addedAt.toIso8601String(),
+    if (sessionMode == SessionMode.toon) 'sessionMode': 'toon',
   };
 
   factory Community.fromJson(Map<String, dynamic> json) => Community(
@@ -68,6 +77,11 @@ class Community {
     pubkey: json['pubkey'] as String?,
     nsec: json['nsec'] as String?,
     addedAt: DateTime.parse(json['addedAt'] as String),
+    // Absent/unrecognised values default to legacy so a community persisted
+    // before this field existed keeps its current (AUTH-required) behavior.
+    sessionMode: json['sessionMode'] == 'toon'
+        ? SessionMode.toon
+        : SessionMode.legacy,
   );
 
   /// Derive a human-friendly community name from a relay URL.
