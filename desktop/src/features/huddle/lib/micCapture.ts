@@ -22,16 +22,11 @@ const NO_DEVICE_ERROR_NAMES = new Set([
 ]);
 
 function errorName(error: unknown): string | null {
-  if (error instanceof DOMException) return error.name;
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "name" in error &&
-    typeof (error as { name: unknown }).name === "string"
-  ) {
-    return (error as { name: string }).name;
+  if (typeof error !== "object" || error === null || !("name" in error)) {
+    return null;
   }
-  return null;
+  const { name } = error as { name: unknown };
+  return typeof name === "string" ? name : null;
 }
 
 function errorMessage(error: unknown): string {
@@ -71,13 +66,22 @@ export async function captureMicWithFallback(
     ? { deviceId: { exact: selectedDeviceId } }
     : true;
 
+  const attempts: (MediaTrackConstraints | boolean)[] = [
+    preferred,
+    withoutSampleRate,
+    bare,
+  ];
+
   let lastError: unknown = null;
-  for (const audio of [preferred, withoutSampleRate, bare]) {
+  for (const [index, audio] of attempts.entries()) {
     try {
       return await getUserMedia({ audio });
     } catch (err) {
       lastError = err;
-      console.warn("[huddle] getUserMedia attempt failed, degrading:", err);
+      console.warn(
+        `[huddle] getUserMedia attempt ${index + 1}/${attempts.length} failed:`,
+        err,
+      );
     }
   }
 
