@@ -256,6 +256,82 @@ test("a refused write still leaves the watermark persisted (the claim was issued
   assert.equal(persisted.nonce, 1);
 });
 
+test("publishEphemeral publishes to the free lane without opening a channel or paying", async () => {
+  const EPHEMERAL_EVENT = { ...EVENT, kind: 20001 };
+  const client = scriptedClient({
+    getRoutePrice: (destination) =>
+      Promise.resolve(destination === CONFIG.ephemeralDestination ? 0n : 1000n),
+  });
+  const writer = writerOver(client);
+
+  await writer.publishEphemeral(EPHEMERAL_EVENT);
+
+  assert.equal(client.published.length, 1);
+  assert.equal(client.published[0].event, EPHEMERAL_EVENT);
+  assert.equal(
+    client.published[0].options.destination,
+    CONFIG.ephemeralDestination,
+  );
+  assert.equal(client.published[0].options.ilpAmount, undefined);
+  assert.deepEqual(client.openedChannels, []);
+  assert.equal(
+    loadPersistedChannel(CONFIG.ephemeralDestination, CONFIG.chain),
+    null,
+  );
+});
+
+test("publishEphemeral pays the ephemeral route's own quoted price when it is non-zero", async () => {
+  const client = scriptedClient({
+    getRoutePrice: (destination) =>
+      Promise.resolve(destination === CONFIG.ephemeralDestination ? 5n : 1000n),
+  });
+  const writer = writerOver(client);
+
+  await writer.publishEphemeral({ ...EVENT, kind: 20002 });
+
+  assert.equal(client.published[0].options.ilpAmount, 5n);
+});
+
+test("publishEphemeral is a silent no-op when the connector does not terminate the free lane (old node)", async () => {
+  const client = scriptedClient({ getRoutePrice: () => Promise.resolve(null) });
+  const writer = writerOver(client);
+
+  await writer.publishEphemeral({ ...EVENT, kind: 20002 });
+
+  assert.deepEqual(client.published, []);
+});
+
+test("publishEphemeral still throws on a genuine refusal from a connector that DOES terminate the lane", async () => {
+  const client = scriptedClient({
+    getRoutePrice: (destination) =>
+      Promise.resolve(destination === CONFIG.ephemeralDestination ? 0n : 1000n),
+    publishEvent: () =>
+      Promise.resolve({ success: false, error: "rate limited", code: "F09" }),
+  });
+  const writer = writerOver(client);
+
+  await assert.rejects(
+    writer.publishEphemeral({ ...EVENT, kind: 20002 }),
+    /rate limited/,
+  );
+});
+
+test("publishEphemeral asks the connector for the ephemeral route price only once per writer", async () => {
+  let priceChecks = 0;
+  const client = scriptedClient({
+    getRoutePrice: (destination) => {
+      if (destination === CONFIG.ephemeralDestination) priceChecks += 1;
+      return Promise.resolve(0n);
+    },
+  });
+  const writer = writerOver(client);
+
+  await writer.publishEphemeral({ ...EVENT, kind: 20002 });
+  await writer.publishEphemeral({ ...EVENT, kind: 20001 });
+
+  assert.equal(priceChecks, 1);
+});
+
 test("payFactoryJobIncrement opens a channel to the PROVIDER, not the writer's relay destination", async () => {
   const client = scriptedClient();
   const writer = writerOver(client);

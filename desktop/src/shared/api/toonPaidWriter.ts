@@ -318,6 +318,8 @@ export class ToonPaidWriter {
   private starting: Promise<PaidClient> | null = null;
   private routePrice: bigint | null = null;
   private storeRoutePrice: bigint | null = null;
+  private ephemeralRoutePrice: bigint | null = null;
+  private ephemeralRouteChecked = false;
   private lastReceipt: PaidWriteReceipt | null = null;
   private channelId: string | null = null;
   private channelReady: Promise<string> | null = null;
@@ -560,6 +562,60 @@ export class ToonPaidWriter {
     this.lastReceipt = receipt;
     for (const listener of this.listeners) listener(receipt);
     return receipt;
+  }
+
+  /**
+   * Ask the connector once whether it terminates the free ephemeral lane
+   * (relay#129, toon-meta#393 epic E2) and what it charges, caching the
+   * answer for the writer's lifetime — the connector this session pays does
+   * not change mid-session, so there is nothing to invalidate. `null` means
+   * the connector has no route for {@link ToonTransportConfig.ephemeralDestination}
+   * at all: an old node that predates the lane, not a failure.
+   */
+  private async resolveEphemeralRoutePrice(
+    client: PaidClient,
+  ): Promise<bigint | null> {
+    if (!this.ephemeralRouteChecked) {
+      this.ephemeralRoutePrice = await client.getRoutePrice(
+        this.config.ephemeralDestination,
+      );
+      this.ephemeralRouteChecked = true;
+    }
+    return this.ephemeralRoutePrice;
+  }
+
+  /**
+   * Publish an ephemeral event (presence, typing) to the free ephemeral
+   * write lane. Unlike {@link publish}, this never opens a channel or signs
+   * a claim — the lane is a zero-priced route by construction, so there is
+   * nothing to pay for or resume.
+   *
+   * Resolves without publishing when the connector does not terminate the
+   * lane at all (an old node predating epic E2) — that is the documented
+   * degrade to today's silent drop, not a failure. A connector that DOES
+   * terminate the lane but refuses the write for some other reason (rate
+   * limit, bad signature) still throws, same as {@link publish}; the caller
+   * decides whether that loss is acceptable.
+   */
+  async publishEphemeral(event: RelayEvent): Promise<void> {
+    const client = await this.ensureClient();
+    const price = await this.resolveEphemeralRoutePrice(client);
+    if (price === null) return;
+
+    const result = await client.publishEvent(event, {
+      destination: this.config.ephemeralDestination,
+      ...(price > 0n ? { ilpAmount: price } : {}),
+    });
+
+    if (!result.success) {
+      const refusal = result.refusedBy
+        ? ` (refused by ${result.refusedBy})`
+        : "";
+      const code = result.code ? ` [${result.code}]` : "";
+      throw new ToonPaidWriteError(
+        `TOON refused the ephemeral write${refusal}${code}: ${result.error ?? "no reason given"}`,
+      );
+    }
   }
 
   /**
