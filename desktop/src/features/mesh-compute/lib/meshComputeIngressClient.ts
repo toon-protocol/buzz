@@ -25,6 +25,15 @@ export type MeshComputeIngressResult =
   | { ok: true; text: string }
   | { ok: false; reason: MeshComputeRefusalReason };
 
+/** One prompt, as the local ingress needs it. */
+export type MeshComputeIngressInput = {
+  baseUrl: string;
+  model: string;
+  prompt: string;
+  maxTokens: number;
+  advertisedMaxTokens: number;
+};
+
 type FetchLike = (
   url: string,
   init: { method: string; headers: Record<string, string>; body: string },
@@ -85,13 +94,7 @@ function extractCompletionText(payload: unknown): string | null {
  * ceiling before this is ever called.
  */
 export async function callMeshComputeIngress(
-  input: {
-    baseUrl: string;
-    model: string;
-    prompt: string;
-    maxTokens: number;
-    advertisedMaxTokens: number;
-  },
+  input: MeshComputeIngressInput,
   fetchImpl: FetchLike = fetch,
 ): Promise<MeshComputeIngressResult> {
   const cappedMaxTokens = Math.min(input.maxTokens, input.advertisedMaxTokens);

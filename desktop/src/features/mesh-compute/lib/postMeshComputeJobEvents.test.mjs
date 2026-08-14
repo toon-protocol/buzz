@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   publishMeshComputeAccepted,
+  publishMeshComputeCompletedOffer,
   publishMeshComputeJobResult,
   publishMeshComputeRefused,
 } from "./postMeshComputeJobEvents.ts";
@@ -87,6 +88,48 @@ test("publishes a signed refused event with a reason tag", async () => {
     );
     assert.equal(result.id, "refused-id");
     assert.equal(published.length, 1);
+  } finally {
+    teardownTauriStub();
+  }
+});
+
+test("publishes a signed completed-offer carrying the ciphertext and condition", async () => {
+  const signedEvent = {
+    id: "offer-id",
+    pubkey: "seller",
+    created_at: 1,
+    kind: 7000,
+    content: "Q0lQSEVSVEVYVA==",
+    tags: [["status", "completed-offer"]],
+    sig: "sig",
+  };
+  const calls = setupTauriStub(signedEvent);
+  const published = [];
+  try {
+    const result = await publishMeshComputeCompletedOffer(
+      {
+        rootJobId: "job-1",
+        acceptedEventId: "accepted-1",
+        buyerPubkey: "buyer-1",
+        amountMicroUsdc: 4_000n,
+        conditionHex: "ab".repeat(32),
+        ciphertextBase64: "Q0lQSEVSVEVYVA==",
+      },
+      fakeTransport(published),
+    );
+    assert.equal(result.id, "offer-id");
+    assert.equal(published.length, 1);
+    const signArgs = calls.find((call) => call.command === "sign_event").args;
+    assert.equal(signArgs.kind, 7000);
+    assert.equal(signArgs.content, "Q0lQSEVSVEVYVA==");
+    assert.deepEqual(signArgs.tags, [
+      ["status", "completed-offer"],
+      ["e", "job-1", "", "root"],
+      ["e", "accepted-1", "", "reply"],
+      ["p", "buyer-1"],
+      ["amount", "4000", "usdc"],
+      ["condition", "ab".repeat(32)],
+    ]);
   } finally {
     teardownTauriStub();
   }

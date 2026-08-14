@@ -11,7 +11,10 @@ import {
  * is open, or the seller silently stops serving the moment the operator
  * navigates away. Renders nothing; every gate (mesh node actually serving,
  * transport able to release a key) lives inside `useMeshComputeJobServer`
- * itself, so an idle desktop pays for nothing here.
+ * itself, so an idle desktop opens no subscription and spends no paid
+ * writes. What it does pay, always, is `useMeshNodeStatus`'s
+ * `mesh_node_status` poll — the signal the serving gate reads — which
+ * answers from a stopped runtime without touching the mesh.
  *
  * The transport is resolved synchronously, the
  * `factoryJobAvailability.ts` way: the transport this run installed does

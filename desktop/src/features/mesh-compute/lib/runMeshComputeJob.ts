@@ -1,5 +1,6 @@
 import {
   callMeshComputeIngress,
+  type MeshComputeIngressInput,
   type MeshComputeIngressResult,
 } from "@/features/mesh-compute/lib/meshComputeIngressClient";
 import type { MeshComputeJobRequest } from "@/features/mesh-compute/lib/meshComputeJobRequest";
@@ -23,13 +24,9 @@ export type MeshComputeJobExecutionOutcome =
   | { kind: "refused"; reason: MeshComputeRefusalReason }
   | { kind: "completed"; text: string };
 
-type CallIngress = (input: {
-  baseUrl: string;
-  model: string;
-  prompt: string;
-  maxTokens: number;
-  advertisedMaxTokens: number;
-}) => Promise<MeshComputeIngressResult>;
+type CallIngress = (
+  input: MeshComputeIngressInput,
+) => Promise<MeshComputeIngressResult>;
 
 export async function runMeshComputeJob(
   input: {
