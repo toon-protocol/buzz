@@ -144,9 +144,9 @@ describe("createE2eToonPaidClient", () => {
 
   it("getLastConnectorRouteTerms picks up a TTL first set mid-session", async () => {
     // The transition the provider-availability e2e specs drive: no TTL at
-    // boot (so writes like the presence heartbeat capture no lease and
-    // availability reads `pending`), then a TTL advertised live so the next
-    // write's `captureSessionLease` sees it.
+    // boot (so an early write captures no lease and availability reads
+    // `pending`), then a TTL advertised live so the next write's
+    // `captureSessionLease` sees it.
     let ttlMs;
     const factory = createE2eToonPaidClient(
       () => "funded",

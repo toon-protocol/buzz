@@ -9,24 +9,23 @@ import { installMockBridge } from "../helpers/bridge";
  * (`providerAvailability.ts`, "the socket is the lease"), all three states
  * `useProviderAvailability` can report once advertising is on:
  *
- * - `pending` — no lease TTL has been advertised by the connector. NOT "no
- *   paid write has landed": writes land from boot (the kind-20001 presence
- *   heartbeat publishes through the same `ToonPaidWriter`, and
- *   `captureSessionLease` runs after EVERY successful write), but with no
- *   `toonSessionLeaseTtlMs` fixture the fake client's
- *   `getLastConnectorRouteTerms` answers `undefined`, so no write can ever
- *   capture a lease — same as a real connector predating toon-client#509.
+ * - `pending` — no lease TTL has been advertised by the connector. As of
+ *   buzz#212 the kind:20001 presence heartbeat no longer reaches
+ *   `ToonPaidWriter` at all (it is dropped, not paid for — see
+ *   `ToonEventTransport.publish`), so with no other paid write triggered yet
+ *   `getLastConnectorRouteTerms` answers `undefined` and
+ *   `captureSessionLease` never runs — same as a real connector predating
+ *   toon-client#509.
  * - `available` — a TTL is advertised and a paid write has captured it while
  *   it has not yet elapsed. The bridge reads the TTL fixture at CALL time
  *   (`createE2eToonPaidClient`), so the spec sets it live mid-test — AFTER
  *   asserting `pending` — and the next successful write on the shared
- *   `ToonPaidWriter` captures the lease. The spec sends a quote so that
- *   write happens on its own schedule, but which write captures it does not
- *   matter (the 60s heartbeat would do the same).
+ *   `ToonPaidWriter` (the quote this spec sends) captures the lease.
  * - `stale` — a captured lease has elapsed with no fresh write in between:
  *   reach `available` on a short nonzero TTL, then let the hook's 5s tick
- *   re-derive `nowMs >= expiresAtMs`. The next heartbeat (60s cadence) is
- *   far outside the window the spec waits in, so nothing refreshes the
+ *   re-derive `nowMs >= expiresAtMs`. No other paid write happens in the
+ *   window the spec waits in (the presence heartbeat that used to be one no
+ *   longer pays, or refreshes the lease, at all), so nothing refreshes the
  *   lease under the assertion.
  */
 
@@ -49,7 +48,7 @@ const SEEDED_JOB_REQUEST = {
 /**
  * Open the provider panel with advertising on and NO lease TTL advertised, so
  * availability deterministically reads `pending` regardless of how many paid
- * writes (e.g. the boot presence heartbeat) have already landed.
+ * writes have already landed.
  */
 async function openProviderPanel(page: Page) {
   await installMockBridge(page, {

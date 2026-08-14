@@ -16,6 +16,7 @@ import {
 import { signRelayEvent } from "@/shared/api/tauri";
 import type { PresenceStatus, RelayEvent } from "@/shared/api/types";
 import {
+  KIND_PRESENCE,
   KIND_STREAM_MESSAGE,
   KIND_TYPING_INDICATOR,
   KIND_USER_STATUS,
@@ -117,7 +118,7 @@ export async function sendPresence(
   await ensureTransportReady();
 
   const event = await signRelayEvent({
-    kind: 20001,
+    kind: KIND_PRESENCE,
     content: status,
     tags: [],
   });
