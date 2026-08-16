@@ -61,6 +61,33 @@
 //!   that a workflow naming a channel this identity was never admitted to
 //!   must be refused loudly per firing, not silently downgraded to plaintext
 //!   or silently skipped.
+//!
+//! ## buzz#52: reactions and admin adds
+//!
+//! Still version `1`, still deny-unknown, widened once more — two triggers
+//! and one action, closing the rows `docs/workflow-agent-parity.md` had
+//! deferred. See [`crate::workflow_agent`]'s own "buzz#52" section for the
+//! passes that drive them:
+//!
+//! - **`trigger.reaction_added: true`**, optionally narrowed by
+//!   **`trigger.emoji`** to one reaction content string, compared exactly —
+//!   the same comparison upstream's `should_fire_workflow` makes. Mutually
+//!   exclusive with `contains` / `matches` / `all` / `any` / `schedule` /
+//!   `admin_added`: what is being matched is a reaction, not a message.
+//!   `trigger.channel` still scopes it to a single channel, and `emoji`
+//!   without `reaction_added` is a load error rather than a silently
+//!   ignored field.
+//! - **`trigger.admin_added: true`** — fires once per admin a channel's
+//!   kind:39100 fold gained since the previous cycle. Named for what
+//!   kind:39100 actually holds (admins), not the "member joined" the ticket
+//!   asked for. Same mutual exclusions, same optional `trigger.channel`.
+//! - **`action.add_reaction: { emoji }`** — mutually exclusive with
+//!   `action.reply`, and rejected for a `schedule` or `admin_added` trigger
+//!   (neither has a triggering message to react to) or alongside
+//!   `action.channel` (a reaction is only addressable in the channel its
+//!   target was posted in). `emoji` is bounded by [`MAX_EMOJI_CHARS`], the
+//!   limit `buzz_sdk::builders::build_reaction` enforces, so an over-long
+//!   one fails at load time instead of at publish time.
 
 use std::path::{Path, PathBuf};
 
@@ -101,6 +128,22 @@ struct TriggerFile {
     /// exclusive with everything else above.
     #[serde(default)]
     schedule: Option<String>,
+    /// Fire on a NIP-25 kind:7 reaction instead of a channel message
+    /// (buzz#52) — see the module doc's "buzz#52" section. Mutually
+    /// exclusive with everything else above.
+    #[serde(default)]
+    reaction_added: Option<bool>,
+    /// Restrict a `reaction_added` trigger to one emoji. Only meaningful
+    /// alongside `reaction_added: true`.
+    #[serde(default)]
+    emoji: Option<String>,
+    /// Fire when a kind:39100 admin-list fold gains an admin it did not
+    /// have last cycle (buzz#52) — see the module doc's "buzz#52" section.
+    /// Named `admin_added`, not `member_joined`: kind:39100's roster is
+    /// admins, not a general member list. Mutually exclusive with
+    /// everything else above.
+    #[serde(default)]
+    admin_added: Option<bool>,
 }
 
 /// One entry of a `trigger.all` / `trigger.any` list — the same two
@@ -118,11 +161,24 @@ struct ConditionFile {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ActionFile {
-    reply: String,
+    #[serde(default)]
+    reply: Option<String>,
+    /// Post a NIP-25 kind:7 reaction onto the triggering message instead of
+    /// replying (buzz#52). Mutually exclusive with `reply`.
+    #[serde(default)]
+    add_reaction: Option<AddReactionFile>,
     /// Cross-channel override / schedule destination (buzz#22) — see the
-    /// module doc's "buzz#22" section.
+    /// module doc's "buzz#22" section. Not valid alongside `add_reaction`:
+    /// a reaction always targets the triggering message's own event, which
+    /// is only ever addressable in the channel it was posted in.
     #[serde(default)]
     channel: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AddReactionFile {
+    emoji: String,
 }
 
 /// A trigger condition, validated and ready to evaluate.
@@ -167,6 +223,23 @@ impl PartialEq for Condition {
     }
 }
 
+/// The upper bound NIP-25 puts on a reaction's `content` — mirrors
+/// `buzz_sdk::builders::build_reaction`'s `EmojiTooLong` check, so a
+/// too-long emoji fails at workflow-load time rather than at publish time.
+const MAX_EMOJI_CHARS: usize = 64;
+
+/// What a fired workflow does (buzz#52 widens this from "always a reply" to
+/// "a reply, or a reaction on the triggering message").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActionKind {
+    /// Post `text` as a channel message — v1's (and still the default)
+    /// action.
+    Reply(String),
+    /// Post a NIP-25 kind:7 reaction (`emoji`) onto the triggering message —
+    /// see the module doc's "buzz#52" section.
+    AddReaction { emoji: String },
+}
+
 /// A compiled `trigger.schedule` — the cron expression plus its display
 /// source, since [`cron::Schedule`] round-trips through [`Display`] but not
 /// every caller wants to reformat it just to log what was configured.
@@ -195,6 +268,13 @@ pub enum TriggerKind {
     Message(Condition),
     /// A cron schedule — see the module doc's "buzz#22" section.
     Schedule(Schedule),
+    /// A NIP-25 kind:7 reaction landing on a message in a held channel,
+    /// optionally filtered to one emoji — see the module doc's "buzz#52"
+    /// section.
+    ReactionAdded { emoji: Option<String> },
+    /// A kind:39100 admin-list fold for a held channel gaining an admin it
+    /// did not have last cycle — see the module doc's "buzz#52" section.
+    AdminAdded,
 }
 
 /// Normalize a cron expression to the 7-field (`sec min hour dom month dow
@@ -247,9 +327,12 @@ fn parse_condition(
     }
 }
 
-/// One loaded, validated workflow: one trigger, one action — widened by
-/// buzz#22 from "trigger is always a message condition" to "trigger is a
-/// message condition or a schedule" (see [`TriggerKind`]).
+/// One loaded, validated workflow: still one trigger and one action, but
+/// neither is a single shape any more — buzz#22 widened the trigger from
+/// "always a message condition" to "a message condition or a schedule", and
+/// buzz#52 to "…or a reaction, or an admin add" (see [`TriggerKind`]) and the
+/// action from "always a reply" to "a reply or a reaction" (see
+/// [`ActionKind`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Workflow {
     /// Display name — the `name:` field, or the file's stem when omitted.
@@ -262,12 +345,16 @@ pub struct Workflow {
     /// triggering channel to scope to.
     pub channel: Option<String>,
     pub trigger: TriggerKind,
-    /// The reply text posted back into the triggering channel (message
-    /// trigger) or into `action_channel` (schedule trigger).
-    pub reply: String,
+    /// What firing does — a reply (posted into the triggering channel, or
+    /// `action_channel` for a schedule trigger) or a reaction on the
+    /// triggering message (buzz#52; never valid for a schedule trigger,
+    /// which has no triggering message — see [`parse_workflow`]).
+    pub action: ActionKind,
     /// `action.channel`: a cross-channel override for a message trigger's
     /// reply, or the required destination for a schedule trigger. See the
-    /// module doc's "buzz#22" section.
+    /// module doc's "buzz#22" section. Always `None` for an `add_reaction`
+    /// action (validated in [`parse_workflow`]) — a reaction targets the
+    /// triggering message's own channel, not an overridable one.
     pub action_channel: Option<String>,
 }
 
@@ -279,27 +366,56 @@ impl Workflow {
     /// walk (see `crate::workflow_agent::plan_trigger`), only by the
     /// scheduler pass.
     pub fn applies_to_channel(&self, channel_id: &str) -> bool {
-        matches!(self.trigger, TriggerKind::Message(_))
-            && self
-                .channel
-                .as_deref()
-                .is_none_or(|only| only == channel_id)
+        matches!(self.trigger, TriggerKind::Message(_)) && self.scoped_to(channel_id)
+    }
+
+    /// Whether `trigger.channel` — set or omitted — admits `channel_id`.
+    /// Trigger-kind-agnostic on purpose: the `reaction_added` and
+    /// `admin_added` passes ask the same scoping question
+    /// [`Self::applies_to_channel`] asks for the message walk, about a
+    /// channel they reached without walking a message
+    /// (`crate::workflow_agent::plan_reaction_trigger` /
+    /// `plan_admin_added_trigger`).
+    pub fn scoped_to(&self, channel_id: &str) -> bool {
+        self.channel
+            .as_deref()
+            .is_none_or(|only| only == channel_id)
     }
 
     /// The condition to evaluate, for a message-triggered workflow.
     pub fn condition(&self) -> Option<&Condition> {
         match &self.trigger {
             TriggerKind::Message(condition) => Some(condition),
-            TriggerKind::Schedule(_) => None,
+            TriggerKind::Schedule(_)
+            | TriggerKind::ReactionAdded { .. }
+            | TriggerKind::AdminAdded => None,
         }
     }
 
     /// The compiled schedule, for a schedule-triggered workflow.
     pub fn schedule(&self) -> Option<&Schedule> {
         match &self.trigger {
-            TriggerKind::Message(_) => None,
             TriggerKind::Schedule(schedule) => Some(schedule),
+            TriggerKind::Message(_)
+            | TriggerKind::ReactionAdded { .. }
+            | TriggerKind::AdminAdded => None,
         }
+    }
+
+    /// `Some(filter)` when this workflow is `reaction_added`-triggered —
+    /// `filter` is `None` for "any emoji" or `Some(emoji)` for one this
+    /// reaction's content must match exactly. `None` for every other trigger
+    /// kind (buzz#52).
+    pub fn reaction_added(&self) -> Option<Option<&str>> {
+        match &self.trigger {
+            TriggerKind::ReactionAdded { emoji } => Some(emoji.as_deref()),
+            TriggerKind::Message(_) | TriggerKind::Schedule(_) | TriggerKind::AdminAdded => None,
+        }
+    }
+
+    /// Whether this workflow is `admin_added`-triggered (buzz#52).
+    pub fn is_admin_added(&self) -> bool {
+        matches!(self.trigger, TriggerKind::AdminAdded)
     }
 }
 
@@ -332,6 +448,29 @@ pub fn parse_workflow(yaml: &str, source: &Path) -> Result<Workflow, CliError> {
         || file.trigger.matches.is_some()
         || file.trigger.all.is_some()
         || file.trigger.any.is_some();
+    let reaction_added = file.trigger.reaction_added.unwrap_or(false);
+    let admin_added = file.trigger.admin_added.unwrap_or(false);
+
+    if reaction_added && (has_message_fields || file.trigger.schedule.is_some() || admin_added) {
+        return Err(CliError::Usage(format!(
+            "{}: a reaction_added trigger cannot also set 'contains', 'matches', 'all', 'any', \
+'schedule', or 'admin_added'",
+            source.display()
+        )));
+    }
+    if admin_added && (has_message_fields || file.trigger.schedule.is_some()) {
+        return Err(CliError::Usage(format!(
+            "{}: an admin_added trigger cannot also set 'contains', 'matches', 'all', 'any', or \
+'schedule'",
+            source.display()
+        )));
+    }
+    if file.trigger.emoji.is_some() && !reaction_added {
+        return Err(CliError::Usage(format!(
+            "{}: trigger.emoji requires 'trigger.reaction_added: true'",
+            source.display()
+        )));
+    }
 
     let trigger = match file.trigger.schedule {
         Some(expr) => {
@@ -360,6 +499,29 @@ pub fn parse_workflow(yaml: &str, source: &Path) -> Result<Workflow, CliError> {
                 compiled: std::sync::Arc::new(compiled),
             })
         }
+        None if reaction_added => {
+            let emoji = match file.trigger.emoji {
+                None => None,
+                Some(emoji) => {
+                    let emoji = emoji.trim().to_string();
+                    if emoji.is_empty() {
+                        return Err(CliError::Usage(format!(
+                            "{}: trigger.emoji must not be empty",
+                            source.display()
+                        )));
+                    }
+                    if emoji.chars().count() > MAX_EMOJI_CHARS {
+                        return Err(CliError::Usage(format!(
+                            "{}: trigger.emoji must be at most {MAX_EMOJI_CHARS} characters",
+                            source.display()
+                        )));
+                    }
+                    Some(emoji)
+                }
+            };
+            TriggerKind::ReactionAdded { emoji }
+        }
+        None if admin_added => TriggerKind::AdminAdded,
         None => {
             let condition = match (
                 file.trigger.contains,
@@ -396,15 +558,16 @@ pub fn parse_workflow(yaml: &str, source: &Path) -> Result<Workflow, CliError> {
                 }
                 (None, None, None, None) => {
                     return Err(CliError::Usage(format!(
-                        "{}: trigger must set one of 'contains', 'matches', 'all', 'any', or 'schedule'",
+                        "{}: trigger must set one of 'contains', 'matches', 'all', 'any', \
+'schedule', 'reaction_added', or 'admin_added'",
                         source.display()
                     )))
                 }
                 _ => {
                     return Err(CliError::Usage(format!(
-                        "{}: trigger must set exactly one of 'contains', 'matches', 'all', or 'any'",
-                        source.display()
-                    )))
+                    "{}: trigger must set exactly one of 'contains', 'matches', 'all', or 'any'",
+                    source.display()
+                )))
                 }
             };
             TriggerKind::Message(condition)
@@ -431,12 +594,59 @@ is required",
         )));
     }
 
-    if file.action.reply.trim().is_empty() {
-        return Err(CliError::Usage(format!(
-            "{}: action.reply must not be empty",
-            source.display()
-        )));
-    }
+    let action = match (file.action.reply, file.action.add_reaction) {
+        (Some(_), Some(_)) => {
+            return Err(CliError::Usage(format!(
+                "{}: action must set exactly one of 'reply' or 'add_reaction', not both",
+                source.display()
+            )))
+        }
+        (None, None) => {
+            return Err(CliError::Usage(format!(
+                "{}: action must set one of 'reply' or 'add_reaction'",
+                source.display()
+            )))
+        }
+        (Some(reply), None) => {
+            if reply.trim().is_empty() {
+                return Err(CliError::Usage(format!(
+                    "{}: action.reply must not be empty",
+                    source.display()
+                )));
+            }
+            ActionKind::Reply(reply)
+        }
+        (None, Some(AddReactionFile { emoji })) => {
+            if matches!(trigger, TriggerKind::Schedule(_) | TriggerKind::AdminAdded) {
+                return Err(CliError::Usage(format!(
+                    "{}: this trigger has no triggering message — 'action.add_reaction' needs \
+one to react to",
+                    source.display()
+                )));
+            }
+            if action_channel.is_some() {
+                return Err(CliError::Usage(format!(
+                    "{}: 'action.add_reaction' cannot also set 'action.channel' — a reaction \
+always targets the triggering message's own channel",
+                    source.display()
+                )));
+            }
+            let emoji = emoji.trim().to_string();
+            if emoji.is_empty() {
+                return Err(CliError::Usage(format!(
+                    "{}: action.add_reaction.emoji must not be empty",
+                    source.display()
+                )));
+            }
+            if emoji.chars().count() > MAX_EMOJI_CHARS {
+                return Err(CliError::Usage(format!(
+                    "{}: action.add_reaction.emoji must be at most {MAX_EMOJI_CHARS} characters",
+                    source.display()
+                )));
+            }
+            ActionKind::AddReaction { emoji }
+        }
+    };
 
     let name = file
         .name
@@ -453,7 +663,7 @@ is required",
         source: source.to_path_buf(),
         channel,
         trigger,
-        reply: file.action.reply,
+        action,
         action_channel,
     })
 }
@@ -559,7 +769,7 @@ mod tests {
             wf.condition().cloned(),
             Some(Condition::Contains("hello".to_string()))
         );
-        assert_eq!(wf.reply, "hi there");
+        assert_eq!(wf.action, ActionKind::Reply("hi there".to_string()));
     }
 
     #[test]
@@ -943,5 +1153,262 @@ mod tests {
         let wf = parse_workflow(yaml, &path("standup.yaml")).unwrap();
         assert!(!wf.applies_to_channel("6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b"));
         assert!(!wf.applies_to_channel("anything"));
+    }
+
+    // ─── buzz#52: action.add_reaction ────────────────────────────────────────
+
+    #[test]
+    fn a_message_trigger_may_use_add_reaction_instead_of_reply() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  contains: todo\n",
+            "action:\n  add_reaction:\n    emoji: eyes\n",
+        );
+        let wf = parse_workflow(yaml, &path("triage.yaml")).unwrap();
+        assert_eq!(
+            wf.action,
+            ActionKind::AddReaction {
+                emoji: "eyes".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn add_reaction_and_reply_are_mutually_exclusive() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  contains: todo\n",
+            "action:\n  reply: hi\n  add_reaction:\n    emoji: eyes\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(msg) if msg.contains("exactly one")));
+    }
+
+    #[test]
+    fn an_action_with_neither_reply_nor_add_reaction_is_rejected() {
+        let yaml = "version: 1\ntrigger:\n  contains: todo\naction: {}\n";
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(_)));
+    }
+
+    #[test]
+    fn an_empty_add_reaction_emoji_is_rejected() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  contains: todo\n",
+            "action:\n  add_reaction:\n    emoji: '   '\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(msg) if msg.contains("emoji")));
+    }
+
+    #[test]
+    fn an_overlong_add_reaction_emoji_is_rejected() {
+        let long = "x".repeat(65);
+        let yaml = format!(
+            "version: 1\ntrigger:\n  contains: todo\naction:\n  add_reaction:\n    emoji: {long}\n"
+        );
+        let err = parse_workflow(&yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(msg) if msg.contains("64")));
+    }
+
+    #[test]
+    fn add_reaction_cannot_set_an_action_channel_override() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  contains: todo\n",
+            "action:\n  add_reaction:\n    emoji: eyes\n",
+            "  channel: 6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(_)));
+    }
+
+    #[test]
+    fn a_schedule_trigger_cannot_use_add_reaction() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  schedule: '0 9 * * 1-5'\n",
+            "action:\n  add_reaction:\n    emoji: eyes\n",
+            "  channel: 6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(msg) if msg.contains("add_reaction")));
+    }
+
+    // ─── buzz#52: trigger.reaction_added ─────────────────────────────────────
+
+    #[test]
+    fn a_reaction_added_trigger_parses_with_no_emoji_filter() {
+        let yaml = concat!(
+            "version: 1\nname: triage\ntrigger:\n  reaction_added: true\n",
+            "action:\n  reply: someone reacted\n",
+        );
+        let wf = parse_workflow(yaml, &path("triage.yaml")).unwrap();
+        assert_eq!(wf.reaction_added(), Some(None));
+        assert!(wf.condition().is_none());
+        assert!(wf.schedule().is_none());
+    }
+
+    #[test]
+    fn a_reaction_added_trigger_may_filter_to_one_emoji() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  reaction_added: true\n  emoji: clipboard\n",
+            "action:\n  add_reaction:\n    emoji: eyes\n",
+        );
+        let wf = parse_workflow(yaml, &path("triage.yaml")).unwrap();
+        assert_eq!(wf.reaction_added(), Some(Some("clipboard")));
+    }
+
+    #[test]
+    fn a_non_reaction_added_workflow_has_no_reaction_added_reading() {
+        let yaml = "version: 1\ntrigger:\n  contains: hi\naction:\n  reply: yo\n";
+        let wf = parse_workflow(yaml, &path("greeter.yaml")).unwrap();
+        assert_eq!(wf.reaction_added(), None);
+    }
+
+    #[test]
+    fn trigger_emoji_without_reaction_added_is_rejected() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  contains: hi\n  emoji: clipboard\n",
+            "action:\n  reply: yo\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(msg) if msg.contains("reaction_added")));
+    }
+
+    #[test]
+    fn reaction_added_is_mutually_exclusive_with_contains() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  reaction_added: true\n  contains: hi\n",
+            "action:\n  reply: yo\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(_)));
+    }
+
+    #[test]
+    fn reaction_added_is_mutually_exclusive_with_schedule() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  reaction_added: true\n  schedule: '* * * * *'\n",
+            "action:\n  reply: yo\n  channel: 6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(_)));
+    }
+
+    #[test]
+    fn an_empty_trigger_emoji_is_rejected() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  reaction_added: true\n  emoji: '   '\n",
+            "action:\n  reply: yo\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(msg) if msg.contains("emoji")));
+    }
+
+    #[test]
+    fn reaction_added_may_be_scoped_to_one_channel() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  reaction_added: true\n",
+            "  channel: 6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b\n",
+            "action:\n  reply: yo\n",
+        );
+        let wf = parse_workflow(yaml, &path("scoped.yaml")).unwrap();
+        assert_eq!(
+            wf.channel.as_deref(),
+            Some("6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b")
+        );
+    }
+
+    /// A `reaction_added` workflow is never reached by the message tail walk
+    /// — it has its own pass (buzz#52), the same way a `schedule` workflow
+    /// does (buzz#22).
+    #[test]
+    fn a_reaction_added_workflow_never_applies_to_any_walked_channel() {
+        let yaml = "version: 1\ntrigger:\n  reaction_added: true\naction:\n  reply: yo\n";
+        let wf = parse_workflow(yaml, &path("triage.yaml")).unwrap();
+        assert!(!wf.applies_to_channel("engineering"));
+    }
+
+    // ─── buzz#52: trigger.admin_added ────────────────────────────────────────
+
+    #[test]
+    fn an_admin_added_trigger_parses() {
+        let yaml = concat!(
+            "version: 1\nname: welcome\ntrigger:\n  admin_added: true\n",
+            "action:\n  reply: welcome aboard\n",
+        );
+        let wf = parse_workflow(yaml, &path("welcome.yaml")).unwrap();
+        assert!(wf.is_admin_added());
+        assert!(wf.condition().is_none());
+        assert!(wf.schedule().is_none());
+        assert_eq!(wf.reaction_added(), None);
+    }
+
+    #[test]
+    fn a_non_admin_added_workflow_reports_false() {
+        let yaml = "version: 1\ntrigger:\n  contains: hi\naction:\n  reply: yo\n";
+        let wf = parse_workflow(yaml, &path("greeter.yaml")).unwrap();
+        assert!(!wf.is_admin_added());
+    }
+
+    #[test]
+    fn admin_added_is_mutually_exclusive_with_contains() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  admin_added: true\n  contains: hi\n",
+            "action:\n  reply: yo\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(_)));
+    }
+
+    #[test]
+    fn admin_added_is_mutually_exclusive_with_schedule() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  admin_added: true\n  schedule: '* * * * *'\n",
+            "action:\n  reply: yo\n  channel: 6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(_)));
+    }
+
+    #[test]
+    fn admin_added_is_mutually_exclusive_with_reaction_added() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  admin_added: true\n  reaction_added: true\n",
+            "action:\n  reply: yo\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(_)));
+    }
+
+    #[test]
+    fn admin_added_cannot_use_add_reaction() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  admin_added: true\n",
+            "action:\n  add_reaction:\n    emoji: eyes\n",
+        );
+        let err = parse_workflow(yaml, &path("bad.yaml")).unwrap_err();
+        assert!(matches!(err, CliError::Usage(msg) if msg.contains("add_reaction")));
+    }
+
+    #[test]
+    fn admin_added_may_be_scoped_to_one_channel() {
+        let yaml = concat!(
+            "version: 1\ntrigger:\n  admin_added: true\n",
+            "  channel: 6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b\n",
+            "action:\n  reply: welcome\n",
+        );
+        let wf = parse_workflow(yaml, &path("welcome.yaml")).unwrap();
+        assert_eq!(
+            wf.channel.as_deref(),
+            Some("6f1c9d02-1c2a-4a55-9f2b-8f4c0d1e2a3b")
+        );
+    }
+
+    /// An `admin_added` workflow is never reached by the message tail walk —
+    /// it has its own pass (buzz#52), the same way `schedule` (buzz#22) and
+    /// `reaction_added` (buzz#52) do.
+    #[test]
+    fn an_admin_added_workflow_never_applies_to_any_walked_channel() {
+        let yaml = "version: 1\ntrigger:\n  admin_added: true\naction:\n  reply: welcome\n";
+        let wf = parse_workflow(yaml, &path("welcome.yaml")).unwrap();
+        assert!(!wf.applies_to_channel("engineering"));
     }
 }

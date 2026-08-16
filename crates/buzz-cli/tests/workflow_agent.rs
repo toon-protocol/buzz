@@ -77,6 +77,7 @@ impl RelayState {
         };
         let p_values = tag_filter("p");
         let h_values = tag_filter("h");
+        let e_values = tag_filter("e");
         let since = filter.get("since").and_then(Value::as_u64);
         let until = filter.get("until").and_then(Value::as_u64);
         let limit = filter.get("limit").and_then(Value::as_u64).unwrap_or(500) as usize;
@@ -96,7 +97,7 @@ impl RelayState {
                 if since.is_some_and(|floor| at < floor) || until.is_some_and(|cap| at > cap) {
                     return false;
                 }
-                for (name, wanted) in [("p", &p_values), ("h", &h_values)] {
+                for (name, wanted) in [("p", &p_values), ("h", &h_values), ("e", &e_values)] {
                     let Some(wanted) = wanted else { continue };
                     let has = event.tags.iter().any(|tag| {
                         let row = tag.clone().to_vec();
@@ -891,6 +892,207 @@ action:\n  reply: escalated\n  channel: {CONTROL}\n"
     let refused = &agent.refused_actions()[0];
     assert_eq!(refused["workflow"], "escalate");
     assert_eq!(refused["targetChannel"], CONTROL);
+
+    agent.stop().await;
+}
+
+// ─── buzz#52: reaction_added trigger / add_reaction action ─────────────────
+
+const KIND_REACTION: u16 = 7;
+
+/// A matching message fires `action.add_reaction`: the published event is an
+/// unsealed kind:7 reaction whose `e` tag targets the triggering message.
+#[tokio::test]
+async fn a_matching_message_fires_an_add_reaction_action() {
+    let agent_keys = Keys::generate();
+    let (fixture, relay, admin) = fixture(&agent_keys).await;
+    let yaml = "version: 1\nname: triage\ntrigger:\n  contains: todo\n\
+action:\n  add_reaction:\n    emoji: eyes\n";
+    let workflow = fixture.write_workflow("triage.yaml", yaml);
+
+    let trigger = sealed_message(&admin, MEMBER, &EPOCH0, "a todo for later", 1_700_000_100);
+    let trigger_id = trigger.id.to_hex();
+    relay.publish(trigger);
+
+    let agent = fixture.start_agent(&workflow, 50, false).await;
+    agent.wait_for_sent(1).await;
+
+    let sent = &agent.sent_actions()[0];
+    assert_eq!(sent["workflow"], "triage");
+    assert_eq!(sent["channel"], MEMBER);
+
+    let action_id = sent["actionEvent"].as_str().unwrap();
+    let published = relay
+        .all()
+        .into_iter()
+        .find(|e| e.id.to_hex() == action_id)
+        .expect("the reaction event should have reached the relay");
+    assert_eq!(published.pubkey, agent_keys.public_key());
+    assert_eq!(published.kind.as_u16(), KIND_REACTION);
+    // Unsealed: NIP-25 reactions have no encryption story.
+    assert_eq!(published.content, "eyes");
+
+    let e_target = published.tags.iter().find_map(|t| {
+        let row = t.clone().to_vec();
+        (row.first().map(String::as_str) == Some("e")).then(|| row.get(1).cloned())
+    });
+    assert_eq!(e_target.flatten().as_deref(), Some(trigger_id.as_str()));
+
+    let has_marker = published.tags.iter().any(|t| {
+        let row = t.clone().to_vec();
+        row.first().map(String::as_str) == Some("client")
+            && row.get(1).map(String::as_str) == Some("buzz-workflow")
+    });
+    assert!(has_marker, "action event must carry the client marker tag");
+
+    agent.stop().await;
+}
+
+/// The end-to-end shape of the relay-scoping workaround
+/// `docs/workflow-agent-parity.md` describes: a reaction landing on a
+/// message the tail walk has already seen fires `reaction_added`, scoped by
+/// `#e` against that message's own id (never `#h` — NIP-25 reactions carry
+/// no channel tag).
+#[tokio::test]
+async fn a_reaction_on_a_seen_message_fires_a_reaction_added_workflow() {
+    let agent_keys = Keys::generate();
+    let (fixture, relay, admin) = fixture(&agent_keys).await;
+    let yaml = "version: 1\nname: triage\ntrigger:\n  reaction_added: true\n  emoji: clipboard\n\
+action:\n  add_reaction:\n    emoji: eyes\n";
+    let workflow = fixture.write_workflow("triage.yaml", yaml);
+
+    let target = sealed_message(
+        &admin,
+        MEMBER,
+        &EPOCH0,
+        "a message to react to",
+        1_700_000_100,
+    );
+    let target_id = target.id.to_hex();
+    relay.publish(target);
+
+    let agent = fixture.start_agent(&workflow, 50, false).await;
+    // Give the agent at least one cycle to observe the message (and so scope
+    // its recently-seen window to it) before the reaction lands.
+    agent.wait_for_cycles(1).await;
+
+    let reaction = EventBuilder::new(Kind::Custom(KIND_REACTION), "clipboard")
+        .tags(vec![Tag::parse(["e", &target_id]).unwrap()])
+        .custom_created_at(Timestamp::from_secs(1_700_000_200))
+        .sign_with_keys(&admin)
+        .unwrap();
+    relay.publish(reaction);
+
+    agent.wait_for_sent(1).await;
+
+    let sent = &agent.sent_actions()[0];
+    assert_eq!(sent["workflow"], "triage");
+
+    let action_id = sent["actionEvent"].as_str().unwrap();
+    let published = relay
+        .all()
+        .into_iter()
+        .find(|e| e.id.to_hex() == action_id)
+        .expect("the add_reaction action should have reached the relay");
+    assert_eq!(published.pubkey, agent_keys.public_key());
+    assert_eq!(published.kind.as_u16(), KIND_REACTION);
+    assert_eq!(published.content, "eyes");
+
+    let e_target = published.tags.iter().find_map(|t| {
+        let row = t.clone().to_vec();
+        (row.first().map(String::as_str) == Some("e")).then(|| row.get(1).cloned())
+    });
+    assert_eq!(e_target.flatten().as_deref(), Some(target_id.as_str()));
+
+    agent.stop().await;
+}
+
+/// The `emoji` filter actually filters: a reaction with a different emoji
+/// never fires a `reaction_added` workflow scoped to one.
+#[tokio::test]
+async fn a_reaction_added_emoji_filter_ignores_other_emoji() {
+    let agent_keys = Keys::generate();
+    let (fixture, relay, admin) = fixture(&agent_keys).await;
+    let yaml = "version: 1\nname: triage\ntrigger:\n  reaction_added: true\n  emoji: clipboard\n\
+action:\n  add_reaction:\n    emoji: eyes\n";
+    let workflow = fixture.write_workflow("triage.yaml", yaml);
+
+    let target = sealed_message(
+        &admin,
+        MEMBER,
+        &EPOCH0,
+        "a message to react to",
+        1_700_000_100,
+    );
+    let target_id = target.id.to_hex();
+    relay.publish(target);
+
+    let agent = fixture.start_agent(&workflow, 50, false).await;
+    agent.wait_for_cycles(1).await;
+
+    let reaction = EventBuilder::new(Kind::Custom(KIND_REACTION), "thumbsup")
+        .tags(vec![Tag::parse(["e", &target_id]).unwrap()])
+        .custom_created_at(Timestamp::from_secs(1_700_000_200))
+        .sign_with_keys(&admin)
+        .unwrap();
+    relay.publish(reaction);
+
+    agent.wait_for_cycles(4).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        agent.sent_actions().is_empty(),
+        "a reaction with the wrong emoji must not fire an emoji-filtered workflow: {:?}",
+        agent.log.lock().unwrap()
+    );
+
+    agent.stop().await;
+}
+
+// ─── buzz#52: admin_added trigger ───────────────────────────────────────────
+
+/// A channel gaining an admin fires `admin_added` — but only on the diff
+/// after the first cycle has already seeded a snapshot; the pre-existing
+/// creator admin from `fixture`'s own genesis list must not itself be
+/// reported as "just joined".
+#[tokio::test]
+async fn a_newly_added_admin_fires_an_admin_added_workflow() {
+    let agent_keys = Keys::generate();
+    let (fixture, relay, admin) = fixture(&agent_keys).await;
+    let yaml =
+        "version: 1\nname: welcome\ntrigger:\n  admin_added: true\naction:\n  reply: welcome aboard\n";
+    let workflow = fixture.write_workflow("welcome.yaml", yaml);
+
+    let agent = fixture.start_agent(&workflow, 50, false).await;
+    // Let the first cycle seed the snapshot from `fixture`'s own genesis
+    // admin list before a real promotion happens.
+    agent.wait_for_cycles(1).await;
+    assert!(
+        agent.sent_actions().is_empty(),
+        "the pre-existing creator admin must not itself fire admin_added: {:?}",
+        agent.log.lock().unwrap()
+    );
+
+    let new_admin = Keys::generate();
+    let creator = admin.public_key().to_hex();
+    let promotion = EventBuilder::new(Kind::Custom(KIND_ADMIN_LIST), "")
+        .tags(vec![
+            Tag::parse(["d", MEMBER]).unwrap(),
+            Tag::parse(["creator", &creator]).unwrap(),
+            Tag::parse(["p", &creator, "admin"]).unwrap(),
+            Tag::parse(["p", &new_admin.public_key().to_hex(), "admin"]).unwrap(),
+            Tag::parse(["key", &channel_key_id(&EPOCH0), "0"]).unwrap(),
+        ])
+        .allow_self_tagging()
+        .custom_created_at(Timestamp::from_secs(1_700_000_500))
+        .sign_with_keys(&admin)
+        .unwrap();
+    relay.publish(promotion);
+
+    agent.wait_for_sent(1).await;
+
+    let sent = &agent.sent_actions()[0];
+    assert_eq!(sent["workflow"], "welcome");
+    assert_eq!(sent["channel"], MEMBER);
 
     agent.stop().await;
 }
