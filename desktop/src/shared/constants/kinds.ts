@@ -39,6 +39,17 @@ export const KIND_FACTORY_JOB_RESULT = 6097;
 // narration (disambiguated by the event's `status` tag: "quote" / "partial" /
 // "processing") — the NIP-90 counterpart to KIND_JOB_ACCEPTED/PROGRESS/CANCEL/ERROR.
 export const KIND_FACTORY_JOB_FEEDBACK = 7000;
+// NIP-90 mesh-compute job market (toon-meta#265 decision 1 / toon-meta#266 §1.2,
+// docs/mesh-compute-job-protocol.md in toon-meta). A sibling allocation to the
+// factory job block above, not a replacement — posted-price inference vs.
+// reviewed code briefs, same NIP-90 wire.
+export const KIND_MESH_COMPUTE_JOB_REQUEST = 5098;
+// Result kind is request + 1000, per the NIP-90 formula.
+export const KIND_MESH_COMPUTE_JOB_RESULT = 6098;
+// Shared feedback kind (accepted / refused / completed-offer / narration,
+// disambiguated by the `status` tag) — the same numeric kind as
+// KIND_FACTORY_JOB_FEEDBACK (spec §1.2), not a second allocation.
+export const KIND_MESH_COMPUTE_JOB_FEEDBACK = 7000;
 export const KIND_FORUM_POST = 45001;
 export const KIND_FORUM_COMMENT = 45003;
 export const KIND_APPROVAL_REQUEST = 46010;
