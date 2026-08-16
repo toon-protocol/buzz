@@ -35,6 +35,10 @@ const TRANSPORT_ENV_KEYS: &[&str] = &[
     "BUZZ_TOON_INITIAL_DEPOSIT",
     "BUZZ_TOON_RELAY_URL",
     "BUZZ_TOON_DESTINATION",
+    // The free ephemeral write lane relay#129 terminates presence/typing at
+    // (toon-meta#393 epic E2/E3) — its own zero-priced route, not derivable
+    // from BUZZ_TOON_DESTINATION.
+    "BUZZ_TOON_EPHEMERAL_DESTINATION",
     "BUZZ_TOON_MNEMONIC",
     "BUZZ_TOON_ACCOUNT_INDEX",
     "BUZZ_TOON_CHAIN",

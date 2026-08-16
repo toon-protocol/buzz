@@ -4,7 +4,7 @@ import {
   getChannelIdFromTags,
   getThreadReference,
 } from "@/features/messages/lib/threading";
-import { relayClient } from "@/shared/api/relayClient";
+import { subscribeLiveEvents } from "@/shared/api/eventTransport";
 import type { Channel, RelayEvent } from "@/shared/api/types";
 import {
   KIND_STREAM_MESSAGE,
@@ -184,12 +184,22 @@ export function useChannelTyping(
     let isDisposed = false;
     let cleanup: (() => Promise<void>) | undefined;
 
-    relayClient
-      .subscribeToTypingIndicators(channelId, (event) => {
+    // Through the transport seam, not the relay session directly: typing is
+    // unstored (ephemeral, buzz#213/toon-meta#393 epic E3), so a REQ gets
+    // live traffic only, from whichever network the write went to.
+    subscribeLiveEvents(
+      {
+        kinds: [KIND_TYPING_INDICATOR],
+        "#h": [channelId],
+        limit: 10,
+        since: Math.floor(Date.now() / 1_000) - 10,
+      },
+      (event) => {
         if (!isDisposed) {
           registerTyping(event);
         }
-      })
+      },
+    )
       .then((dispose) => {
         if (isDisposed) {
           void dispose();

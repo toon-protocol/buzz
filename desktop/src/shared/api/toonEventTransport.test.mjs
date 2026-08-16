@@ -177,8 +177,39 @@ test("a refused packet surfaces the caller's copy and the reason", async () => {
   });
 });
 
-test("ephemeral writes are dropped rather than paid for", async () => {
-  const client = scriptedClient();
+function freeLaneClient(overrides = {}) {
+  return scriptedClient({
+    getRoutePrice: (destination) =>
+      Promise.resolve(destination === CONFIG.ephemeralDestination ? 0n : 1000n),
+    ...overrides,
+  });
+}
+
+test("ephemeral writes are published to the free lane, not dropped", async () => {
+  let openChannelCalls = 0;
+  const client = freeLaneClient({
+    openChannel: (...args) => {
+      openChannelCalls += 1;
+      return scriptedClient().openChannel(...args);
+    },
+  });
+  const transport = new ToonEventTransport(CONFIG, {
+    writer: writerOver(client),
+    reader: stubReader(),
+  });
+
+  await transport.publishEphemeral({ ...EVENT, kind: 20002 });
+
+  assert.equal(client.published.length, 1);
+  assert.equal(
+    client.published[0].options.destination,
+    CONFIG.ephemeralDestination,
+  );
+  assert.equal(openChannelCalls, 0);
+});
+
+test("ephemeral writes degrade to a silent no-op when the connector has no free lane (old node)", async () => {
+  const client = scriptedClient({ getRoutePrice: () => Promise.resolve(null) });
   const transport = new ToonEventTransport(CONFIG, {
     writer: writerOver(client),
     reader: stubReader(),
@@ -189,38 +220,44 @@ test("ephemeral writes are dropped rather than paid for", async () => {
   assert.deepEqual(client.published, []);
 });
 
-test("presence heartbeats never reach the paid path on TOON", async (t) => {
-  const client = scriptedClient();
+test("ephemeral writes never reject, even when the connector refuses them", async (t) => {
+  // publishEphemeral is fire-and-forget by contract (EventTransport's doc):
+  // a droppable event's loss must never surface as a rejected promise.
+  const client = freeLaneClient({
+    publishEvent: () =>
+      Promise.resolve({ success: false, error: "rate limited" }),
+  });
   const transport = new ToonEventTransport(CONFIG, {
     writer: writerOver(client),
     reader: stubReader(),
   });
-  t.mock.method(console, "info", () => {});
+  t.mock.method(console, "warn", () => {});
+
+  await assert.doesNotReject(
+    transport.publishEphemeral({ ...EVENT, kind: 20002 }),
+  );
+});
+
+test("presence heartbeats reach the free ephemeral lane, not the paid path", async () => {
+  const client = freeLaneClient();
+  const transport = new ToonEventTransport(CONFIG, {
+    writer: writerOver(client),
+    reader: stubReader(),
+  });
 
   const published = await transport.publish(
     { ...EVENT, kind: 20001 },
     MESSAGES,
   );
 
-  assert.deepEqual(client.published, []);
+  assert.equal(client.published.length, 1);
+  assert.equal(
+    client.published[0].options.destination,
+    CONFIG.ephemeralDestination,
+  );
   // Still resolves with the event, same as a real (paid) publish would, so
   // callers that await the presence write see success either way.
   assert.deepEqual(published, { ...EVENT, kind: 20001 });
-});
-
-test("the presence drop is logged once per session, not once per heartbeat", async (t) => {
-  const client = scriptedClient();
-  const transport = new ToonEventTransport(CONFIG, {
-    writer: writerOver(client),
-    reader: stubReader(),
-  });
-  const info = t.mock.method(console, "info", () => {});
-
-  await transport.publish({ ...EVENT, kind: 20001 }, MESSAGES);
-  await transport.publish({ ...EVENT, kind: 20001 }, MESSAGES);
-  await transport.publish({ ...EVENT, kind: 20001 }, MESSAGES);
-
-  assert.equal(info.mock.callCount(), 1);
 });
 
 test("a transport that has not started cannot write", async () => {
