@@ -1164,6 +1164,25 @@ jobs:
   # mirrored condition table in the step below. Mirrors must stay faithful to
   # the jobs' own conditions.
   # ===========================================================================
+  # Fleet no-op merge guard (toon-meta#405), wired INTO this repo's aggregate
+  # required check so that it blocks a HUMAN merge and not just the fleet
+  # auto-merge pass (toon-meta#408). connector#1008 merged green, closed its
+  # ticket and changed zero files -- and it was a human who merged it, because
+  # a red NON-required check is only a warning on the merge button. This
+  # replaces the stand-alone empty-pr-guard-shim.yml, deleted in the same
+  # commit; running both would put two identical "No-op merge guard" check
+  # runs on every PR. Canonical caller snippet and full rationale:
+  # toon-meta scripts/factory/empty-pr-guard-gate-job.yml.
+  #
+  # No `secrets: inherit` -- the guard makes no API call and no write of any
+  # kind, so handing it FACTORY_OPS_TOKEN would widen a monitored credential
+  # for nothing. No `if:` either: this workflow also runs on push, where the
+  # guard passes with a plain "no merge result to evaluate"; a job-level `if:`
+  # would make it `skipped` there, and a skipped gating job must never read as
+  # a pass (toon-meta#279).
+  no-op-merge:
+    uses: toon-protocol/toon-meta/.github/workflows/empty-pr-guard.yml@main
+
   ci-ok:
     name: CI OK
     runs-on: ubuntu-latest
@@ -1175,6 +1194,7 @@ jobs:
     if: always()
     needs:
       - changes
+      - no-op-merge
       - rust-lint
       - unit-tests
       - desktop-core
@@ -1210,6 +1230,7 @@ jobs:
           OUT_MOBILE: ${{ needs.changes.outputs.mobile }}
           # Collapsed per-job results (matrix jobs collapse to one result).
           RES_CHANGES: ${{ needs.changes.result }}
+          RES_NO_OP_MERGE: ${{ needs.no-op-merge.result }}
           RES_RUST_LINT: ${{ needs.rust-lint.result }}
           RES_UNIT_TESTS: ${{ needs.unit-tests.result }}
           RES_DESKTOP_CORE: ${{ needs.desktop-core.result }}
@@ -1312,6 +1333,7 @@ jobs:
           echo
 
           check changes                       "$RES_CHANGES"                       must-run
+          check no-op-merge                   "$RES_NO_OP_MERGE"                   must-run
           check dead-token-guard              "$RES_DEAD_TOKEN_GUARD"              must-run
           check rust-lint                     "$RES_RUST_LINT"                     "$cond_rust_or_desktop_rust"
           check unit-tests                    "$RES_UNIT_TESTS"                    "$cond_rust"
