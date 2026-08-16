@@ -115,8 +115,9 @@ pub async fn dispatch(cmd: &ToonCmd, ctx: &ToonContext<'_>) -> Result<(), CliErr
                 keystore_path: ctx.keystore_path,
                 index_path: index.as_deref(),
                 // Loopback is not a default the caller may override: the
-                // endpoint has no authentication and serves decrypted private
-                // text. Only the port is configurable.
+                // endpoint serves decrypted private text, and signed queries
+                // (buzz#179) harden that boundary rather than replace it.
+                // Only the port is configurable.
                 bind: std::net::SocketAddr::from(([127, 0, 0, 1], *port)),
                 poll_interval: std::time::Duration::from_secs(*poll_interval),
                 page_size: *page_size,
@@ -190,8 +191,10 @@ manage mnemonics or open channels itself.",
 ///
 /// The filter is not scoped by channel (see [`ADMIN_LIST_LIMIT`]), so one
 /// fetch answers every channel an inbox sweep encounters — re-reading per
-/// channel would send the identical `REQ` N times for the same bytes.
-async fn fetch_admin_events(relay_url: &str) -> Result<Vec<Event>, CliError> {
+/// channel would send the identical `REQ` N times for the same bytes. The
+/// search agent's query-time authority refresh reads the same way
+/// (`search_agent::resolve_admin_lists`), so the two share this one filter.
+pub(crate) async fn fetch_admin_events(relay_url: &str) -> Result<Vec<Event>, CliError> {
     toon_relay::fetch(relay_url, channel_admin_list_filter(ADMIN_LIST_LIMIT)).await
 }
 

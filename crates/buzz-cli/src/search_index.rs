@@ -178,6 +178,28 @@ pub struct SearchHit {
     pub score: f64,
 }
 
+/// Optional narrowing filters for [`SearchIndex::search`], applied on top of
+/// the channel scope. All three default to "no restriction" — an omitted
+/// filter matches everything, exactly like an omitted channel would leak
+/// everything if channel scope were not already required.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SearchFilters<'a> {
+    /// Hex pubkeys the `from:` operator narrowed to. Empty means any author.
+    pub authors: &'a [String],
+    /// Inclusive lower bound on `created_at` (`after:`).
+    pub since: Option<u64>,
+    /// Inclusive upper bound on `created_at` (`before:`).
+    pub until: Option<u64>,
+}
+
+impl SearchFilters<'_> {
+    fn matches(&self, doc: &IndexedMessage) -> bool {
+        (self.authors.is_empty() || self.authors.iter().any(|a| a == &doc.pubkey))
+            && self.since.is_none_or(|floor| doc.created_at >= floor)
+            && self.until.is_none_or(|cap| doc.created_at <= cap)
+    }
+}
+
 /// Serialized form. Postings are *not* persisted: they are a pure function of
 /// the documents and the tokenizer, so recomputing them on load costs one pass
 /// and buys the freedom to change tokenization without an incompatible file.
@@ -355,14 +377,22 @@ pass --index or set BUZZ_SEARCH_INDEX"
         self.cursors.insert(channel_id.to_string(), cursor);
     }
 
-    /// Search `query` within `channels`.
+    /// Search `query` within `channels`, additionally narrowed by `filters`.
     ///
     /// `channels` is the caller's claim of what it is entitled to see, and it
     /// is **required**: an empty slice returns nothing rather than everything.
     /// Fail-closed is the only safe default for a scope argument — a caller
     /// that forgot to pass one gets zero results, not another channel's
-    /// plaintext.
-    pub fn search(&self, query: &str, channels: &[String], limit: usize) -> Vec<SearchHit> {
+    /// plaintext. `filters` narrows further (authors / date range) and can
+    /// only ever narrow — it is applied in the same scope check as the
+    /// channel membership, never as a separate pass over already-scoped hits.
+    pub fn search(
+        &self,
+        query: &str,
+        channels: &[String],
+        filters: &SearchFilters<'_>,
+        limit: usize,
+    ) -> Vec<SearchHit> {
         let terms = tokenize(query);
         if terms.is_empty() || channels.is_empty() || limit == 0 {
             return Vec::new();
@@ -401,14 +431,14 @@ pass --index or set BUZZ_SEARCH_INDEX"
             for postings in matches {
                 let df = postings
                     .keys()
-                    .filter(|id| self.in_scope(id, &scope))
+                    .filter(|id| self.in_scope(id, &scope, filters))
                     .count() as f64;
                 if df == 0.0 {
                     continue;
                 }
                 let idf = (1.0 + (total_docs - df + 0.5) / (df + 0.5)).ln();
                 for (event_id, tf) in postings {
-                    if !self.in_scope(event_id, &scope) {
+                    if !self.in_scope(event_id, &scope, filters) {
                         continue;
                     }
                     let length = f64::from(*self.lengths.get(event_id).unwrap_or(&1));
@@ -461,10 +491,15 @@ pass --index or set BUZZ_SEARCH_INDEX"
         hits
     }
 
-    fn in_scope(&self, event_id: &str, scope: &BTreeSet<&str>) -> bool {
+    fn in_scope(
+        &self,
+        event_id: &str,
+        scope: &BTreeSet<&str>,
+        filters: &SearchFilters<'_>,
+    ) -> bool {
         self.docs
             .get(event_id)
-            .is_some_and(|doc| scope.contains(doc.channel_id.as_str()))
+            .is_some_and(|doc| scope.contains(doc.channel_id.as_str()) && filters.matches(doc))
     }
 
     /// Every postings list whose term starts with `prefix`, as a range scan.
@@ -565,10 +600,20 @@ mod tests {
     use super::*;
 
     fn message(event_id: &str, channel: &str, at: u64, content: &str) -> IndexedMessage {
+        message_by(event_id, channel, "ab".repeat(32), at, content)
+    }
+
+    fn message_by(
+        event_id: &str,
+        channel: &str,
+        pubkey: String,
+        at: u64,
+        content: &str,
+    ) -> IndexedMessage {
         IndexedMessage {
             event_id: event_id.to_string(),
             channel_id: channel.to_string(),
-            pubkey: "ab".repeat(32),
+            pubkey,
             created_at: at,
             content: content.to_string(),
             key_id: Some("462594b863f0be53".to_string()),
@@ -585,6 +630,12 @@ mod tests {
         hits.iter()
             .map(|hit| hit.message.event_id.as_str())
             .collect()
+    }
+
+    /// Shorthand for "no author/date narrowing", used by every test that
+    /// predates the filters and is not testing them.
+    fn no_filters() -> SearchFilters<'static> {
+        SearchFilters::default()
     }
 
     #[test]
@@ -625,7 +676,7 @@ mod tests {
             "the deploy token is in the vault",
         ));
 
-        let hits = index.search("deploy", &["engineering".to_string()], 10);
+        let hits = index.search("deploy", &["engineering".to_string()], &no_filters(), 10);
         assert_eq!(ids(&hits), vec!["e1"]);
         assert!(hits[0].score > 0.0);
         assert_eq!(hits[0].message.content, "the deploy token is in the vault");
@@ -641,12 +692,12 @@ mod tests {
         index.insert(message("c1", "control", 100, "deploy token rotation"));
 
         assert_eq!(
-            ids(&index.search("deploy", &["engineering".to_string()], 10)),
+            ids(&index.search("deploy", &["engineering".to_string()], &no_filters(), 10)),
             vec!["e1"],
             "the control channel's identical text must not leak into a scoped query"
         );
         assert!(
-            index.search("deploy", &[], 10).is_empty(),
+            index.search("deploy", &[], &no_filters(), 10).is_empty(),
             "an empty scope is zero results, never every result"
         );
     }
@@ -659,12 +710,22 @@ mod tests {
         index.insert(message("e2", "eng", 100, "rotate the standup time"));
         let scope = vec!["eng".to_string()];
 
-        assert_eq!(ids(&index.search("rotate deploy", &scope, 10)), vec!["e1"]);
-        assert!(index.search("rotate missing", &scope, 10).is_empty());
+        assert_eq!(
+            ids(&index.search("rotate deploy", &scope, &no_filters(), 10)),
+            vec!["e1"]
+        );
+        assert!(index
+            .search("rotate missing", &scope, &no_filters(), 10)
+            .is_empty());
         // Typeahead: a partial trailing word still finds the message.
-        assert_eq!(ids(&index.search("rotate depl", &scope, 10)), vec!["e1"]);
+        assert_eq!(
+            ids(&index.search("rotate depl", &scope, &no_filters(), 10)),
+            vec!["e1"]
+        );
         // But a partial *leading* word is exact — only the tail is a prefix.
-        assert!(index.search("rot deploy", &scope, 10).is_empty());
+        assert!(index
+            .search("rot deploy", &scope, &no_filters(), 10)
+            .is_empty());
     }
 
     #[test]
@@ -678,14 +739,14 @@ mod tests {
             200,
             "deploy is one word among a great many other unrelated words here",
         ));
-        let hits = index.search("deploy", &["eng".to_string()], 10);
+        let hits = index.search("deploy", &["eng".to_string()], &no_filters(), 10);
         assert_eq!(
             ids(&hits),
             vec!["dense", "sparse"],
             "BM25 length normalisation puts the concentrated match first"
         );
         assert_eq!(
-            ids(&index.search("deploy", &["eng".to_string()], 1)),
+            ids(&index.search("deploy", &["eng".to_string()], &no_filters(), 1)),
             vec!["dense"]
         );
     }
@@ -699,8 +760,130 @@ mod tests {
         let scope = vec!["eng".to_string()];
 
         assert_eq!(index.document_count(), 1);
-        assert!(index.search("original", &scope, 10).is_empty());
-        assert_eq!(ids(&index.search("corrected", &scope, 10)), vec!["e1"]);
+        assert!(index
+            .search("original", &scope, &no_filters(), 10)
+            .is_empty());
+        assert_eq!(
+            ids(&index.search("corrected", &scope, &no_filters(), 10)),
+            vec!["e1"]
+        );
+    }
+
+    #[test]
+    fn the_authors_filter_narrows_to_the_named_pubkeys() {
+        let (_dir, path) = scratch();
+        let mut index = SearchIndex::open(path);
+        let alice = "aa".repeat(32);
+        let bob = "bb".repeat(32);
+        index.insert(message_by("e1", "eng", alice.clone(), 100, "deploy token"));
+        index.insert(message_by("e2", "eng", bob.clone(), 100, "deploy token"));
+        let scope = vec!["eng".to_string()];
+
+        let filters = SearchFilters {
+            authors: std::slice::from_ref(&alice),
+            ..Default::default()
+        };
+        assert_eq!(
+            ids(&index.search("deploy", &scope, &filters, 10)),
+            vec!["e1"]
+        );
+
+        let both = SearchFilters {
+            authors: &[alice, bob],
+            ..Default::default()
+        };
+        let both_hits = index.search("deploy", &scope, &both, 10);
+        let mut both_ids = ids(&both_hits);
+        both_ids.sort_unstable();
+        assert_eq!(both_ids, vec!["e1", "e2"]);
+
+        let nobody = SearchFilters {
+            authors: &["cc".repeat(32)],
+            ..Default::default()
+        };
+        assert!(index.search("deploy", &scope, &nobody, 10).is_empty());
+    }
+
+    #[test]
+    fn the_since_and_until_filters_bound_the_created_at_range() {
+        let (_dir, path) = scratch();
+        let mut index = SearchIndex::open(path);
+        index.insert(message("old", "eng", 100, "deploy token"));
+        index.insert(message("mid", "eng", 200, "deploy token"));
+        index.insert(message("new", "eng", 300, "deploy token"));
+        let scope = vec!["eng".to_string()];
+
+        let since = SearchFilters {
+            since: Some(200),
+            ..Default::default()
+        };
+        let since_hits = index.search("deploy", &scope, &since, 10);
+        let mut since_ids = ids(&since_hits);
+        since_ids.sort_unstable();
+        assert_eq!(since_ids, vec!["mid", "new"]);
+
+        let until = SearchFilters {
+            until: Some(200),
+            ..Default::default()
+        };
+        let until_hits = index.search("deploy", &scope, &until, 10);
+        let mut until_ids = ids(&until_hits);
+        until_ids.sort_unstable();
+        assert_eq!(until_ids, vec!["mid", "old"]);
+
+        // Both bounds are inclusive and compose to a closed range.
+        let bounded = SearchFilters {
+            since: Some(200),
+            until: Some(200),
+            ..Default::default()
+        };
+        assert_eq!(
+            ids(&index.search("deploy", &scope, &bounded, 10)),
+            vec!["mid"]
+        );
+    }
+
+    #[test]
+    fn all_three_filters_combine_with_a_text_query_and_a_channel_scope() {
+        let (_dir, path) = scratch();
+        let mut index = SearchIndex::open(path);
+        let alice = "aa".repeat(32);
+        let bob = "bb".repeat(32);
+        index.insert(message_by(
+            "match",
+            "eng",
+            alice.clone(),
+            200,
+            "the deploy token rotated",
+        ));
+        // Wrong author.
+        index.insert(message_by("wrong-author", "eng", bob, 200, "deploy token"));
+        // Right author, outside the date window.
+        index.insert(message_by(
+            "wrong-date",
+            "eng",
+            alice.clone(),
+            999,
+            "deploy token",
+        ));
+        // Right author and date, wrong channel.
+        index.insert(message_by(
+            "wrong-channel",
+            "control",
+            alice.clone(),
+            200,
+            "deploy token",
+        ));
+
+        let filters = SearchFilters {
+            authors: &[alice],
+            since: Some(150),
+            until: Some(250),
+        };
+        assert_eq!(
+            ids(&index.search("deploy", &["eng".to_string()], &filters, 10)),
+            vec!["match"]
+        );
     }
 
     #[test]
@@ -720,7 +903,7 @@ mod tests {
         assert_eq!(reopened.document_count(), 1);
         assert_eq!(reopened.cursor("eng"), cursor);
         assert_eq!(
-            ids(&reopened.search("deploy", &["eng".to_string()], 10)),
+            ids(&reopened.search("deploy", &["eng".to_string()], &no_filters(), 10)),
             vec!["e1"],
             "postings are rebuilt on load, so the reopened index is searchable"
         );

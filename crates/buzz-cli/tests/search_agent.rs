@@ -28,10 +28,13 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use buzz_channel_crypto::{channel_key_id, encryption_tag, seal, ChannelKey};
 use futures_util::{SinkExt as _, StreamExt as _};
 use nostr::{Event, EventBuilder, JsonUtil as _, Keys, Kind, Tag, Timestamp, UnsignedEvent};
 use serde_json::{json, Value};
+use sha2::Digest as _;
 use tokio::io::AsyncBufReadExt as _;
 use tokio::net::TcpListener;
 
@@ -389,13 +392,35 @@ impl Agent {
             .expect("the query endpoint should answer JSON")
     }
 
-    async fn search(&self, q: &str, channels: &[&str]) -> Value {
+    /// A `/search` call with no `Authorization` header at all — buzz#179's
+    /// fail-closed baseline. Whatever the index actually holds, this must
+    /// come back empty.
+    async fn search_unsigned(&self, q: &str, channels: &[&str]) -> Value {
         let scope = channels.join(",");
         self.get(&format!(
             "/search?q={}&channels={scope}&limit=50",
             urlencode(q)
         ))
         .await
+    }
+
+    /// A `/search` call signed NIP-98-style by `signer`. Membership is then
+    /// the search agent's own call: it answers only for the channels among
+    /// `channels` whose validated `kind:39100` admin list names `signer`.
+    async fn search(&self, signer: &Keys, q: &str, channels: &[&str]) -> Value {
+        let scope = channels.join(",");
+        let path = format!("/search?q={}&channels={scope}&limit=50", urlencode(q));
+        let url = format!("{}{path}", self.url);
+        let auth = nip98_header(signer, "GET", &url, None);
+        reqwest::Client::new()
+            .get(&url)
+            .header("Authorization", auth)
+            .send()
+            .await
+            .expect("the query endpoint should answer")
+            .json()
+            .await
+            .expect("the query endpoint should answer JSON")
     }
 
     /// Poll `/health` until the index holds at least `count` documents.
@@ -486,6 +511,26 @@ impl Agent {
     }
 }
 
+/// Sign a NIP-98 `Authorization` header value the way the desktop client
+/// will (`sign_nip98` in `client.rs`, and `server.rs`'s own test helper of
+/// the same shape) — a fresh event per call, `u`/`method` tags, and an
+/// optional `payload` hash tag when `body` is given.
+fn nip98_header(keys: &Keys, method: &str, url: &str, body: Option<&[u8]>) -> String {
+    let mut tags = vec![
+        Tag::parse(["u", url]).unwrap(),
+        Tag::parse(["method", method]).unwrap(),
+    ];
+    if let Some(bytes) = body {
+        let hash = hex::encode(sha2::Sha256::digest(bytes));
+        tags.push(Tag::parse(["payload", &hash]).unwrap());
+    }
+    let event = EventBuilder::new(Kind::HttpAuth, "")
+        .tags(tags)
+        .sign_with_keys(keys)
+        .unwrap();
+    format!("Nostr {}", BASE64.encode(event.as_json()))
+}
+
 fn urlencode(text: &str) -> String {
     text.chars()
         .map(|c| match c {
@@ -573,7 +618,7 @@ async fn fixture(agent: &Keys, message_count: u64) -> (Fixture, RelayState, Keys
 #[tokio::test]
 async fn an_encrypted_channel_the_agent_is_a_member_of_is_searchable() {
     let agent_keys = Keys::generate();
-    let (fixture, _relay, _admin) = fixture(&agent_keys, 10).await;
+    let (fixture, _relay, admin) = fixture(&agent_keys, 10).await;
     let agent = fixture.start_agent(2).await;
 
     // 1 headline message + 10 standup notes.
@@ -585,7 +630,7 @@ async fn an_encrypted_channel_the_agent_is_a_member_of_is_searchable() {
         "only the channel a key was wrapped for is tracked at all"
     );
 
-    let results = agent.search("deploy token", &[MEMBER]).await;
+    let results = agent.search(&admin, "deploy token", &[MEMBER]).await;
     assert_eq!(results["found"], 1, "{results}");
     assert_eq!(
         contents(&results),
@@ -594,7 +639,7 @@ async fn an_encrypted_channel_the_agent_is_a_member_of_is_searchable() {
     );
 
     // Every paged-in message is searchable, not just the head page.
-    let all = agent.search("standup", &[MEMBER]).await;
+    let all = agent.search(&admin, "standup", &[MEMBER]).await;
     assert_eq!(
         all["found"], 10,
         "the backfill walk must not drop a page: {all}"
@@ -602,7 +647,7 @@ async fn an_encrypted_channel_the_agent_is_a_member_of_is_searchable() {
 
     // Typeahead: the trailing term is prefix-matched, as the desktop topbar
     // expects (`search_mode: "prefix"`).
-    let partial = agent.search("depl", &[MEMBER]).await;
+    let partial = agent.search(&admin, "depl", &[MEMBER]).await;
     assert_eq!(partial["found"], 1, "{partial}");
 
     let hit = &results["hits"][0];
@@ -621,7 +666,7 @@ async fn an_encrypted_channel_the_agent_is_a_member_of_is_searchable() {
 #[tokio::test]
 async fn a_channel_the_agent_is_not_in_never_appears_in_results() {
     let agent_keys = Keys::generate();
-    let (fixture, _relay, _admin) = fixture(&agent_keys, 3).await;
+    let (fixture, _relay, admin) = fixture(&agent_keys, 3).await;
     let agent = fixture.start_agent(50).await;
 
     agent.wait_for_documents(4).await;
@@ -635,7 +680,7 @@ async fn a_channel_the_agent_is_not_in_never_appears_in_results() {
         vec![MEMBER, CONTROL],
         vec![MEMBER, CONTROL, "00000000-0000-0000-0000-000000000000"],
     ] {
-        let results = agent.search(CONTROL_SECRET, &scope).await;
+        let results = agent.search(&admin, CONTROL_SECRET, &scope).await;
         assert_eq!(
             results["found"], 0,
             "the control channel's plaintext leaked with scope {scope:?}: {results}"
@@ -644,7 +689,9 @@ async fn a_channel_the_agent_is_not_in_never_appears_in_results() {
 
     // Not even the shared vocabulary reaches it: "deploy token" appears in both
     // channels, and only the member channel's copy is indexed.
-    let shared = agent.search("deploy token", &[MEMBER, CONTROL]).await;
+    let shared = agent
+        .search(&admin, "deploy token", &[MEMBER, CONTROL])
+        .await;
     assert_eq!(shared["found"], 1, "{shared}");
     assert_eq!(shared["hits"][0]["channelId"], MEMBER);
 
@@ -659,6 +706,47 @@ async fn a_channel_the_agent_is_not_in_never_appears_in_results() {
     assert!(
         keystore["channels"][CONTROL].is_null(),
         "no key for the control channel is the entire access-control story"
+    );
+
+    agent.stop().await;
+}
+
+/// buzz#179 criterion: an unsigned request gets zero hits, never everything
+/// the index actually holds — the same fail-closed shape an empty channel
+/// scope already had, now also true of an absent signature.
+#[tokio::test]
+async fn an_unsigned_query_returns_nothing() {
+    let agent_keys = Keys::generate();
+    let (fixture, _relay, _admin) = fixture(&agent_keys, 3).await;
+    let agent = fixture.start_agent(50).await;
+
+    agent.wait_for_documents(4).await;
+
+    let unsigned = agent.search_unsigned("deploy token", &[MEMBER]).await;
+    assert_eq!(
+        unsigned["found"], 0,
+        "an unsigned request must not see indexed content: {unsigned}"
+    );
+
+    agent.stop().await;
+}
+
+/// buzz#179 criterion: a validly signed request from someone who is not on
+/// the channel's admin list gets zero hits for that channel, same as an
+/// unsigned one — proving a valid *signature* is not by itself enough.
+#[tokio::test]
+async fn a_query_signed_by_a_non_member_returns_nothing() {
+    let agent_keys = Keys::generate();
+    let (fixture, _relay, _admin) = fixture(&agent_keys, 3).await;
+    let agent = fixture.start_agent(50).await;
+
+    agent.wait_for_documents(4).await;
+
+    let stranger = Keys::generate();
+    let out = agent.search(&stranger, "deploy token", &[MEMBER]).await;
+    assert_eq!(
+        out["found"], 0,
+        "a signer absent from the channel's admin list must not see its content: {out}"
     );
 
     agent.stop().await;
@@ -690,7 +778,7 @@ async fn a_rotation_the_agent_missed_stops_the_index_at_the_epoch_boundary() {
     let before = agent.cycles().len();
     agent.wait_for_cycles(before + 2).await;
 
-    let leaked = agent.search(POST_ROTATION_SECRET, &[MEMBER]).await;
+    let leaked = agent.search(&admin, POST_ROTATION_SECRET, &[MEMBER]).await;
     assert_eq!(
         leaked["found"], 0,
         "post-rotation content must not be indexed: {leaked}"
@@ -706,7 +794,7 @@ async fn a_rotation_the_agent_missed_stops_the_index_at_the_epoch_boundary() {
 
     // What it could read before the rotation is still readable — the agent
     // already saw those bytes, and pretending otherwise would be theatre.
-    let kept = agent.search("deploy token", &[MEMBER]).await;
+    let kept = agent.search(&admin, "deploy token", &[MEMBER]).await;
     assert_eq!(kept["found"], 1, "{kept}");
 
     // The cycle report names the reason, so an operator can tell a lockout
@@ -764,13 +852,16 @@ async fn a_restart_resumes_from_the_cursor_and_a_missing_index_rebuilds() {
     let agent = fixture.start_agent(2).await;
     agent.wait_for_documents(6).await;
 
-    let resumed = agent.search("posted while", &[MEMBER]).await;
+    let resumed = agent.search(&admin, "posted while", &[MEMBER]).await;
     assert_eq!(
         resumed["found"], 1,
         "a message written while the agent was down is picked up on restart: {resumed}"
     );
     // Still there from before the restart — the index was resumed, not reset.
-    assert_eq!(agent.search("deploy token", &[MEMBER]).await["found"], 1);
+    assert_eq!(
+        agent.search(&admin, "deploy token", &[MEMBER]).await["found"],
+        1
+    );
 
     let first_cycle = agent.cycles().into_iter().next().expect("a cycle report");
     assert_eq!(
@@ -786,9 +877,15 @@ async fn a_restart_resumes_from_the_cursor_and_a_missing_index_rebuilds() {
     agent.wait_for_documents(6).await;
     agent.wait_for_backfill_complete(MEMBER).await;
 
-    assert_eq!(agent.search("deploy token", &[MEMBER]).await["found"], 1);
-    assert_eq!(agent.search("standup", &[MEMBER]).await["found"], 4);
-    assert_eq!(agent.search("posted while", &[MEMBER]).await["found"], 1);
+    assert_eq!(
+        agent.search(&admin, "deploy token", &[MEMBER]).await["found"],
+        1
+    );
+    assert_eq!(agent.search(&admin, "standup", &[MEMBER]).await["found"], 4);
+    assert_eq!(
+        agent.search(&admin, "posted while", &[MEMBER]).await["found"],
+        1
+    );
     let rebuilt = agent.cycles().into_iter().next().expect("a cycle report");
     assert!(
         rebuilt["report"]["indexed"].as_u64().unwrap_or(0) >= 1,
@@ -821,7 +918,7 @@ async fn a_burst_larger_than_one_page_is_indexed_without_gaps() {
     }
 
     agent.wait_for_documents(13).await;
-    let burst = agent.search("burst message", &[MEMBER]).await;
+    let burst = agent.search(&admin, "burst message", &[MEMBER]).await;
     assert_eq!(
         burst["found"], 12,
         "every message in the burst must be indexed, not just the newest page: {burst}"

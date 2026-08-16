@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  buildAgentSearchUrl,
+  buildAgentSearchBody,
   parseAgentHit,
   parseAgentResponse,
   searchViaAgent,
@@ -26,18 +26,67 @@ function agentHit(overrides = {}) {
   };
 }
 
-test("the query URL carries the text, the scope, and the limit", () => {
-  const url = new URL(
-    buildAgentSearchUrl(BASE, { q: "deploy token", limit: 12 }, [
-      MEMBER,
-      OTHER,
-    ]),
+// tauri.ts imports `invoke` from @tauri-apps/api/core, which calls
+// `window.__TAURI_INTERNALS__.invoke`. searchViaAgent now signs every
+// request (buzz#179), so every test that reaches it needs this stub —
+// mirrors invites.test.mjs's setupTauriStubs.
+function setupTauriStubs(
+  authEvent = {
+    id: "x",
+    sig: "y",
+    pubkey: "z",
+    kind: 27235,
+    created_at: 1,
+    tags: [],
+  },
+) {
+  globalThis.window = globalThis.window ?? {};
+  globalThis.window.__TAURI_INTERNALS__ = {
+    invoke: async (command) => {
+      if (command === "sign_event") return JSON.stringify(authEvent);
+      throw new Error(`Unexpected Tauri command: ${command}`);
+    },
+  };
+}
+
+function teardownTauriStubs() {
+  delete globalThis.window.__TAURI_INTERNALS__;
+}
+
+test("the query body carries the text, the scope, and the limit", () => {
+  assert.deepEqual(
+    buildAgentSearchBody({ q: "deploy token", limit: 12 }, [MEMBER, OTHER]),
+    {
+      q: "deploy token",
+      channels: [MEMBER, OTHER],
+      limit: 12,
+      authors: undefined,
+      since: undefined,
+      until: undefined,
+    },
   );
-  assert.equal(url.origin, BASE);
-  assert.equal(url.pathname, "/search");
-  assert.equal(url.searchParams.get("q"), "deploy token");
-  assert.equal(url.searchParams.get("channels"), `${MEMBER},${OTHER}`);
-  assert.equal(url.searchParams.get("limit"), "12");
+});
+
+test("the query body carries authors/since/until when the operators set them", () => {
+  assert.deepEqual(
+    buildAgentSearchBody(
+      {
+        q: "deploy",
+        authors: ["aa".repeat(32)],
+        since: 100,
+        until: 200,
+      },
+      [MEMBER],
+    ),
+    {
+      q: "deploy",
+      channels: [MEMBER],
+      limit: 20,
+      authors: ["aa".repeat(32)],
+      since: 100,
+      until: 200,
+    },
+  );
 });
 
 test("an agent hit maps onto the SearchHit shape the UI already renders", () => {
@@ -85,43 +134,82 @@ test("an empty membership scope never reaches the agent", async (t) => {
   assert.equal(fetchMock.mock.callCount(), 0);
 });
 
-test("the in: operator narrows the scope and can never widen it", async (t) => {
-  let requested = null;
-  t.mock.method(globalThis, "fetch", async (url) => {
-    requested = new URL(url);
-    return new Response(JSON.stringify({ hits: [agentHit()] }), {
-      status: 200,
+test("the request is a signed POST carrying the query body", async (t) => {
+  setupTauriStubs();
+  try {
+    let capturedUrl;
+    let capturedInit;
+    t.mock.method(globalThis, "fetch", async (url, init) => {
+      capturedUrl = url;
+      capturedInit = init;
+      return new Response(JSON.stringify({ hits: [agentHit()] }), {
+        status: 200,
+      });
     });
-  });
 
-  await searchViaAgent(BASE, { q: "deploy", channelId: MEMBER }, [
-    MEMBER,
-    OTHER,
-  ]);
-  assert.equal(requested.searchParams.get("channels"), MEMBER);
+    await searchViaAgent(BASE, { q: "deploy", limit: 5 }, [MEMBER]);
 
-  // A channel the client holds no key for cannot be asked about, even when the
-  // operator names it explicitly: the intersection is empty, so nothing is sent.
-  const outside = await searchViaAgent(
-    BASE,
-    { q: "deploy", channelId: "00000000-0000-0000-0000-000000000000" },
-    [MEMBER],
-  );
-  assert.deepEqual(outside, { hits: [], found: 0 });
+    assert.equal(capturedUrl, `${BASE}/search`);
+    assert.equal(capturedInit.method, "POST");
+    assert.match(capturedInit.headers.Authorization, /^Nostr /);
+    assert.equal(capturedInit.headers["Content-Type"], "application/json");
+    assert.deepEqual(JSON.parse(capturedInit.body), {
+      q: "deploy",
+      channels: [MEMBER],
+      limit: 5,
+    });
+  } finally {
+    teardownTauriStubs();
+  }
+});
+
+test("the in: operator narrows the scope and can never widen it", async (t) => {
+  setupTauriStubs();
+  try {
+    let requestedBody = null;
+    t.mock.method(globalThis, "fetch", async (_url, init) => {
+      requestedBody = JSON.parse(init.body);
+      return new Response(JSON.stringify({ hits: [agentHit()] }), {
+        status: 200,
+      });
+    });
+
+    await searchViaAgent(BASE, { q: "deploy", channelId: MEMBER }, [
+      MEMBER,
+      OTHER,
+    ]);
+    assert.deepEqual(requestedBody.channels, [MEMBER]);
+
+    // A channel the client holds no key for cannot be asked about, even when the
+    // operator names it explicitly: the intersection is empty, so nothing is sent.
+    const outside = await searchViaAgent(
+      BASE,
+      { q: "deploy", channelId: "00000000-0000-0000-0000-000000000000" },
+      [MEMBER],
+    );
+    assert.deepEqual(outside, { hits: [], found: 0 });
+  } finally {
+    teardownTauriStubs();
+  }
 });
 
 test("a non-200 from the agent is an error the query surfaces", async (t) => {
-  t.mock.method(
-    globalThis,
-    "fetch",
-    async () =>
-      new Response("boom", {
-        status: 500,
-        statusText: "Internal Server Error",
-      }),
-  );
-  await assert.rejects(
-    () => searchViaAgent(BASE, { q: "deploy" }, [MEMBER]),
-    /returned 500/,
-  );
+  setupTauriStubs();
+  try {
+    t.mock.method(
+      globalThis,
+      "fetch",
+      async () =>
+        new Response("boom", {
+          status: 500,
+          statusText: "Internal Server Error",
+        }),
+    );
+    await assert.rejects(
+      () => searchViaAgent(BASE, { q: "deploy" }, [MEMBER]),
+      /returned 500/,
+    );
+  } finally {
+    teardownTauriStubs();
+  }
 });

@@ -73,8 +73,8 @@ use serde_json::{json, Value};
 use tokio::sync::RwLock;
 
 use crate::agent_keystore::AgentKeystore;
-use crate::channel_admins::tags_as_strings;
-use crate::commands::toon::{open_message, sweep_inbox, Opened};
+use crate::channel_admins::{resolve_channel_admin_list, tags_as_strings, ChannelAdminList};
+use crate::commands::toon::{fetch_admin_events, open_message, sweep_inbox, Opened};
 use crate::error::CliError;
 use crate::search_index::{is_strictly_older, ChannelCursor, IndexedMessage, SearchIndex};
 use crate::sidecar::SidecarClient;
@@ -287,8 +287,10 @@ pub async fn run(opts: SearchAgentOptions<'_>) -> Result<(), CliError> {
     let mut index = SearchIndex::open(SearchIndex::resolve_path(opts.index_path)?);
     index.assert_identity(&identity)?;
     let index = Arc::new(RwLock::new(index));
+    let admin_lists: Arc<RwLock<BTreeMap<String, ChannelAdminList>>> =
+        Arc::new(RwLock::new(BTreeMap::new()));
 
-    let bound = serve(opts.bind, Arc::clone(&index)).await?;
+    let bound = serve(opts.bind, Arc::clone(&index), Arc::clone(&admin_lists)).await?;
     {
         let index = index.read().await;
         println!(
@@ -306,7 +308,15 @@ pub async fn run(opts: SearchAgentOptions<'_>) -> Result<(), CliError> {
     }
 
     loop {
-        let report = cycle(&client, &opts, &identity, &mut keystore, &index).await?;
+        let report = cycle(
+            &client,
+            &opts,
+            &identity,
+            &mut keystore,
+            &index,
+            &admin_lists,
+        )
+        .await?;
         println!(
             "{}",
             json!({
@@ -321,14 +331,16 @@ pub async fn run(opts: SearchAgentOptions<'_>) -> Result<(), CliError> {
     }
 }
 
-/// One ingest cycle: collect keys, then walk every channel the agent holds one
-/// for, then commit documents and cursors together.
+/// One ingest cycle: collect keys, refresh every held channel's admin-list
+/// authority, then walk every channel the agent holds one for, then commit
+/// documents and cursors together.
 async fn cycle(
     client: &SidecarClient,
     opts: &SearchAgentOptions<'_>,
     identity: &str,
     keystore: &mut AgentKeystore,
     index: &RwLock<SearchIndex>,
+    admin_lists: &RwLock<BTreeMap<String, ChannelAdminList>>,
 ) -> Result<CycleReport, CliError> {
     let mut report = CycleReport::default();
 
@@ -339,10 +351,17 @@ async fn cycle(
     report.keys_accepted = sweep.accepted.len();
     keystore.save()?;
 
-    // 2. Walk each held channel. Reads are free, so the ordering here is about
+    // 2. Refresh the query endpoint's membership authority: one read answers
+    //    every held channel (`fetch_admin_events` is not #d-scoped), and
+    //    the whole map is replaced atomically so a query never sees half of
+    //    one cycle's resolution and half of the last.
+    let channels: Vec<String> = keystore.channels().cloned().collect();
+    let resolved = resolve_admin_lists(opts.relay_url, keystore, &channels).await?;
+    *admin_lists.write().await = resolved;
+
+    // 3. Walk each held channel. Reads are free, so the ordering here is about
     //    responsiveness, not cost: the tail (what a user is most likely to
     //    search for) is caught up before another page of old history is pulled.
-    let channels: Vec<String> = keystore.channels().cloned().collect();
     for channel_id in channels {
         let ring = keystore.ring(&channel_id).to_vec();
         let cursor = index.read().await.cursor(&channel_id);
@@ -362,10 +381,37 @@ async fn cycle(
         }
     }
 
-    // 3. One atomic commit for the whole cycle. Documents and cursors land
+    // 4. One atomic commit for the whole cycle. Documents and cursors land
     //    together or not at all; a crash before this point replays the cycle.
     index.read().await.save()?;
     Ok(report)
+}
+
+/// Resolve every channel in `channels` to its current admin-list state, from
+/// one relay read of every `kind:39100` event this identity can see.
+///
+/// `pinned_creator` per channel comes from the keystore — the same
+/// trust-on-first-use root `sweep_inbox` already commits to, so a channel's
+/// query-time authority and its key-admission authority never disagree about
+/// who the root is. A channel whose chain does not resolve (no valid
+/// self-rooted genesis reachable, or none pinned yet) is simply absent from
+/// the result — [`server::authorized_channels`] treats that identically to
+/// "the signer is not on the list", never as "let it through".
+async fn resolve_admin_lists(
+    relay_url: &str,
+    keystore: &AgentKeystore,
+    channels: &[String],
+) -> Result<BTreeMap<String, ChannelAdminList>, CliError> {
+    let events = fetch_admin_events(relay_url).await?;
+    let mut resolved = BTreeMap::new();
+    for channel_id in channels {
+        if let Some(list) =
+            resolve_channel_admin_list(&events, channel_id, keystore.pinned_creator(channel_id))
+        {
+            resolved.insert(channel_id.clone(), list);
+        }
+    }
+    Ok(resolved)
 }
 
 /// The tail walk plus at most one backfill page for one channel.
